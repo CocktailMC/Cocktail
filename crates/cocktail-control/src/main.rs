@@ -38,6 +38,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState::new());
     state.spawn_event_applier();
+    instance::reattach_running(&state).await;
     state.spawn_scheduler();
 
     let api = api::router()

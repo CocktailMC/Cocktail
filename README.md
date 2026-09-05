@@ -1,98 +1,134 @@
-# Cocktail Manager
+<p align="center">
+  <img src="logo.png" width="128" alt="Cocktail Manager">
+</p>
 
-新一代通用 Minecraft 服务器控制面 · **v0.1 / 26Q3**
+<h1 align="center">Cocktail Manager</h1>
 
-栈：**Rust**（Axum 控制面）+ **React**（Vite Admin）
+<p align="center">
+  单机多实例的 Minecraft 控制面<br>
+  <sub>v0.1 · 26Q3</sub>
+</p>
 
-## 快速启动
+<p align="center">
+  <img src="https://ziadoua.github.io/m3-Markdown-Badges/badges/Rust/rust1.svg" alt="Rust" height="30">
+  <img src="https://ziadoua.github.io/m3-Markdown-Badges/badges/React/react1.svg" alt="React" height="30">
+  <img src="https://ziadoua.github.io/m3-Markdown-Badges/badges/ViteJS/vitejs1.svg" alt="Vite" height="30">
+  <img src="https://ziadoua.github.io/m3-Markdown-Badges/badges/TypeScript/typescript1.svg" alt="TypeScript" height="30">
+  <img src="https://ziadoua.github.io/m3-Markdown-Badges/badges/SQLite/sqlite1.svg" alt="SQLite" height="30">
+  <img src="https://ziadoua.github.io/m3-Markdown-Badges/badges/Docker/docker1.svg" alt="Docker" height="30">
+  <img src="https://ziadoua.github.io/m3-Markdown-Badges/badges/Java/java1.svg" alt="Java" height="30">
+  <img src="https://ziadoua.github.io/m3-Markdown-Badges/badges/NodeJS/nodejs1.svg" alt="Node.js" height="30">
+  <img src="https://ziadoua.github.io/m3-Markdown-Badges/badges/Linux/linux1.svg" alt="Linux" height="30">
+  <img src="https://ziadoua.github.io/m3-Markdown-Badges/badges/Windows/windows1.svg" alt="Windows" height="30">
+</p>
 
-```powershell
-# 可选：生产务必设置
-$env:COCKTAIL_API_TOKEN = "change-me"
-$env:COCKTAIL_WEBHOOK_URL = "https://hooks.example/crash"
+控制面用 Rust 管进程与 Docker；管理端是 React。第一次打开会初始化最高管理员，账号存在本机 SQLite。实例可热接管：控制面重启后，仍在跑的服务器会重新接上，不会误显示成已停止。
 
+---
+
+## 功能
+
+| 实例 | 内容 | 运维 |
+|:---|:---|:---|
+| 启停 / 重启 / 优雅 `stop` | Paper / Vanilla 装核 | 定时备份、重启、指令 |
+| CPU、内存、TPS、在线人数 | Modrinth / Hangar / Spigot | zip 备份与恢复 |
+| 控制台 WebSocket | 插件启停、上传 | 计划任务 |
+| JVM `-Xmx` 自动注入 | 世界导入导出、重置 | 崩溃 Webhook |
+| `server.properties` 表单 | 玩家 kick / ban / op | 审计日志 |
+| 端口冲突检测、EULA | 文件浏览与 512 MiB 上传 | 机群批量操作 |
+| 本机进程或 Docker | | 重启后认回 PID / 容器 |
+
+Docker 运行时可设 `--memory` / `--cpus`。本机进程硬限、多节点 Agent 尚未提供。
+
+---
+
+## 开发启动
+
+需要 **Rust**（stable）和 **Node.js 22+**。
+
+```bash
+# 控制面 — http://127.0.0.1:11011
 cargo run -p cocktail-control
 
-cd admin
-npm install
-npm run dev
+# 管理端 — http://127.0.0.1:5173（开发时代理 /api）
+cd admin && npm install && npm run dev
 ```
 
-- 控制面：http://127.0.0.1:11011  
-- Admin：http://127.0.0.1:5173  
+首次打开管理端会进入最高管理员引导。之后用该账号登录。
 
-## 能力对照（相对缺口清单）
+可选环境变量：
 
-| # | 项 | 状态 |
-|---|---|---|
-| 1 | 真实进程指标 | **已做** sysinfo CPU/RSS + 日志解析 TPS/玩家 |
-| 2 | 优雅停止 | **已做** stdin `stop` + 30s 超时强杀 |
-| 3 | EULA 流程 | **已做** `eula_accepted` / `POST /eula` / UI |
-| 4 | JVM `-Xmx` 注入 | **已做** Java 启动自动注入 |
-| 5 | 端口联动 properties | **已做** + 端口冲突检测 |
-| 6 | 认证 | **已做** `COCKTAIL_API_TOKEN` Bearer（未设置则开放，仅开发） |
-| 7 | 上传/下载 | **已做** multipart 上传 + 二进制下载 |
-| 8 | 备份压缩 | **已做** zip |
-| 9 | 日志持久化 | **已做** `data/logs/{id}.log` |
-| 10 | 删除备份 | **已做** |
-| 11 | 定时任务 | **已做** schedules API（backup/restart/command） |
-| 12 | 审计日志 | **已做** `data/audit.jsonl` |
-| 13 | 版本 jar 下载 | **已做** Paper Fill v3 + Vanilla Mojang |
-| 14 | 插件管理 | **已做** 列表/启用禁用/上传 |
-| 15 | 玩家管理 | **已做** list + kick/ban/op/deop |
-| 16 | 世界管理 | **已做** 列表/重置/导出/导入 |
-| 17 | properties 表单 | **已做** `/properties` + 配置 Tab |
-| 18 | 崩溃 Webhook | **已做** `COCKTAIL_WEBHOOK_URL` / 实例 webhook |
-| 19 | cgroup / 容器硬限 | **部分** Docker `--memory/--cpus`（本机进程尚无 Job Object） |
-| 20 | 多节点 Agent | 未做（单机多实例 + 机群批量已做） |
-| 21 | backup created_at | **已修** 文件系统时间 |
-| 22 | Protobuf | 未做（仍 REST） |
+| 变量 | 说明 |
+|:---|:---|
+| `COCKTAIL_BIND` | 监听地址，默认 `0.0.0.0:11011` |
+| `COCKTAIL_API_TOKEN` | 机器 Token，供脚本调用（与登录并存） |
+| `COCKTAIL_WEBHOOK_URL` | 全局崩溃 Webhook；也可在面板里覆盖 |
+| `COCKTAIL_WEB_ROOT` | 生产环境 Admin 静态目录 |
 
-## 打包（deb / rpm / msi）
+数据目录（相对工作目录）：
 
-一次性产物目录：`dist/`。
+```
+data/
+  cocktail.db      # 管理员、会话、面板设置
+  state.json       # 实例与计划任务
+  instances/       # 各服工作目录
+  logs/            # 控制台与审计
+  backups/
+```
 
-### Linux（deb + rpm）
+---
 
-在 Linux 或 WSL 中：
+## 安装包
+
+产物在 `dist/`。生产安装后访问 `http://127.0.0.1:11011`（二进制内嵌 Admin）。
+
+### Linux（deb / rpm）
 
 ```bash
 chmod +x scripts/package-linux.sh packaging/scripts/*.sh
 ./scripts/package-linux.sh
-```
 
-依赖：`cargo`、`npm`；脚本会自动下载 [nfpm](https://nfpm.goreleaser.com/)（若未安装）。
-
-安装示例：
-
-```bash
 sudo dpkg -i dist/cocktail_0.1.0_amd64.deb
 # 或
 sudo rpm -Uvh dist/cocktail-0.1.0-1.x86_64.rpm
 sudo systemctl start cocktail-control
 ```
 
-默认：`http://127.0.0.1:11011`（二进制 + 内嵌 Admin UI）。  
-配置：`/etc/cocktail/cocktail.env`，数据：`/var/lib/cocktail`。
+依赖：`cargo`、`npm`。未安装 [nfpm](https://nfpm.goreleaser.com/) 时脚本会自行下载。
 
-### Windows（msi + zip）
+| | 路径 |
+|:---|:---|
+| 配置 | `/etc/cocktail/cocktail.env` |
+| 数据 | `/var/lib/cocktail` |
+
+### Windows（zip / msi）
 
 ```powershell
 .\scripts\package-windows.ps1
 ```
 
-- 始终生成便携包：`dist/cocktail-<ver>-windows-x64.zip`
-- 若已安装 [WiX Toolset v3](https://wixtoolset.org/)（`candle` / `light` / `heat`），额外生成 MSI：`dist/cocktail-<ver>-windows-x64.msi`
+会生成 `dist/cocktail-<ver>-windows-x64.zip`。若已安装 [WiX v3](https://wixtoolset.org/)（`candle` / `light` / `heat`），额外打出 MSI。
 
 ```powershell
 winget install WiXToolset.WiXToolset
 ```
 
-### 环境变量（打包运行）
+---
 
-| 变量 | 说明 |
-|---|---|
-| `COCKTAIL_BIND` | 监听地址，默认 `0.0.0.0:11011` |
-| `COCKTAIL_WEB_ROOT` | Admin 静态目录（含 `index.html`） |
-| `COCKTAIL_API_TOKEN` | 可选 Bearer 鉴权 |
-| `COCKTAIL_WEBHOOK_URL` | 可选崩溃 Webhook |
+## 仓库结构
+
+```
+Cocktail/
+  crates/cocktail-control   控制面（Axum + SQLite）
+  admin/                    React 管理端
+  packaging/                systemd / env / WiX
+  scripts/                  deb、rpm、msi 打包
+```
+
+---
+
+## 许可证
+
+[Apache License 2.0](LICENSE) · Copyright 2026 [CocktailMC](https://github.com/CocktailMC)
+
+徽章来自 [m3 Markdown Badges](https://github.com/ziadOUA/m3-Markdown-Badges)。

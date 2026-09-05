@@ -101,7 +101,7 @@ pub async fn spawn_docker_instance(
 
     let mut docker_args: Vec<String> = vec![
         "run".into(),
-        "--rm".into(),
+        "-d".into(),
         "-i".into(),
         "--name".into(),
         name.clone(),
@@ -126,13 +126,28 @@ pub async fn spawn_docker_instance(
 
     info!(%name, %image, %mount, bin = %bin, "starting docker container instance");
 
-    // Reuse process supervisor by spawning `docker` as the child.
-    process::spawn_external_command(
+    let out = Command::new("docker")
+        .args(&docker_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "docker run failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let pid = process::docker_container_pid(&name)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("docker container started but pid is unavailable"))?;
+    process::adopt_running(
         instance_id,
-        "docker".into(),
-        docker_args,
+        pid,
+        workdir,
         events,
         Some(name),
+        false,
     )
     .await
 }

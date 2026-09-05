@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::db;
-use crate::instance::{self, Instance, InstanceEvent, InstanceStatus, LogLine, Schedule};
+use crate::instance::{self, Instance, InstanceEvent, LogLine, Schedule};
 
 pub type SharedState = Arc<AppState>;
 
@@ -152,16 +152,14 @@ impl AppState {
             .map(|i| Instance {
                 id: i.id.clone(),
                 spec: i.spec.clone(),
-                status: match i.status {
-                    InstanceStatus::Running
-                    | InstanceStatus::Starting
-                    | InstanceStatus::Stopping => InstanceStatus::Stopped,
-                    s => s,
-                },
+                status: i.status,
                 created_at: i.created_at,
                 updated_at: i.updated_at,
                 last_metrics: None,
                 last_players: Vec::new(),
+                last_pid: i.last_pid,
+                last_start_time: i.last_start_time,
+                docker_container: i.docker_container.clone(),
                 process: None,
             })
             .collect();
@@ -199,12 +197,6 @@ fn load_from_disk() -> anyhow::Result<(HashMap<String, Instance>, Vec<Schedule>)
     let persisted: PersistedState = serde_json::from_str(&raw)?;
     let mut map = HashMap::new();
     for mut inst in persisted.instances {
-        if matches!(
-            inst.status,
-            InstanceStatus::Running | InstanceStatus::Starting | InstanceStatus::Stopping
-        ) {
-            inst.status = InstanceStatus::Stopped;
-        }
         inst.process = None;
         inst.last_metrics = None;
         inst.last_players.clear();

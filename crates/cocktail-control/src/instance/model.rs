@@ -112,6 +112,12 @@ pub struct Instance {
     pub last_metrics: Option<MetricSample>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub last_players: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_start_time: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_container: Option<String>,
     #[serde(skip)]
     pub(crate) process: Option<crate::instance::ProcessHandle>,
 }
@@ -127,6 +133,9 @@ impl Instance {
             updated_at: now,
             last_metrics: None,
             last_players: Vec::new(),
+            last_pid: None,
+            last_start_time: None,
+            docker_container: None,
             process: None,
         }
     }
@@ -140,6 +149,16 @@ impl Instance {
             updated_at: self.updated_at,
             last_metrics: self.last_metrics.clone(),
             last_players: self.last_players.clone(),
+            pid: self
+                .process
+                .as_ref()
+                .map(|p| p.child_id)
+                .filter(|p| *p > 0)
+                .or(self.last_pid),
+            reattached: self
+                .process
+                .as_ref()
+                .is_some_and(|p| p.reattached),
         }
     }
 }
@@ -154,6 +173,10 @@ pub struct InstanceView {
     pub last_metrics: Option<MetricSample>,
     #[serde(default)]
     pub last_players: Vec<String>,
+    #[serde(default)]
+    pub pid: Option<u32>,
+    #[serde(default)]
+    pub reattached: bool,
 }
 
 #[derive(Debug, Deserialize)]

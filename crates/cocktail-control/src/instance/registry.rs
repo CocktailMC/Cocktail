@@ -330,12 +330,129 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
         }
     };
     instance.process = Some(handle);
+    if let Some(proc) = instance.process.as_ref() {
+        if proc.child_id > 0 {
+            instance.last_pid = Some(proc.child_id);
+            instance.last_start_time = process::process_snapshot(proc.child_id).map(|(t, _)| t);
+        }
+        instance.docker_container = proc.container_name.clone();
+    }
     instance.updated_at = Utc::now();
     let view = instance.public_view();
     drop(guard);
     let _ = state.persist().await;
     util::audit("instance.start", Some(&instance_id), json!({}), "api");
     Ok(view)
+}
+
+pub async fn reattach_running(state: &std::sync::Arc<AppState>) {
+    let snapshot: Vec<(
+        String,
+        RuntimeKind,
+        String,
+        Option<u32>,
+        Option<u64>,
+        Option<String>,
+    )> = {
+        let guard = state.instances.read().await;
+        guard
+            .values()
+            .map(|i| {
+                (
+                    i.id.clone(),
+                    i.spec.runtime,
+                    i.spec.workdir.clone(),
+                    i.last_pid,
+                    i.last_start_time,
+                    i.docker_container.clone(),
+                )
+            })
+            .collect()
+    };
+
+    for (id, runtime, workdir, last_pid, start, container) in snapshot {
+        let adopted = match runtime {
+            RuntimeKind::Docker => {
+                if let Some(name) = container.clone() {
+                    if let Some(pid) = process::docker_container_pid(&name).await {
+                        match process::adopt_running(
+                            id.clone(),
+                            pid,
+                            workdir,
+                            state.events.clone(),
+                            Some(name),
+                            true,
+                        )
+                        .await
+                        {
+                            Ok(handle) => Some(handle),
+                            Err(e) => {
+                                tracing::warn!(error = %e, %id, "failed to adopt docker instance");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            RuntimeKind::Process => {
+                if let Some(pid) = last_pid.filter(|p| *p > 0) {
+                    if process::process_matches(pid, start, &workdir) {
+                        match process::adopt_running(
+                            id.clone(),
+                            pid,
+                            workdir,
+                            state.events.clone(),
+                            None,
+                            true,
+                        )
+                        .await
+                        {
+                            Ok(handle) => Some(handle),
+                            Err(e) => {
+                                tracing::warn!(error = %e, %id, "failed to adopt process");
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+        };
+
+        let mut guard = state.instances.write().await;
+        if let Some(inst) = guard.get_mut(&id) {
+            if let Some(handle) = adopted {
+                tracing::info!(
+                    instance_id = %id,
+                    pid = handle.child_id,
+                    "reattached running instance"
+                );
+                inst.last_pid = Some(handle.child_id).filter(|p| *p > 0);
+                inst.last_start_time = process::process_snapshot(handle.child_id).map(|(t, _)| t);
+                inst.docker_container = handle.container_name.clone();
+                inst.process = Some(handle);
+                inst.status = InstanceStatus::Running;
+                inst.updated_at = Utc::now();
+            } else if matches!(
+                inst.status,
+                InstanceStatus::Running | InstanceStatus::Starting | InstanceStatus::Stopping
+            ) {
+                inst.status = InstanceStatus::Stopped;
+                inst.last_pid = None;
+                inst.last_start_time = None;
+                inst.docker_container = None;
+                inst.updated_at = Utc::now();
+            }
+        }
+    }
+    let _ = state.persist().await;
 }
 
 pub async fn stop_instance(state: &AppState, id: &str) -> anyhow::Result<InstanceView> {
@@ -948,6 +1065,11 @@ pub async fn apply_event(state: &std::sync::Arc<AppState>, event: &InstanceEvent
                         InstanceStatus::Stopped | InstanceStatus::Crashed
                     ) {
                         inst.process = None;
+                        inst.last_pid = None;
+                        inst.last_start_time = None;
+                        if *status != InstanceStatus::Stopping {
+                            inst.docker_container = None;
+                        }
                     }
                     if *status == InstanceStatus::Crashed {
                         webhook = Some((

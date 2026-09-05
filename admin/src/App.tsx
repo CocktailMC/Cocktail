@@ -945,6 +945,8 @@ export default function App() {
                     <span className={`status-pill status-${selected.status}`}>
                       <span className="pulse" />
                       {STATUS_LABEL[selected.status]}
+                      {selected.pid ? ` · pid ${selected.pid}` : ''}
+                      {selected.reattached ? ' · 已接管' : ''}
                     </span>
                   </div>
                   <div className="stat-grid">

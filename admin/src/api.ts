@@ -40,6 +40,8 @@ export type Instance = {
   updated_at: string
   last_metrics: MetricSample | null
   last_players?: string[]
+  pid?: number | null
+  reattached?: boolean
 }
 
 export type LogLine = {

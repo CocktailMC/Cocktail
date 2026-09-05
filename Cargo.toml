@@ -5,7 +5,7 @@ members = ["crates/cocktail-control"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "Apache-2.0"
 authors = ["Cocktail"]
 
 [workspace.dependencies]
@@ -29,3 +29,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+libc = "0.2"
