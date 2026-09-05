@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- WiX Toolset v3 — build via scripts/package-windows.ps1 -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+    Id="*"
+    Name="Cocktail Manager"
+    Language="1033"
+    Version="$(var.ProductVersion)"
+    Manufacturer="Cocktail"
+    UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+    <Package
+      InstallerVersion="500"
+      Compressed="yes"
+      InstallScope="perMachine"
+      Description="Cocktail Manager — Minecraft server control plane"
+      Manufacturer="Cocktail" />
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of Cocktail Manager is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="ProductFeature" Title="Cocktail Manager" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="WebComponents" />
+      <ComponentRef Id="ApplicationShortcut" />
+    </Feature>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Cocktail">
+          <Directory Id="WebFolder" Name="web" />
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Cocktail Manager" />
+      </Directory>
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="CocktailDataRoot" Name="Cocktail" />
+      </Directory>
+    </Directory>
+  </Product>
+
+  <Fragment>
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
+        <File
+          Id="CocktailExe"
+          Source="$(var.StageDir)\cocktail-control.exe"
+          KeyPath="yes"
+          Checksum="yes" />
+        <Environment
+          Id="CocktailWebRoot"
+          Name="COCKTAIL_WEB_ROOT"
+          Value="[INSTALLFOLDER]web"
+          Permanent="no"
+          Action="set"
+          System="yes" />
+        <Environment
+          Id="CocktailBind"
+          Name="COCKTAIL_BIND"
+          Value="127.0.0.1:11011"
+          Permanent="no"
+          Action="set"
+          System="yes" />
+      </Component>
+      <Component Id="EnvExample" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
+        <File
+          Id="CocktailEnv"
+          Source="$(var.StageDir)\cocktail.env.example"
+          Name="cocktail.env.example"
+          KeyPath="yes" />
+      </Component>
+      <Component Id="LogoFile" Guid="D4E5F6A7-B8C9-0123-DEF0-234567890123">
+        <File
+          Id="CocktailLogo"
+          Source="$(var.StageDir)\logo.png"
+          Name="logo.png"
+          KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="ApplicationShortcut" Guid="E5F6A7B8-C9D0-1234-EF01-345678901234">
+        <Shortcut
+          Id="CocktailStartMenu"
+          Name="Cocktail Manager"
+          Description="Start Cocktail control plane"
+          Target="[INSTALLFOLDER]cocktail-control.exe"
+          WorkingDirectory="CocktailDataRoot" />
+        <RemoveFolder Id="CleanMenu" On="uninstall" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Cocktail\Manager"
+          Name="installed"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

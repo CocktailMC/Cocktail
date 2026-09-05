@@ -1,0 +1,19 @@
+[Unit]
+Description=Cocktail Manager control plane
+Documentation=https://github.com/cocktail-manager/cocktail
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/cocktail/cocktail.env
+WorkingDirectory=/var/lib/cocktail
+ExecStart=/usr/bin/cocktail-control
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+# Instances spawn java/docker — keep modest sandbox.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

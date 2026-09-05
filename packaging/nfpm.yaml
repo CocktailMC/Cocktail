@@ -1,0 +1,52 @@
+# Cocktail Manager packages (deb + rpm) via nfpm: https://github.com/goreleaser/nfpm
+name: cocktail
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: net
+priority: optional
+maintainer: Cocktail <cocktail@localhost>
+description: |
+  Cocktail Manager — Minecraft server control plane (Rust) with embedded admin UI.
+vendor: Cocktail
+homepage: https://github.com/cocktail-manager/cocktail
+license: MIT
+contents:
+  - src: dist/stage/usr/bin/cocktail-control
+    dst: /usr/bin/cocktail-control
+    file_info:
+      mode: 0755
+  - src: dist/stage/usr/share/cocktail/web
+    dst: /usr/share/cocktail/web
+    type: tree
+  - src: packaging/systemd/cocktail-control.service
+    dst: /lib/systemd/system/cocktail-control.service
+    file_info:
+      mode: 0644
+  - src: packaging/env/cocktail.env
+    dst: /etc/cocktail/cocktail.env
+    type: config|noreplace
+    file_info:
+      mode: 0640
+  - src: logo.png
+    dst: /usr/share/cocktail/logo.png
+    file_info:
+      mode: 0644
+  - dst: /var/lib/cocktail
+    type: dir
+    file_info:
+      mode: 0755
+  - dst: /var/lib/cocktail/data
+    type: dir
+    file_info:
+      mode: 0755
+scripts:
+  postinstall: packaging/scripts/postinstall.sh
+  preremove: packaging/scripts/preremove.sh
+overrides:
+  deb:
+    depends:
+      - libc6
+  rpm:
+    depends:
+      - glibc

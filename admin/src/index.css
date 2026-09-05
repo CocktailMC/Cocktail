@@ -1,0 +1,81 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
+
+:root {
+  --primary: #0f4c81;
+  --primary-hover: #0c3d68;
+  --primary-soft: #e8f1fb;
+  --sidebar-bg: #1a222c;
+  --sidebar-hover: #243040;
+  --sidebar-line: #2a3441;
+  --content-bg: #f4f7fa;
+  --success: #22c55e;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --card: #ffffff;
+  --radius: 8px;
+  --shadow-sm: 0 1px 2px rgba(15, 35, 55, 0.04);
+  --shadow: 0 1px 3px rgba(15, 35, 55, 0.06), 0 4px 12px rgba(15, 35, 55, 0.04);
+  --font-body: 'IBM Plex Sans', 'Noto Sans SC', sans-serif;
+  --font-mono: 'IBM Plex Mono', Consolas, Monaco, 'Courier New', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse 80% 50% at 100% -10%, rgba(15, 76, 129, 0.06), transparent),
+    radial-gradient(ellipse 60% 40% at -5% 30%, rgba(15, 76, 129, 0.04), transparent),
+    var(--content-bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c5cdd6;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a8b3c0;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

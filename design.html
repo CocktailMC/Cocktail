@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MC Server Manager - 服务器管理后台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#0f4c81',
+                        sidebarBg: '#1a222c',
+                        contentBg: '#f4f7fa',
+                        success: '#22c55e',
+                        danger: '#ef4444',
+                        warning: '#f59e0b'
+                    },
+                    fontFamily: {
+                        mono: ['Consolas','Monaco','monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .menu-active {
+                @apply bg-primary text-white border-l-4 border-blue-400;
+            }
+            .card-panel {
+                @apply bg-white rounded shadow-md p-5;
+            }
+            .btn {
+                @apply px-4 py-2 rounded transition-all duration-200 font-medium;
+            }
+            .btn-primary {
+                @apply bg-primary text-white hover:bg-[#0c3d68];
+            }
+            .btn-danger {
+                @apply bg-danger text-white hover:bg-[#c53838];
+            }
+            .btn-warning {
+                @apply bg-warning text-white hover:bg-[#d88c0a];
+            }
+        }
+    </style>
+</head>
+<body class="bg-contentBg text-gray-800 min-h-screen flex flex-col">
+    <!-- 顶部导航栏 -->
+    <header class="bg-sidebarBg text-white h-14 flex items-center px-5 justify-between shadow">
+        <div class="flex items-center gap-3">
+            <i class="fa fa-server text-2xl"></i>
+            <h1 class="text-xl font-semibold">Minecraft 企业服务器管理面板</h1>
+        </div>
+        <div class="flex items-center gap-5">
+            <span class="text-sm"><i class="fa fa-clock-o mr-1"></i>运行时间: 12d 06h 22m</span>
+            <span class="text-sm"><i class="fa fa-user-circle mr-1"></i>管理员</span>
+            <button class="text-sm hover:text-blue-300"><i class="fa fa-sign-out"></i> 退出</button>
+        </div>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden">
+        <!-- 侧边菜单栏 -->
+        <aside class="w-60 bg-sidebarBg text-gray-300 overflow-y-auto">
+            <nav class="py-2">
+                <a href="#dashboard" class="menu-active block px-5 py-3 hover:bg-gray-700">
+                    <i class="fa fa-dashboard w-6"></i>仪表盘概览
+                </a>
+                <a href="#control" class="block px-5 py-3 hover:bg-gray-700">
+                    <i class="fa fa-power-off w-6"></i>服务器控制
+                </a>
+                <a href="#players" class="block px-5 py-3 hover:bg-gray-700">
+                    <i class="fa fa-users w-6"></i>在线玩家
+                </a>
+                <a href="#console" class="block px-5 py-3 hover:bg-gray-700">
+                    <i class="fa fa-terminal w-6"></i>控制台
+                </a>
+                <a href="#config" class="block px-5 py-3 hover:bg-gray-700">
+                    <i class="fa fa-cog w-6"></i>服务端配置
+                </a>
+                <a href="#plugins" class="block px-5 py-3 hover:bg-gray-700">
+                    <i class="fa fa-puzzle-piece w-6"></i>插件/模组管理
+                </a>
+                <a href="#backup" class="block px-5 py-3 hover:bg-gray-700">
+                    <i class="fa fa-database w-6"></i>世界备份
+                </a>
+                <a href="#task" class="block px-5 py-3 hover:bg-gray-700">
+                    <i class="fa fa-calendar w-6"></i>计划任务
+                </a>
+                <a href="#log" class="block px-5 py-3 hover:bg-gray-700">
+                    <i class="fa fa-file-text-o w-6"></i>运行日志
+                </a>
+                <a href="#network" class="block px-5 py-3 hover:bg-gray-700">
+                    <i class="fa fa-exchange w-6"></i>网络&防火墙
+                </a>
+                <a href="#system" class="block px-5 py-3 hover:bg-gray-700">
+                    <i class="fa fa-desktop w-6"></i>系统监控
+                </a>
+            </nav>
+        </aside>
+
+        <!-- 主内容区域 -->
+        <main class="flex-1 overflow-y-auto p-6">
+            <!-- 仪表盘 -->
+            <section id="dashboard">
+                <h2 class="text-2xl font-semibold mb-5">服务器仪表盘</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5 mb-6">
+                    <div class="card-panel">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <p class="text-gray-500 text-sm">服务器状态</p>
+                                <p class="text-xl font-bold text-success"><i class="fa fa-check-circle"></i> 运行中</p>
+                            </div>
+                            <i class="fa fa-play-circle text-4xl text-success"></i>
+                        </div>
+                    </div>
+                    <div class="card-panel">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <p class="text-gray-500 text-sm">在线玩家</p>
+                                <p class="text-xl font-bold">8 / 100</p>
+                            </div>
+                            <i class="fa fa-users text-4xl text-primary"></i>
+                        </div>
+                    </div>
+                    <div class="card-panel">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <p class="text-gray-500 text-sm">内存占用</p>
+                                <p class="text-xl font-bold">4.2GB / 12GB</p>
+                            </div>
+                            <i class="fa fa-microchip text-4xl text-warning"></i>
+                        </div>
+                    </div>
+                    <div class="card-panel">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <p class="text-gray-500 text-sm">TPS</p>
+                                <p class="text-xl font-bold text-success">20.0</p>
+                            </div>
+                            <i class="fa fa-tachometer text-4xl text-primary"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                    <!-- 服务器控制卡片 -->
+                    <div class="card-panel">
+                        <h3 class="text-lg font-semibold mb-4">服务器快捷控制</h3>
+                        <div class="flex gap-3 flex-wrap">
+                            <button class="btn btn-primary"><i class="fa fa-play"></i> 启动服务器</button>
+                            <button class="btn btn-warning"><i class="fa fa-refresh"></i> 重载配置</button>
+                            <button class="btn btn-danger"><i class="fa fa-stop"></i> 停止服务器</button>
+                            <button class="btn btn-danger"><i class="fa fa-power-off"></i> 强制关闭</button>
+                        </div>
+                        <div class="mt-4">
+                            <label class="block text-sm text-gray-500 mb-1">关闭公告</label>
+                            <input type="text" class="w-full border border-gray-300 rounded px-3 py-2" value="服务器即将关闭，请尽快下线！">
+                        </div>
+                    </div>
+
+                    <!-- 快速信息 -->
+                    <div class="card-panel">
+                        <h3 class="text-lg font-semibold mb-4">服务器基础信息</h3>
+                        <table class="w-full text-sm">
+                            <tr class="border-b">
+                                <td class="py-2 text-gray-500 w-1/3">服务端类型</td>
+                                <td>Paper‑1.20.1</td>
+                            </tr>
+                            <tr class="border-b">
+                                <td class="py-2 text-gray-500">服务器IP</td>
+                                <td>mc.example.com:25565</td>
+                            </tr>
+                            <tr class="border-b">
+                                <td class="py-2 text-gray-500">世界名称</td>
+                                <td>world</td>
+                            </tr>
+                            <tr class="border-b">
+                                <td class="py-2 text-gray-500">最大内存</td>
+                                <td>12GB</td>
+                            </tr>
+                            <tr>
+                                <td class="py-2 text-gray-500">插件数量</td>
+                                <td>26</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 控制台输出区域 -->
+                <div class="card-panel mt-6">
+                    <h3 class="text-lg font-semibold mb-3">实时控制台输出</h3>
+                    <div class="bg-black text-green-400 font-mono p-4 h-56 overflow-y-auto text-sm rounded">
+                        <div>[INFO] Server is running on port 25565</div>
+                        <div>[INFO] Player Steve joined the game</div>
+                        <div>[INFO] Player Alex joined the game</div>
+                        <div>[WARN] Memory usage is rising</div>
+                        <div>[INFO] TPS: 20.0</div>
+                    </div>
+                    <div class="flex gap-2 mt-3">
+                        <input type="text" placeholder="输入服务器命令，例如 /whitelist add xxx" class="flex‑1 border rounded px-3 py-2 w-full">
+                        <button class="btn btn-primary">发送命令</button>
+                    </div>
+                </div>
+
+                <!-- 在线玩家列表 -->
+                <div class="card-panel mt-6">
+                    <h3 class="text-lg font-semibold mb-4">在线玩家列表</h3>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead class="bg-gray-100">
+                                <tr>
+                                    <th class="text-left p-2">玩家名</th>
+                                    <th class="text-left p-2">UUID</th>
+                                    <th class="text-left p-2">登录时长</th>
+                                    <th class="text-left p-2">IP地址</th>
+                                    <th class="text-left p-2">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="border-b">
+                                    <td class="p-2">Steve</td>
+                                    <td class="p-2">xxxxxxxx‑xxxx‑xxxx‑xxxx‑xxxxxxxxxxxx</td>
+                                    <td class="p-2">2h 15m</td>
+                                    <td class="p-2">192.168.1.100</td>
+                                    <td class="p-2">
+                                        <button class="text-blue-600 mr-2">传送</button>
+                                        <button class="text-warning mr-2">踢出</button>
+                                        <button class="text-danger">封禁</button>
+                                    </td>
+                                </tr>
+                                <tr class="border-b">
+                                    <td class="p-2">Alex</td>
+                                    <td class="p-2">xxxxxxxx‑xxxx‑xxxx‑xxxx‑xxxxxxxxxxxx</td>
+                                    <td class="p-2">45m</td>
+                                    <td class="p-2">192.168.1.101</td>
+                                    <td class="p-2">
+                                        <button class="text-blue-600 mr-2">传送</button>
+                                        <button class="text-warning mr-2">踢出</button>
+                                        <button class="text-danger">封禁</button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+</body>
+</html>
