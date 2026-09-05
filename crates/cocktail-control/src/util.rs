@@ -6,7 +6,7 @@ use std::path::Path;
 
 use chrono::Utc;
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 pub fn inject_jvm_memory(args: &mut Vec<String>, memory_mib: u32) {
@@ -179,6 +179,84 @@ pub fn append_instance_log(instance_id: &str, stream: &str, line: &str) {
             line
         );
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditRecord {
+    pub at: String,
+    pub action: String,
+    pub instance_id: Option<String>,
+    #[serde(default)]
+    pub detail: serde_json::Value,
+    pub actor: String,
+}
+
+const AUDIT_MAX_READ: usize = 8000;
+
+pub fn list_audit(
+    limit: usize,
+    offset: usize,
+    action: Option<&str>,
+    instance_id: Option<&str>,
+    actor: Option<&str>,
+    q: Option<&str>,
+) -> (Vec<AuditRecord>, usize) {
+    let path = Path::new("data").join("audit.jsonl");
+    let Ok(raw) = fs::read_to_string(path) else {
+        return (Vec::new(), 0);
+    };
+    let mut rows: Vec<AuditRecord> = raw
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    if rows.len() > AUDIT_MAX_READ {
+        rows = rows.split_off(rows.len() - AUDIT_MAX_READ);
+    }
+    rows.reverse();
+
+    let action = action.map(str::trim).filter(|s| !s.is_empty());
+    let instance_id = instance_id.map(str::trim).filter(|s| !s.is_empty());
+    let actor = actor.map(str::trim).filter(|s| !s.is_empty());
+    let q = q.map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
+
+    rows.retain(|r| {
+        if let Some(a) = action {
+            if r.action != a && !r.action.starts_with(&format!("{a}.")) {
+                return false;
+            }
+        }
+        if let Some(id) = instance_id {
+            if r.instance_id.as_deref() != Some(id) {
+                return false;
+            }
+        }
+        if let Some(act) = actor {
+            if !r.actor.eq_ignore_ascii_case(act) {
+                return false;
+            }
+        }
+        if let Some(needle) = q.as_deref() {
+            let detail = r.detail.to_string().to_ascii_lowercase();
+            let hay = format!(
+                "{} {} {} {}",
+                r.action,
+                r.actor,
+                r.instance_id.as_deref().unwrap_or(""),
+                detail
+            )
+            .to_ascii_lowercase();
+            if !hay.contains(needle) {
+                return false;
+            }
+        }
+        true
+    });
+
+    let total = rows.len();
+    let limit = limit.clamp(1, 200);
+    let page: Vec<AuditRecord> = rows.into_iter().skip(offset).take(limit).collect();
+    (page, total)
 }
 
 #[derive(Serialize)]

@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
-import { api, type CreateInstanceBody, type Instance } from './api'
+import { api, type CreateInstanceBody, type Instance, type NodeInfo } from './api'
 import {
   EULA_AKA_URL,
   EULA_OFFICIAL_URL,
@@ -53,6 +53,20 @@ export default function CreateInstancePage({
   const [eulaRead, setEulaRead] = useState(false)
   const [eulaAccepted, setEulaAccepted] = useState(false)
   const [jarFile, setJarFile] = useState<File | null>(null)
+  const [nodes, setNodes] = useState<NodeInfo[]>([])
+  const [nodeId, setNodeId] = useState('local')
+
+  useEffect(() => {
+    api
+      .listNodes()
+      .then((list) => {
+        setNodes(list)
+        if (!list.some((n) => n.id === nodeId) && list[0]) {
+          setNodeId(list[0].id)
+        }
+      })
+      .catch(() => undefined)
+  }, [])
 
   const needsEula = core !== 'demo'
   const portConflict = usedPorts.includes(port)
@@ -97,6 +111,7 @@ export default function CreateInstancePage({
         eula_accepted: needsEula ? eulaAccepted : true,
         runtime,
         group: group.trim() || 'default',
+        node_id: nodeId,
         tags: tags
           .split(',')
           .map((t) => t.trim())
@@ -166,6 +181,19 @@ export default function CreateInstancePage({
                 required
                 placeholder="my-server"
               />
+            </label>
+            <label>
+              调度节点
+              <select value={nodeId} onChange={(e) => setNodeId(e.target.value)}>
+                {(nodes.length ? nodes : [{ id: 'local', name: '本机控制面', kind: 'local', created_at: '', online: true }]).map(
+                  (n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.name}
+                      {n.kind === 'local' ? '（本机）' : n.online ? '（在线）' : '（离线）'}
+                    </option>
+                  ),
+                )}
+              </select>
             </label>
             <label>
               分组

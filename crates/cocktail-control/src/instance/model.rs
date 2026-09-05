@@ -54,6 +54,18 @@ pub struct InstanceSpec {
     pub tags: Vec<String>,
     #[serde(default)]
     pub group: Option<String>,
+    #[serde(default = "default_node_id")]
+    pub node_id: String,
+    #[serde(default)]
+    pub desired_running: bool,
+}
+
+pub fn is_local_node(node_id: &str) -> bool {
+    node_id.is_empty() || node_id == "local"
+}
+
+fn default_node_id() -> String {
+    "local".into()
 }
 
 fn default_memory_mib() -> u32 {
@@ -118,6 +130,8 @@ pub struct Instance {
     pub last_start_time: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docker_container: Option<String>,
+    #[serde(default)]
+    pub generation: u64,
     #[serde(skip)]
     pub(crate) process: Option<crate::instance::ProcessHandle>,
 }
@@ -136,6 +150,7 @@ impl Instance {
             last_pid: None,
             last_start_time: None,
             docker_container: None,
+            generation: 1,
             process: None,
         }
     }
@@ -159,6 +174,30 @@ impl Instance {
                 .process
                 .as_ref()
                 .is_some_and(|p| p.reattached),
+            node_id: if self.spec.node_id.is_empty() {
+                "local".into()
+            } else {
+                self.spec.node_id.clone()
+            },
+            desired_running: self.spec.desired_running,
+            generation: self.generation,
+        }
+    }
+
+    pub fn persist_snapshot(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            spec: self.spec.clone(),
+            status: self.status,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            last_metrics: None,
+            last_players: Vec::new(),
+            last_pid: self.last_pid,
+            last_start_time: self.last_start_time,
+            docker_container: self.docker_container.clone(),
+            generation: self.generation,
+            process: None,
         }
     }
 }
@@ -177,6 +216,16 @@ pub struct InstanceView {
     pub pid: Option<u32>,
     #[serde(default)]
     pub reattached: bool,
+    #[serde(default = "default_view_node")]
+    pub node_id: String,
+    #[serde(default)]
+    pub desired_running: bool,
+    #[serde(default)]
+    pub generation: u64,
+}
+
+fn default_view_node() -> String {
+    "local".into()
 }
 
 #[derive(Debug, Deserialize)]
@@ -210,9 +259,11 @@ pub struct CreateInstanceRequest {
     pub tags: Vec<String>,
     #[serde(default)]
     pub group: Option<String>,
+    #[serde(default)]
+    pub node_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct UpdateInstanceRequest {
     #[serde(default)]
     pub name: Option<String>,
@@ -242,6 +293,10 @@ pub struct UpdateInstanceRequest {
     pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub group: Option<String>,
+    #[serde(default)]
+    pub node_id: Option<String>,
+    #[serde(default)]
+    pub desired_running: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

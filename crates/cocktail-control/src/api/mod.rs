@@ -17,6 +17,7 @@ pub fn router() -> Router<SharedState> {
             "/api/v1/settings",
             get(handlers::get_settings).put(handlers::update_settings),
         )
+        .route("/api/v1/audit", get(handlers::list_audit))
         .route(
             "/api/v1/instances",
             get(handlers::list_instances).post(handlers::create_instance),
@@ -169,4 +170,14 @@ pub fn router() -> Router<SharedState> {
         .route("/api/v1/docker/status", get(handlers::docker_status))
         .route("/api/v1/events/ws", get(handlers::events_ws))
         .route("/api/v1/instances/{id}/logs/ws", get(handlers::logs_ws))
+        .route("/api/v1/agent/ws", get(crate::cluster::agent_ws))
+        .route(
+            "/api/v1/nodes",
+            get(handlers::list_nodes).post(handlers::create_node),
+        )
+        .route("/api/v1/nodes/{id}", delete(handlers::delete_node))
+        .route(
+            "/api/v1/instances/{id}/spec",
+            get(handlers::get_instance_spec).put(handlers::apply_instance_spec),
+        )
 }

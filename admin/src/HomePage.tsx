@@ -280,6 +280,8 @@ export default function HomePage(props: Props) {
                         {inst.spec.runtime}
                         <span className="dot" />
                         {inst.spec.memory_mib} MiB
+                        <span className="dot" />
+                        {inst.node_id ?? inst.spec.node_id ?? 'local'}
                       </span>
                     </button>
                   </div>

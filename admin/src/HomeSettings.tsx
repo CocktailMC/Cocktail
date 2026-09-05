@@ -271,6 +271,7 @@ export default function HomeSettings({
             <li>
               账号与面板配置保存在 SQLite；实例列表仍在 <code>data/state.json</code>。
             </li>
+            <li>登录与实例操作会写入审计日志，可在侧栏「审计日志」查看。</li>
           </ul>
         </div>
       </div>

@@ -25,6 +25,9 @@ import PropertiesPanel from './PropertiesPanel'
 import PluginStore from './PluginStore'
 import HomePage from './HomePage'
 import HomeSettings from './HomeSettings'
+import AuditPage from './AuditPage'
+import NodesPage from './NodesPage'
+import SpecYamlPanel from './SpecYamlPanel'
 import SetupPage from './SetupPage'
 import LoginPage from './LoginPage'
 import './App.css'
@@ -91,7 +94,9 @@ export default function App() {
   const [logs, setLogs] = useState<LogLine[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [view, setView] = useState<'manager' | 'create' | 'eula'>('manager')
-  const [homeTab, setHomeTab] = useState<'overview' | 'settings'>('overview')
+  const [homeTab, setHomeTab] = useState<
+    'overview' | 'settings' | 'audit' | 'nodes'
+  >('overview')
   const [mkdirName, setMkdirName] = useState('')
   const [setCommand, setSetCommand] = useState('java')
   const [setArgs, setSetArgs] = useState('-jar server.jar nogui')
@@ -478,7 +483,9 @@ export default function App() {
     setError(null)
   }
 
-  const goHome = (tab: 'overview' | 'settings' = 'overview') => {
+  const goHome = (
+    tab: 'overview' | 'settings' | 'audit' | 'nodes' = 'overview',
+  ) => {
     setSelectedId(null)
     setHomeTab(tab)
     setView('manager')
@@ -772,6 +779,30 @@ export default function App() {
                 <i className="fa fa-cogs" />
                 服务器设置
               </button>
+              <button
+                type="button"
+                className={
+                  !selected && homeTab === 'nodes'
+                    ? 'nav-item active'
+                    : 'nav-item'
+                }
+                onClick={() => goHome('nodes')}
+              >
+                <i className="fa fa-sitemap" />
+                节点 / Agent
+              </button>
+              <button
+                type="button"
+                className={
+                  !selected && homeTab === 'audit'
+                    ? 'nav-item active'
+                    : 'nav-item'
+                }
+                onClick={() => goHome('audit')}
+              >
+                <i className="fa fa-list-alt" />
+                审计日志
+              </button>
             </div>
             {selected &&
               NAV_GROUPS.map((group) => (
@@ -905,6 +936,18 @@ export default function App() {
                   }
                   onOpenSettings={() => goHome('settings')}
                 />
+              ) : homeTab === 'nodes' ? (
+                <NodesPage
+                  onBack={() => goHome('overview')}
+                  onError={setError}
+                />
+              ) : homeTab === 'audit' ? (
+                <AuditPage
+                  instances={instances}
+                  onBack={() => goHome('overview')}
+                  onOpenInstance={selectInstance}
+                  onError={setError}
+                />
               ) : (
                 <HomeSettings
                   health={health}
@@ -947,6 +990,7 @@ export default function App() {
                       {STATUS_LABEL[selected.status]}
                       {selected.pid ? ` · pid ${selected.pid}` : ''}
                       {selected.reattached ? ' · 已接管' : ''}
+                      {` · 节点 ${selected.node_id ?? selected.spec.node_id ?? 'local'}`}
                     </span>
                   </div>
                   <div className="stat-grid">
@@ -2272,6 +2316,15 @@ export default function App() {
                         )}
                       </label>
                       <p className="meta">工作目录：{selected.spec.workdir}</p>
+                      <p className="meta">
+                        节点：{selected.node_id ?? selected.spec.node_id ?? 'local'}
+                        {selected.desired_running ?? selected.spec.desired_running
+                          ? ' · 期望运行'
+                          : ' · 期望停止'}
+                        {selected.generation != null
+                          ? ` · gen ${selected.generation}`
+                          : ''}
+                      </p>
                       <button
                         type="submit"
                         className="btn btn-primary"
@@ -2281,6 +2334,12 @@ export default function App() {
                       </button>
                     </form>
                   </div>
+                  <SpecYamlPanel
+                    instanceId={selected.id}
+                    busy={busy}
+                    onBusy={setBusyState}
+                    onError={setError}
+                  />
                 </>
               )}
             </>

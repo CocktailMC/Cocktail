@@ -4,10 +4,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 use crate::db;
 use crate::instance::{self, Instance, InstanceEvent, LogLine, Schedule};
+use crate::proto::AgentDown;
 
 pub type SharedState = Arc<AppState>;
 
@@ -20,6 +21,7 @@ pub struct AppState {
     pub events: broadcast::Sender<InstanceEvent>,
     pub log_buffers: RwLock<HashMap<String, VecDeque<LogLine>>>,
     pub db: Mutex<rusqlite::Connection>,
+    pub agents: Mutex<HashMap<String, mpsc::UnboundedSender<AgentDown>>>,
     pub env_api_token: Option<String>,
     pub env_webhook_url: Option<String>,
     pub bind: String,
@@ -35,11 +37,11 @@ struct PersistedState {
 impl AppState {
     pub fn new() -> Self {
         let (events, _) = broadcast::channel(1024);
-        let (instances, schedules) = load_from_disk().unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "failed to load persisted state");
-            (HashMap::new(), Vec::new())
-        });
         let db = db::open().expect("open sqlite database (data/cocktail.db)");
+        if let Err(e) = db::ensure_local_node(&db) {
+            tracing::warn!(error = %e, "ensure local node");
+        }
+        let (instances, schedules) = hydrate_state(&db);
         let bind = std::env::var("COCKTAIL_BIND")
             .ok()
             .filter(|s| !s.is_empty())
@@ -57,6 +59,7 @@ impl AppState {
             events,
             log_buffers: RwLock::new(HashMap::new()),
             db: Mutex::new(db),
+            agents: Mutex::new(HashMap::new()),
             env_api_token,
             env_webhook_url,
             bind,
@@ -145,26 +148,27 @@ impl AppState {
         });
     }
 
+    pub fn spawn_reconciler(self: &Arc<Self>) {
+        let state = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                instance::reconcile_local(&state).await;
+            }
+        });
+    }
+
     pub async fn persist(&self) -> anyhow::Result<()> {
         let guard = self.instances.read().await;
-        let instances: Vec<Instance> = guard
-            .values()
-            .map(|i| Instance {
-                id: i.id.clone(),
-                spec: i.spec.clone(),
-                status: i.status,
-                created_at: i.created_at,
-                updated_at: i.updated_at,
-                last_metrics: None,
-                last_players: Vec::new(),
-                last_pid: i.last_pid,
-                last_start_time: i.last_start_time,
-                docker_container: i.docker_container.clone(),
-                process: None,
-            })
-            .collect();
+        let instances: Vec<Instance> = guard.values().map(|i| i.persist_snapshot()).collect();
         drop(guard);
         let schedules = self.schedules.read().await.clone();
+
+        {
+            let conn = self.db.lock().await;
+            db::replace_instances(&conn, &instances)?;
+        }
 
         let path = PathBuf::from(STATE_PATH);
         if let Some(parent) = path.parent() {
@@ -188,6 +192,42 @@ impl AppState {
     }
 }
 
+fn hydrate_state(
+    db: &rusqlite::Connection,
+) -> (HashMap<String, Instance>, Vec<Schedule>) {
+    let (json_map, schedules) = load_from_disk().unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "failed to load persisted state.json");
+        (HashMap::new(), Vec::new())
+    });
+    match db::load_instances(db) {
+        Ok(list) if !list.is_empty() => {
+            let mut map = HashMap::new();
+            for inst in list {
+                map.insert(inst.id.clone(), inst);
+            }
+            (map, schedules)
+        }
+        Ok(_) => {
+            if !json_map.is_empty() {
+                let snap: Vec<_> = json_map.values().map(|i| i.persist_snapshot()).collect();
+                if let Err(e) = db::replace_instances(db, &snap) {
+                    tracing::warn!(error = %e, "migrate instances into sqlite");
+                } else {
+                    tracing::info!(
+                        count = snap.len(),
+                        "migrated instances from state.json into sqlite"
+                    );
+                }
+            }
+            (json_map, schedules)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "load instances from sqlite");
+            (json_map, schedules)
+        }
+    }
+}
+
 fn load_from_disk() -> anyhow::Result<(HashMap<String, Instance>, Vec<Schedule>)> {
     let path = PathBuf::from(STATE_PATH);
     if !path.exists() {
@@ -200,6 +240,12 @@ fn load_from_disk() -> anyhow::Result<(HashMap<String, Instance>, Vec<Schedule>)
         inst.process = None;
         inst.last_metrics = None;
         inst.last_players.clear();
+        if inst.spec.node_id.is_empty() {
+            inst.spec.node_id = "local".into();
+        }
+        if inst.generation == 0 {
+            inst.generation = 1;
+        }
         map.insert(inst.id.clone(), inst);
     }
     Ok((map, persisted.schedules))

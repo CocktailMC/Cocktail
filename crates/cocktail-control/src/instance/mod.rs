@@ -1,10 +1,10 @@
-mod container;
-mod files;
+pub(crate) mod container;
+pub(crate) mod files;
 pub mod hangar;
 mod model;
 pub mod modrinth;
 mod players;
-mod process;
+pub(crate) mod process;
 mod registry;
 pub mod spiget;
 mod versions;

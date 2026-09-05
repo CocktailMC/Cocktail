@@ -22,6 +22,8 @@ export type InstanceSpec = {
   cpu_limit?: number | null
   tags?: string[]
   group?: string | null
+  node_id?: string
+  desired_running?: boolean
 }
 
 export type MetricSample = {
@@ -42,6 +44,9 @@ export type Instance = {
   last_players?: string[]
   pid?: number | null
   reattached?: boolean
+  node_id?: string
+  desired_running?: boolean
+  generation?: number
 }
 
 export type LogLine = {
@@ -65,6 +70,7 @@ export type CreateInstanceBody = {
   cpu_limit?: number
   tags?: string[]
   group?: string
+  node_id?: string
 }
 
 export type UpdateInstanceBody = {
@@ -245,6 +251,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+async function requestText(path: string, init?: RequestInit): Promise<string> {
+  const res = await fetch(path, {
+    ...init,
+    headers: authHeaders(init?.headers),
+  })
+  if (!res.ok) {
+    let message = res.statusText
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) message = body.error
+    } catch {
+      if (res.status === 401) message = '未授权：请登录'
+    }
+    throw new Error(message)
+  }
+  return res.text()
+}
+
 export type AuthSession = {
   token: string
   username: string
@@ -259,6 +283,21 @@ export type MeInfo = {
   created_at: string
 }
 
+export type AuditEntry = {
+  at: string
+  action: string
+  instance_id?: string | null
+  detail?: unknown
+  actor: string
+}
+
+export type AuditList = {
+  items: AuditEntry[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export type PanelSettings = {
   panel_name: string
   webhook_url?: string | null
@@ -268,6 +307,23 @@ export type PanelSettings = {
   admin_created_at: string
   bind: string
   db_path: string
+}
+
+export type NodeInfo = {
+  id: string
+  name: string
+  kind: string
+  hostname?: string | null
+  os?: string | null
+  arch?: string | null
+  last_seen?: string | null
+  created_at: string
+  online: boolean
+}
+
+export type CreatedNode = {
+  node: NodeInfo
+  token: string
 }
 
 export type HealthInfo = {
@@ -323,6 +379,40 @@ export const api = {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    }),
+  listAudit: (params?: {
+    limit?: number
+    offset?: number
+    action?: string
+    instance_id?: string
+    actor?: string
+    q?: string
+  }) => {
+    const q = new URLSearchParams()
+    if (params?.limit != null) q.set('limit', String(params.limit))
+    if (params?.offset != null) q.set('offset', String(params.offset))
+    if (params?.action) q.set('action', params.action)
+    if (params?.instance_id) q.set('instance_id', params.instance_id)
+    if (params?.actor) q.set('actor', params.actor)
+    if (params?.q) q.set('q', params.q)
+    const qs = q.toString()
+    return request<AuditList>(`/api/v1/audit${qs ? `?${qs}` : ''}`)
+  },
+  listNodes: () => request<NodeInfo[]>('/api/v1/nodes'),
+  createNode: (name: string) =>
+    request<CreatedNode>('/api/v1/nodes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
+  deleteNode: (id: string) =>
+    request<void>(`/api/v1/nodes/${id}`, { method: 'DELETE' }),
+  getInstanceSpec: (id: string) => requestText(`/api/v1/instances/${id}/spec`),
+  applyInstanceSpec: (id: string, yaml: string) =>
+    request<Instance>(`/api/v1/instances/${id}/spec`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/yaml' },
+      body: yaml,
     }),
   listInstances: () => request<Instance[]>('/api/v1/instances'),
   createInstance: (body: CreateInstanceBody) =>

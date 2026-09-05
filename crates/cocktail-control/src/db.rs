@@ -43,9 +43,201 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             admin_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
             created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS nodes (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            token_hash TEXT,
+            hostname TEXT,
+            os TEXT,
+            arch TEXT,
+            last_seen TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS instances (
+            id TEXT PRIMARY KEY,
+            node_id TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
         "#,
     )?;
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+pub struct NodeRow {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub token_hash: Option<String>,
+    pub hostname: Option<String>,
+    pub os: Option<String>,
+    pub arch: Option<String>,
+    pub last_seen: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct NodeView {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub hostname: Option<String>,
+    pub os: Option<String>,
+    pub arch: Option<String>,
+    pub last_seen: Option<String>,
+    pub created_at: String,
+    pub online: bool,
+}
+
+impl NodeRow {
+    pub fn into_view(self, online: bool) -> NodeView {
+        NodeView {
+            id: self.id,
+            name: self.name,
+            kind: self.kind,
+            hostname: self.hostname,
+            os: self.os,
+            arch: self.arch,
+            last_seen: self.last_seen,
+            created_at: self.created_at,
+            online,
+        }
+    }
+}
+
+fn map_node(r: &rusqlite::Row<'_>) -> rusqlite::Result<NodeRow> {
+    Ok(NodeRow {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        kind: r.get(2)?,
+        token_hash: r.get(3)?,
+        hostname: r.get(4)?,
+        os: r.get(5)?,
+        arch: r.get(6)?,
+        last_seen: r.get(7)?,
+        created_at: r.get(8)?,
+    })
+}
+
+pub fn ensure_local_node(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO nodes (id, name, kind, token_hash, hostname, os, arch, last_seen, created_at)
+         VALUES ('local', '本机控制面', 'local', NULL, NULL, NULL, NULL, NULL, datetime('now'))",
+        [],
+    )?;
+    Ok(())
+}
+
+pub fn list_nodes(conn: &Connection) -> anyhow::Result<Vec<NodeRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, kind, token_hash, hostname, os, arch, last_seen, created_at FROM nodes ORDER BY created_at",
+    )?;
+    let rows = stmt.query_map([], map_node)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn get_node(conn: &Connection, id: &str) -> anyhow::Result<Option<NodeRow>> {
+    conn.query_row(
+        "SELECT id, name, kind, token_hash, hostname, os, arch, last_seen, created_at FROM nodes WHERE id = ?1",
+        params![id],
+        map_node,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn insert_agent_node(
+    conn: &Connection,
+    id: &str,
+    name: &str,
+    token_hash: &str,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT INTO nodes (id, name, kind, token_hash, created_at) VALUES (?1, ?2, 'agent', ?3, datetime('now'))",
+        params![id, name, token_hash],
+    )?;
+    Ok(())
+}
+
+pub fn delete_node(conn: &Connection, id: &str) -> anyhow::Result<()> {
+    let n = conn.execute("DELETE FROM nodes WHERE id = ?1 AND kind = 'agent'", params![id])?;
+    if n == 0 {
+        anyhow::bail!("节点不存在");
+    }
+    Ok(())
+}
+
+pub fn touch_node(
+    conn: &Connection,
+    id: &str,
+    hostname: Option<&str>,
+    os: Option<&str>,
+    arch: Option<&str>,
+) -> anyhow::Result<()> {
+    if hostname.is_some() || os.is_some() || arch.is_some() {
+        conn.execute(
+            "UPDATE nodes SET last_seen = datetime('now'),
+                hostname = COALESCE(?2, hostname),
+                os = COALESCE(?3, os),
+                arch = COALESCE(?4, arch)
+             WHERE id = ?1",
+            params![id, hostname, os, arch],
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE nodes SET last_seen = datetime('now') WHERE id = ?1",
+            params![id],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn replace_instances(
+    conn: &Connection,
+    instances: &[crate::instance::Instance],
+) -> anyhow::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM instances", [])?;
+    {
+        let mut stmt =
+            tx.prepare("INSERT INTO instances (id, node_id, payload) VALUES (?1, ?2, ?3)")?;
+        for inst in instances {
+            let payload = serde_json::to_string(inst)?;
+            let node_id = if inst.spec.node_id.is_empty() {
+                "local"
+            } else {
+                inst.spec.node_id.as_str()
+            };
+            stmt.execute(params![inst.id, node_id, payload])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn load_instances(conn: &Connection) -> anyhow::Result<Vec<crate::instance::Instance>> {
+    let mut stmt = conn.prepare("SELECT payload FROM instances")?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let raw = row?;
+        let mut inst: crate::instance::Instance = serde_json::from_str(&raw)?;
+        inst.process = None;
+        inst.last_metrics = None;
+        inst.last_players.clear();
+        if inst.spec.node_id.is_empty() {
+            inst.spec.node_id = "local".into();
+        }
+        out.push(inst);
+    }
+    Ok(out)
 }
 
 #[derive(Clone, Debug)]

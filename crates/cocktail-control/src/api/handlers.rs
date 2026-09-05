@@ -378,6 +378,48 @@ pub async fn change_password(
     StatusCode::NO_CONTENT.into_response()
 }
 
+#[derive(Deserialize)]
+pub struct AuditQuery {
+    #[serde(default = "default_audit_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub offset: usize,
+    pub action: Option<String>,
+    pub instance_id: Option<String>,
+    pub actor: Option<String>,
+    pub q: Option<String>,
+}
+
+fn default_audit_limit() -> usize {
+    80
+}
+
+#[derive(Serialize)]
+pub struct AuditListResponse {
+    pub items: Vec<crate::util::AuditRecord>,
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+pub async fn list_audit(Query(q): Query<AuditQuery>) -> Json<AuditListResponse> {
+    let limit = q.limit.clamp(1, 200);
+    let (items, total) = crate::util::list_audit(
+        limit,
+        q.offset,
+        q.action.as_deref(),
+        q.instance_id.as_deref(),
+        q.actor.as_deref(),
+        q.q.as_deref(),
+    );
+    Json(AuditListResponse {
+        items,
+        total,
+        limit,
+        offset: q.offset,
+    })
+}
+
 #[derive(Serialize)]
 pub struct ErrorBody {
     error: String,
@@ -1083,6 +1125,69 @@ async fn handle_logs_socket(socket: WebSocket, state: SharedState, id: String) {
         _ = send_loop => {},
         _ = recv_loop => {},
     }
+}
+
+#[derive(Deserialize)]
+pub struct CreateNodeBody {
+    pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct CreatedNode {
+    pub node: crate::db::NodeView,
+    pub token: String,
+}
+
+pub async fn list_nodes(
+    State(state): State<SharedState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    crate::cluster::list_views(&state)
+        .await
+        .map(Json)
+        .map_err(|e| bad_request(e.to_string()))
+}
+
+pub async fn create_node(
+    State(state): State<SharedState>,
+    Json(body): Json<CreateNodeBody>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    crate::cluster::create_node(&state, &body.name)
+        .await
+        .map(|(node, token)| (StatusCode::CREATED, Json(CreatedNode { node, token })))
+        .map_err(|e| bad_request(e.to_string()))
+}
+
+pub async fn delete_node(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    match crate::cluster::delete_node(&state, &id).await {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(e) => Err(bad_request(e.to_string())),
+    }
+}
+
+pub async fn get_instance_spec(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    instance::spec_yaml(&state, &id)
+        .await
+        .map(|yaml| {
+            (
+                [(header::CONTENT_TYPE, "application/yaml; charset=utf-8")],
+                yaml,
+            )
+        })
+        .map_err(|e| not_found(e.to_string()))
+}
+
+pub async fn apply_instance_spec(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    body: String,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    map_result(instance::apply_spec_body(&state, &id, &body).await)
 }
 
 fn map_result<T: Serialize>(

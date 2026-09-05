@@ -31,3 +31,13 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 zip.workspace = true
 libc.workspace = true
+serde_yaml.workspace = true
+tokio-tungstenite.workspace = true
+
+[lib]
+name = "cocktail_control"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cocktail-agent"
+path = "src/bin/cocktail-agent.rs"

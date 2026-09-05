@@ -4,11 +4,14 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::cluster;
+use crate::proto::{AgentDown, ApplyInstance, InstanceManifest};
 use crate::state::AppState;
 use crate::util;
 
 use super::files;
 use super::model::{
+    is_local_node,
     BackupInfo, BulkActionRequest, BulkActionResult, BulkFailure, CommandRequest,
     CreateInstanceRequest, CreateScheduleRequest, EulaRequest, FileContent, FileEntry, FleetSummary,
     GroupCount, Instance, InstanceEvent, InstanceSpec, InstanceStatus, InstanceView, PlayerInfo,
@@ -37,7 +40,15 @@ pub async fn create_instance(
     state: &AppState,
     req: CreateInstanceRequest,
 ) -> anyhow::Result<InstanceView> {
-    ensure_port_free(state, req.port, None).await?;
+    let node_id = req
+        .node_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "local".into());
+    if !cluster::node_exists(state, &node_id).await {
+        anyhow::bail!("节点不存在：{node_id}");
+    }
+    ensure_port_free(state, req.port, &node_id, None).await?;
 
     let workdir = req.workdir.unwrap_or_else(|| {
         PathBuf::from("data")
@@ -47,7 +58,9 @@ pub async fn create_instance(
             .into_owned()
     });
 
-    files::ensure_seed_files(&workdir, req.port, req.eula_accepted)?;
+    if is_local_node(&node_id) {
+        files::ensure_seed_files(&workdir, req.port, req.eula_accepted)?;
+    }
 
     let docker_image = match req.runtime {
         RuntimeKind::Docker => Some(
@@ -73,6 +86,8 @@ pub async fn create_instance(
         cpu_limit: req.cpu_limit,
         tags: req.tags,
         group: req.group,
+        node_id,
+        desired_running: false,
     };
 
     let instance = Instance::new(spec);
@@ -97,7 +112,14 @@ pub async fn update_instance(
     req: UpdateInstanceRequest,
 ) -> anyhow::Result<InstanceView> {
     if let Some(port) = req.port {
-        ensure_port_free(state, port, Some(id)).await?;
+        let node = {
+            let guard = state.instances.read().await;
+            guard
+                .get(id)
+                .map(|i| i.spec.node_id.clone())
+                .unwrap_or_else(|| "local".into())
+        };
+        ensure_port_free(state, port, &node, Some(id)).await?;
     }
 
     let mut guard = state.instances.write().await;
@@ -152,6 +174,20 @@ pub async fn update_instance(
     if let Some(group) = req.group {
         instance.spec.group = if group.is_empty() { None } else { Some(group) };
     }
+    if let Some(node_id) = req.node_id {
+        if !cluster::node_exists(state, &node_id).await {
+            anyhow::bail!("节点不存在：{node_id}");
+        }
+        instance.spec.node_id = if node_id.is_empty() {
+            "local".into()
+        } else {
+            node_id
+        };
+    }
+    if let Some(desired) = req.desired_running {
+        instance.spec.desired_running = desired;
+    }
+    instance.generation = instance.generation.saturating_add(1);
     instance.updated_at = Utc::now();
     let view = instance.public_view();
     drop(guard);
@@ -170,48 +206,24 @@ pub async fn accept_eula(
         id,
         UpdateInstanceRequest {
             eula_accepted: Some(req.accepted),
-            ..DefaultUpdate::default()
+            ..UpdateInstanceRequest::default()
         },
     )
     .await
 }
 
-struct DefaultUpdate;
-impl DefaultUpdate {
-    fn default() -> UpdateInstanceRequest {
-        UpdateInstanceRequest {
-            name: None,
-            memory_mib: None,
-            port: None,
-            auto_restart: None,
-            command: None,
-            args: None,
-            core: None,
-            eula_accepted: None,
-            webhook_url: None,
-            runtime: None,
-            docker_image: None,
-            cpu_limit: None,
-            tags: None,
-            group: None,
-        }
-    }
-}
-
 pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<InstanceView> {
-    let (early_view, port, needs_eula, eula_ok) = {
+    let (port, needs_eula, eula_ok, node_id) = {
         let guard = state.instances.read().await;
         let instance = guard
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
 
         match instance.status {
-            InstanceStatus::Running | InstanceStatus::Starting => {
-                return Ok(instance.public_view());
-            }
             InstanceStatus::Stopping => {
                 anyhow::bail!("instance is stopping");
             }
+            InstanceStatus::Running | InstanceStatus::Starting => {}
             _ => {}
         }
 
@@ -223,33 +235,60 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
         let eula_ok =
             instance.spec.eula_accepted || util::eula_is_accepted(&instance.spec.workdir);
         (
-            instance.public_view(),
             instance.spec.port,
             needs_eula,
             eula_ok,
+            instance.spec.node_id.clone(),
         )
     };
 
     if needs_eula && !eula_ok {
         anyhow::bail!("EULA not accepted; call POST /eula with {{\"accepted\":true}}");
     }
-    let _ = early_view;
-    ensure_port_free(state, port, Some(id)).await?;
+    ensure_port_free(state, port, &node_id, Some(id)).await?;
 
     let mut guard = state.instances.write().await;
     let instance = guard
         .get_mut(id)
         .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
 
+    instance.spec.desired_running = true;
+
     if matches!(
         instance.status,
         InstanceStatus::Running | InstanceStatus::Starting
     ) {
-        return Ok(instance.public_view());
+        let view = instance.public_view();
+        drop(guard);
+        let _ = state.persist().await;
+        if !is_local_node(&node_id) {
+            let snap = {
+                let g = state.instances.read().await;
+                g.get(id).map(ApplyInstance::from)
+            };
+            if let Some(snap) = snap {
+                cluster::send_down(state, &node_id, AgentDown::Apply { instance: snap }).await?;
+            }
+        }
+        return Ok(view);
     }
+
+    instance.generation = instance.generation.saturating_add(1);
 
     instance.status = InstanceStatus::Starting;
     instance.updated_at = Utc::now();
+    let instance_id = instance.id.clone();
+
+    if !is_local_node(&node_id) {
+        let snap = ApplyInstance::from(&*instance);
+        let view = instance.public_view();
+        drop(guard);
+        let _ = state.persist().await;
+        cluster::send_down(state, &node_id, AgentDown::Apply { instance: snap }).await?;
+        util::audit("instance.start", Some(&instance_id), json!({ "node": node_id }), "api");
+        return Ok(view);
+    }
+
     let workdir = instance.spec.workdir.clone();
     let mut command = instance.spec.command.clone();
     let mut args = instance.spec.args.clone();
@@ -264,7 +303,6 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
         .unwrap_or_else(|| "eclipse-temurin:21-jre".into());
     let cpu_limit = instance.spec.cpu_limit;
     let events = state.events.clone();
-    let instance_id = instance.id.clone();
 
     // Auto-wire java -jar if server.jar exists but command was never set.
     if command.is_none() || (command.as_deref() == Some("java") && args.is_empty()) {
@@ -289,7 +327,6 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
         }
     }
 
-    // Docker maps hostPort:25565 — keep in-container listen port at 25565.
     let seed_port = match runtime {
         RuntimeKind::Docker => 25565,
         RuntimeKind::Process => port,
@@ -357,6 +394,7 @@ pub async fn reattach_running(state: &std::sync::Arc<AppState>) {
         let guard = state.instances.read().await;
         guard
             .values()
+            .filter(|i| is_local_node(&i.spec.node_id))
             .map(|i| {
                 (
                     i.id.clone(),
@@ -461,6 +499,29 @@ pub async fn stop_instance(state: &AppState, id: &str) -> anyhow::Result<Instanc
         .get_mut(id)
         .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
 
+    instance.spec.desired_running = false;
+    instance.generation = instance.generation.saturating_add(1);
+    let node_id = instance.spec.node_id.clone();
+
+    if !is_local_node(&node_id) {
+        instance.status = InstanceStatus::Stopping;
+        instance.updated_at = Utc::now();
+        let snap_id = instance.id.clone();
+        let view = instance.public_view();
+        drop(guard);
+        let _ = state.persist().await;
+        cluster::send_down(
+            state,
+            &node_id,
+            AgentDown::Stop {
+                instance_id: snap_id.clone(),
+            },
+        )
+        .await?;
+        util::audit("instance.stop", Some(&snap_id), json!({ "node": node_id }), "api");
+        return Ok(view);
+    }
+
     if matches!(
         instance.status,
         InstanceStatus::Stopped | InstanceStatus::Created | InstanceStatus::Crashed
@@ -533,6 +594,34 @@ pub async fn send_command(
     if cmd.is_empty() {
         anyhow::bail!("command is empty");
     }
+    let (running, node_id, has_handle) = {
+        let guard = state.instances.read().await;
+        let instance = guard
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+        (
+            instance.status == InstanceStatus::Running,
+            instance.spec.node_id.clone(),
+            instance.process.is_some(),
+        )
+    };
+    if !running {
+        anyhow::bail!("instance is not running");
+    }
+    if !is_local_node(&node_id) {
+        cluster::send_down(
+            state,
+            &node_id,
+            AgentDown::Command {
+                instance_id: id.to_string(),
+                command: cmd.clone(),
+            },
+        )
+        .await?;
+        util::audit("instance.command", Some(id), json!({ "command": cmd }), "api");
+        return Ok(());
+    }
+    let _ = has_handle;
     let guard = state.instances.read().await;
     let instance = guard
         .get(id)
@@ -547,6 +636,113 @@ pub async fn send_command(
     handle.send_command(cmd.clone()).await?;
     util::audit("instance.command", Some(id), json!({ "command": cmd }), "api");
     Ok(())
+}
+
+pub async fn reconcile_local(state: &std::sync::Arc<AppState>) {
+    let ids: Vec<(String, bool, InstanceStatus)> = {
+        let guard = state.instances.read().await;
+        guard
+            .values()
+            .filter(|i| is_local_node(&i.spec.node_id))
+            .map(|i| (i.id.clone(), i.spec.desired_running, i.status))
+            .collect()
+    };
+    for (id, desired, status) in ids {
+        if desired {
+            if matches!(
+                status,
+                InstanceStatus::Created | InstanceStatus::Stopped | InstanceStatus::Crashed
+            ) {
+                if let Err(e) = start_instance(state, &id).await {
+                    tracing::warn!(error = %e, %id, "reconcile start failed");
+                }
+            }
+        } else if matches!(status, InstanceStatus::Running | InstanceStatus::Starting) {
+            if let Err(e) = stop_instance(state, &id).await {
+                tracing::warn!(error = %e, %id, "reconcile stop failed");
+            }
+        }
+    }
+}
+
+pub async fn spec_yaml(state: &AppState, id: &str) -> anyhow::Result<String> {
+    let guard = state.instances.read().await;
+    let inst = guard
+        .get(id)
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+    serde_yaml::to_string(&InstanceManifest::from_instance(inst))
+        .map_err(|e| anyhow::anyhow!("yaml: {e}"))
+}
+
+pub async fn apply_spec_body(state: &AppState, id: &str, body: &str) -> anyhow::Result<InstanceView> {
+    let mut manifest = parse_manifest(id, body)?;
+    if manifest.id.is_empty() {
+        manifest.id = id.to_string();
+    }
+    if manifest.id != id {
+        anyhow::bail!("manifest id 与 URL 不一致");
+    }
+    if manifest.spec.node_id.is_empty() {
+        manifest.spec.node_id = "local".into();
+    }
+    if !cluster::node_exists(state, &manifest.spec.node_id).await {
+        anyhow::bail!("节点不存在：{}", manifest.spec.node_id);
+    }
+    ensure_port_free(state, manifest.spec.port, &manifest.spec.node_id, Some(id)).await?;
+
+    let mut guard = state.instances.write().await;
+    let instance = guard
+        .get_mut(id)
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+    instance.spec = manifest.spec;
+    instance.generation = instance.generation.saturating_add(1);
+    instance.updated_at = Utc::now();
+    let desired = instance.spec.desired_running;
+    let node_id = instance.spec.node_id.clone();
+    let snap = ApplyInstance::from(&*instance);
+    let view = instance.public_view();
+    drop(guard);
+    let _ = state.persist().await;
+    util::audit("instance.apply", Some(id), json!({ "generation": view.generation }), "api");
+
+    if is_local_node(&node_id) {
+        if desired {
+            start_instance(state, id).await?;
+        } else {
+            stop_instance(state, id).await?;
+        }
+    } else {
+        cluster::send_down(state, &node_id, AgentDown::Apply { instance: snap }).await?;
+    }
+    get_instance(state, id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))
+}
+
+fn parse_manifest(id: &str, body: &str) -> anyhow::Result<InstanceManifest> {
+    let trimmed = body.trim();
+    if trimmed.starts_with('{') {
+        if let Ok(m) = serde_json::from_str::<InstanceManifest>(trimmed) {
+            return Ok(m);
+        }
+        let spec: InstanceSpec = serde_json::from_str(trimmed)?;
+        return Ok(InstanceManifest {
+            api_version: "cocktail.mc/v1".into(),
+            kind: "Instance".into(),
+            id: id.into(),
+            spec,
+        });
+    }
+    if let Ok(m) = serde_yaml::from_str::<InstanceManifest>(trimmed) {
+        return Ok(m);
+    }
+    let spec: InstanceSpec = serde_yaml::from_str(trimmed)?;
+    Ok(InstanceManifest {
+        api_version: "cocktail.mc/v1".into(),
+        kind: "Instance".into(),
+        id: id.into(),
+        spec,
+    })
 }
 
 pub async fn list_files(
@@ -1284,23 +1480,33 @@ pub async fn import_world(
 }
 
 async fn workdir_of(state: &AppState, id: &str) -> anyhow::Result<String> {
-    state
+    let inst = state
         .instances
         .read()
         .await
         .get(id)
-        .map(|i| i.spec.workdir.clone())
-        .ok_or_else(|| anyhow::anyhow!("instance not found"))
+        .map(|i| (i.spec.workdir.clone(), i.spec.node_id.clone()))
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+    if !is_local_node(&inst.1) {
+        anyhow::bail!("远程节点上的文件/备份请在该节点本机处理；控制面当前仅代理本机工作目录");
+    }
+    Ok(inst.0)
 }
 
 async fn ensure_port_free(
     state: &AppState,
     port: u16,
+    node_id: &str,
     except_id: Option<&str>,
 ) -> anyhow::Result<()> {
     let guard = state.instances.read().await;
     for inst in guard.values() {
         if Some(inst.id.as_str()) == except_id {
+            continue;
+        }
+        let same_node = inst.spec.node_id == node_id
+            || (is_local_node(&inst.spec.node_id) && is_local_node(node_id));
+        if !same_node {
             continue;
         }
         if inst.spec.port == port
