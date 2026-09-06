@@ -101,6 +101,7 @@ pub async fn create_instance(
         at: Utc::now(),
     });
     let _ = state.persist().await;
+    let _ = crate::netops::try_apply(state).await;
     util::audit("instance.create", Some(&id), json!({ "name": view.spec.name }), "api");
 
     Ok(view)
@@ -192,6 +193,7 @@ pub async fn update_instance(
     let view = instance.public_view();
     drop(guard);
     let _ = state.persist().await;
+    let _ = crate::netops::try_apply(state).await;
     util::audit("instance.update", Some(id), json!({}), "api");
     Ok(view)
 }
@@ -213,34 +215,44 @@ pub async fn accept_eula(
 }
 
 pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<InstanceView> {
-    let (port, needs_eula, eula_ok, node_id) = {
+    let (port, needs_eula, eula_ok, node_id, stopping, pid, container) = {
         let guard = state.instances.read().await;
         let instance = guard
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
 
-        match instance.status {
-            InstanceStatus::Stopping => {
-                anyhow::bail!("instance is stopping");
-            }
-            InstanceStatus::Running | InstanceStatus::Starting => {}
-            _ => {}
-        }
-
         let needs_eula = instance.spec.command.is_some()
-            || matches!(
-                instance.spec.core.as_str(),
-                "paper" | "fabric" | "vanilla" | "spigot" | "purpur"
-            );
+            || super::versions::core_needs_eula(&instance.spec.core);
         let eula_ok =
             instance.spec.eula_accepted || util::eula_is_accepted(&instance.spec.workdir);
+        let container = instance.docker_container.clone().or_else(|| {
+            instance
+                .process
+                .as_ref()
+                .and_then(|h| h.container_name.clone())
+        });
+        let pid = instance
+            .process
+            .as_ref()
+            .map(|h| h.child_id)
+            .or(instance.last_pid);
         (
             instance.spec.port,
             needs_eula,
             eula_ok,
             instance.spec.node_id.clone(),
+            instance.status == InstanceStatus::Stopping,
+            pid,
+            container,
         )
     };
+
+    if stopping {
+        let alive = runtime_is_alive(pid, container.as_deref()).await;
+        if alive {
+            anyhow::bail!("instance is stopping");
+        }
+    }
 
     if needs_eula && !eula_ok {
         anyhow::bail!("EULA not accepted; call POST /eula with {{\"accepted\":true}}");
@@ -316,10 +328,10 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
                 instance.spec.core = "custom".into();
             }
         } else if runtime == RuntimeKind::Docker
-            || matches!(
-                instance.spec.core.as_str(),
-                "paper" | "vanilla" | "fabric" | "spigot" | "purpur" | "custom"
-            )
+            || (instance.spec.core != "demo"
+                && super::versions::is_known_core(&instance.spec.core))
+            || instance.spec.core == "custom"
+            || instance.spec.core == "spigot"
         {
             anyhow::bail!(
                 "未配置启动命令且找不到 server.jar：请先在「版本安装」导入 jar 或下载核心"
@@ -361,6 +373,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
                 command,
                 args,
                 memory_mib,
+                port,
                 events,
             )
             .await?
@@ -390,6 +403,7 @@ pub async fn reattach_running(state: &std::sync::Arc<AppState>) {
         Option<u32>,
         Option<u64>,
         Option<String>,
+        u16,
     )> = {
         let guard = state.instances.read().await;
         guard
@@ -403,12 +417,13 @@ pub async fn reattach_running(state: &std::sync::Arc<AppState>) {
                     i.last_pid,
                     i.last_start_time,
                     i.docker_container.clone(),
+                    i.spec.port,
                 )
             })
             .collect()
     };
 
-    for (id, runtime, workdir, last_pid, start, container) in snapshot {
+    for (id, runtime, workdir, last_pid, start, container, port) in snapshot {
         let adopted = match runtime {
             RuntimeKind::Docker => {
                 if let Some(name) = container.clone() {
@@ -420,6 +435,7 @@ pub async fn reattach_running(state: &std::sync::Arc<AppState>) {
                             state.events.clone(),
                             Some(name),
                             true,
+                            port,
                         )
                         .await
                         {
@@ -446,6 +462,7 @@ pub async fn reattach_running(state: &std::sync::Arc<AppState>) {
                             state.events.clone(),
                             None,
                             true,
+                            port,
                         )
                         .await
                         {
@@ -547,9 +564,18 @@ pub async fn stop_instance(state: &AppState, id: &str) -> anyhow::Result<Instanc
         handle.stop(StopMode::Graceful).await;
         let mut guard = state.instances.write().await;
         if let Some(inst) = guard.get_mut(id) {
-            if inst.status == InstanceStatus::Stopping {
+            if !inst.spec.desired_running {
                 inst.status = InstanceStatus::Stopped;
+                inst.process = None;
+                inst.last_pid = None;
+                inst.last_start_time = None;
+                inst.docker_container = None;
                 inst.updated_at = Utc::now();
+                state.publish(InstanceEvent::StatusChanged {
+                    instance_id: id.to_string(),
+                    status: InstanceStatus::Stopped,
+                    at: inst.updated_at,
+                });
             }
             let view = inst.public_view();
             drop(guard);
@@ -561,7 +587,16 @@ pub async fn stop_instance(state: &AppState, id: &str) -> anyhow::Result<Instanc
     }
 
     instance.status = InstanceStatus::Stopped;
+    instance.process = None;
+    instance.last_pid = None;
+    instance.last_start_time = None;
+    instance.docker_container = None;
     instance.updated_at = Utc::now();
+    state.publish(InstanceEvent::StatusChanged {
+        instance_id: id.to_string(),
+        status: InstanceStatus::Stopped,
+        at: instance.updated_at,
+    });
     let view = instance.public_view();
     drop(guard);
     let _ = state.persist().await;
@@ -661,8 +696,73 @@ pub async fn reconcile_local(state: &std::sync::Arc<AppState>) {
             if let Err(e) = stop_instance(state, &id).await {
                 tracing::warn!(error = %e, %id, "reconcile stop failed");
             }
+        } else if status == InstanceStatus::Stopping {
+            recover_stuck_stopping(state, &id).await;
         }
     }
+}
+
+pub async fn recover_stale_statuses(state: &std::sync::Arc<AppState>) {
+    let ids: Vec<String> = {
+        let guard = state.instances.read().await;
+        guard
+            .values()
+            .filter(|i| is_local_node(&i.spec.node_id))
+            .filter(|i| i.status == InstanceStatus::Stopping)
+            .map(|i| i.id.clone())
+            .collect()
+    };
+    for id in ids {
+        recover_stuck_stopping(state, &id).await;
+    }
+}
+
+async fn runtime_is_alive(pid: Option<u32>, container: Option<&str>) -> bool {
+    if let Some(name) = container.filter(|s| !s.is_empty()) {
+        return process::docker_container_running(name).await;
+    }
+    pid.filter(|p| *p > 0)
+        .is_some_and(process::pid_is_alive)
+}
+
+async fn recover_stuck_stopping(state: &AppState, id: &str) {
+    let (pid, container) = {
+        let guard = state.instances.read().await;
+        let Some(inst) = guard.get(id) else { return };
+        if inst.status != InstanceStatus::Stopping {
+            return;
+        }
+        let container = inst.docker_container.clone().or_else(|| {
+            inst.process
+                .as_ref()
+                .and_then(|h| h.container_name.clone())
+        });
+        let pid = inst.process.as_ref().map(|h| h.child_id).or(inst.last_pid);
+        (pid, container)
+    };
+    if runtime_is_alive(pid, container.as_deref()).await {
+        return;
+    }
+    let mut guard = state.instances.write().await;
+    let Some(inst) = guard.get_mut(id) else { return };
+    if inst.status != InstanceStatus::Stopping || inst.spec.desired_running {
+        return;
+    }
+    tracing::info!(instance_id = %id, "clearing stuck stopping status; process is gone");
+    inst.status = InstanceStatus::Stopped;
+    inst.process = None;
+    inst.last_pid = None;
+    inst.last_start_time = None;
+    inst.docker_container = None;
+    inst.updated_at = Utc::now();
+    let at = inst.updated_at;
+    drop(guard);
+    state.publish(InstanceEvent::StatusChanged {
+        instance_id: id.to_string(),
+        status: InstanceStatus::Stopped,
+        at,
+    });
+    let _ = state.persist().await;
 }
 
 pub async fn spec_yaml(state: &AppState, id: &str) -> anyhow::Result<String> {
@@ -1251,6 +1351,9 @@ pub async fn apply_event(state: &std::sync::Arc<AppState>, event: &InstanceEvent
             {
                 let mut guard = state.instances.write().await;
                 if let Some(inst) = guard.get_mut(instance_id) {
+                    if !status.can_apply_over(inst.status) {
+                        return;
+                    }
                     inst.status = *status;
                     inst.updated_at = *at;
                     if *status == InstanceStatus::Crashed && inst.spec.auto_restart {
@@ -1283,10 +1386,23 @@ pub async fn apply_event(state: &std::sync::Arc<AppState>, event: &InstanceEvent
                     _ => state.effective_webhook().await,
                 };
                 if let Some(url) = url {
+                    let sid = id.clone();
+                    let sname = name.clone();
                     tokio::spawn(async move {
-                        util::notify_webhook(&url, &id, "crashed", &name).await;
+                        util::notify_webhook(&url, &sid, "crashed", &sname).await;
                     });
                 }
+                let state = std::sync::Arc::clone(state);
+                let sid = id.clone();
+                let sname = name.clone();
+                tokio::spawn(async move {
+                    crate::ops::notify_event(
+                        &state,
+                        "崩溃",
+                        &format!("{sname} ({sid}) 进程异常退出"),
+                    )
+                    .await;
+                });
             }
             if should_restart {
                 let id = instance_id.clone();
@@ -1307,6 +1423,15 @@ pub async fn apply_event(state: &std::sync::Arc<AppState>, event: &InstanceEvent
             if let Some(inst) = guard.get_mut(instance_id) {
                 inst.last_metrics = Some(sample.clone());
                 inst.updated_at = sample.ts;
+            }
+            drop(guard);
+            let mut hist = state.metric_history.write().await;
+            let buf = hist
+                .entry(instance_id.clone())
+                .or_insert_with(std::collections::VecDeque::new);
+            buf.push_back(sample.clone());
+            while buf.len() > crate::state::METRIC_BUFFER {
+                buf.pop_front();
             }
         }
         InstanceEvent::Log {
@@ -1339,8 +1464,13 @@ pub async fn install_core(
         anyhow::bail!("stop the instance before installing a core");
     }
 
-    let (command, args) =
-        super::versions::download_and_install(&view.spec.workdir, &req.core, &req.version).await?;
+    let (command, args) = super::versions::download_and_install(
+        &view.spec.workdir,
+        &req.core,
+        &req.version,
+        req.loader.as_deref(),
+    )
+    .await?;
 
     let mut guard = state.instances.write().await;
     let instance = guard
@@ -1356,7 +1486,7 @@ pub async fn install_core(
     util::audit(
         "core.install",
         Some(id),
-        json!({ "core": req.core, "version": req.version }),
+        json!({ "core": req.core, "version": req.version, "loader": req.loader }),
         "api",
     );
     Ok(out)

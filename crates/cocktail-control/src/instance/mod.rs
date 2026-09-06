@@ -3,6 +3,7 @@ pub(crate) mod files;
 pub mod hangar;
 mod model;
 pub mod modrinth;
+mod netmon;
 mod players;
 pub(crate) mod process;
 mod registry;
@@ -17,5 +18,5 @@ pub use modrinth::{InstallModrinthRequest, SearchQuery, VersionsQuery as Modrint
 pub use process::ProcessHandle;
 pub use registry::*;
 pub use spiget::InstallRequest as InstallSpigetRequest;
-pub use versions::{list_versions, InstallRequest};
+pub use versions::{list_loaders, list_versions, InstallRequest};
 pub use worlds::WorldInfo;

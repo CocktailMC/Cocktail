@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   api,
@@ -6,6 +6,7 @@ import {
   getToken,
   logsWsUrl,
   setToken,
+  formatBps,
   type BackupInfo,
   type FileEntry,
   type HealthInfo,
@@ -17,6 +18,8 @@ import {
   type Schedule,
   type WorldInfo,
   type CoreVersion,
+  type CoreLoader,
+  type MetricSample,
 } from './api'
 import CreateInstancePage from './CreateInstancePage'
 import EulaPage from './EulaPage'
@@ -26,11 +29,20 @@ import PluginStore from './PluginStore'
 import HomePage from './HomePage'
 import HomeSettings from './HomeSettings'
 import AuditPage from './AuditPage'
+import NetworkPage from './NetworkPage'
+import GlobalNetworkPage from './GlobalNetworkPage'
 import NodesPage from './NodesPage'
 import ExtensionsPage from './ExtensionsPage'
 import SpecYamlPanel from './SpecYamlPanel'
 import SetupPage from './SetupPage'
 import LoginPage from './LoginPage'
+import {
+  INSTALLABLE_CORE_GROUPS,
+  coreHasLoaders,
+  defaultModrinthLoader,
+  defaultModrinthProjectType,
+  isInstallableCore,
+} from './cores'
 import './App.css'
 
 const STATUS_LABEL: Record<InstanceStatus, string> = {
@@ -52,6 +64,7 @@ type Tab =
   | 'properties'
   | 'version'
   | 'players'
+  | 'network'
   | 'worlds'
   | 'plugins'
   | 'schedules'
@@ -66,6 +79,7 @@ const NAV_GROUPS: {
       { id: 'dashboard', label: '仪表盘', icon: 'fa-dashboard' },
       { id: 'control', label: '服务器控制', icon: 'fa-power-off' },
       { id: 'players', label: '在线玩家', icon: 'fa-users' },
+      { id: 'network', label: '网络', icon: 'fa-globe' },
       { id: 'console', label: '控制台', icon: 'fa-terminal' },
     ],
   },
@@ -92,11 +106,13 @@ const NAV_GROUPS: {
 export default function App() {
   const [instances, setInstances] = useState<Instance[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const selectedIdRef = useRef<string | null>(null)
+  selectedIdRef.current = selectedId
   const [logs, setLogs] = useState<LogLine[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [view, setView] = useState<'manager' | 'create' | 'eula'>('manager')
   const [homeTab, setHomeTab] = useState<
-    'overview' | 'settings' | 'audit' | 'nodes' | 'extensions'
+    'overview' | 'settings' | 'audit' | 'nodes' | 'extensions' | 'network'
   >('overview')
   const [mkdirName, setMkdirName] = useState('')
   const [setCommand, setSetCommand] = useState('java')
@@ -143,9 +159,12 @@ export default function App() {
   const [adminName, setAdminName] = useState('管理员')
   const [panelName, setPanelName] = useState('Cocktail')
   const [coreVersions, setCoreVersions] = useState<CoreVersion[]>([])
-  const [installCore, setInstallCore] = useState<'paper' | 'vanilla'>('paper')
+  const [installCore, setInstallCore] = useState('paper')
   const [installVer, setInstallVer] = useState('')
+  const [installLoaders, setInstallLoaders] = useState<CoreLoader[]>([])
+  const [installLoader, setInstallLoader] = useState('')
   const [players, setPlayers] = useState<PlayerInfo[]>([])
+  const [metricHistory, setMetricHistory] = useState<MetricSample[]>([])
   const [worlds, setWorlds] = useState<WorldInfo[]>([])
   const [plugins, setPlugins] = useState<
     { name: string; path: string; size: number; enabled: boolean }[]
@@ -234,6 +253,12 @@ export default function App() {
             memory_mib: number
             tps?: number | null
             players: number
+            net_rx_bps?: number
+            net_tx_bps?: number
+            net_connections?: number
+            net_unique_ips?: number
+            net_listen?: string | null
+            net_peers?: { ip: string; connections: number }[]
           }
           line?: LogLine
         }
@@ -247,26 +272,49 @@ export default function App() {
                 ? {
                     ...inst,
                     last_metrics: {
-                      ts: sample.ts,
-                      cpu_pct: sample.cpu_pct,
-                      memory_mib: sample.memory_mib,
+                      ...(inst.last_metrics ?? {
+                        ts: sample.ts,
+                        cpu_pct: sample.cpu_pct,
+                        memory_mib: sample.memory_mib,
+                        tps: null,
+                        players: 0,
+                      }),
+                      ...sample,
                       tps: sample.tps ?? null,
-                      players: sample.players,
                     },
                   }
                 : inst,
             ),
           )
+          if (msg.instance_id === selectedIdRef.current) {
+            setMetricHistory((prev) => [...prev, sample as MetricSample].slice(-120))
+          }
           return
         }
         if (msg.type === 'status_changed') {
           if (msg.instance_id && msg.status) {
             setInstances((prev) =>
-              prev.map((inst) =>
-                inst.id === msg.instance_id
-                  ? { ...inst, status: msg.status! }
-                  : inst,
-              ),
+              prev.map((inst) => {
+                if (inst.id !== msg.instance_id) return inst
+                const next = msg.status as InstanceStatus
+                const cur = inst.status
+                if (
+                  (cur === 'stopped' ||
+                    cur === 'crashed' ||
+                    cur === 'created') &&
+                  next === 'stopping'
+                ) {
+                  return inst
+                }
+                if (cur === 'running' && next === 'starting') return inst
+                if (
+                  cur === 'stopping' &&
+                  (next === 'running' || next === 'starting')
+                ) {
+                  return inst
+                }
+                return { ...inst, status: next }
+              }),
             )
           }
           // Debounce: one list+fleet after start/stop bursts, not per log line.
@@ -345,6 +393,46 @@ export default function App() {
       })
       .catch((e: Error) => setError(e.message))
   }, [tab, installCore])
+
+  useEffect(() => {
+    if (tab !== 'version' || !installVer || !coreHasLoaders(installCore)) {
+      setInstallLoaders([])
+      setInstallLoader('')
+      return
+    }
+    let cancelled = false
+    api
+      .listCoreLoaders(installCore, installVer)
+      .then((list) => {
+        if (cancelled) return
+        setInstallLoaders(list)
+        setInstallLoader('')
+      })
+      .catch(() => {
+        if (cancelled) return
+        setInstallLoaders([])
+        setInstallLoader('')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tab, installCore, installVer])
+
+  useEffect(() => {
+    if (!selectedId) return
+    const core = instances.find((i) => i.id === selectedId)?.spec.core
+    if (core && isInstallableCore(core)) {
+      setInstallCore(core)
+    }
+  }, [selectedId])
+
+  useEffect(() => {
+    if (!selectedId || (tab !== 'network' && tab !== 'dashboard')) return
+    api
+      .listMetrics(selectedId)
+      .then(setMetricHistory)
+      .catch(() => setMetricHistory([]))
+  }, [selectedId, tab])
 
   useEffect(() => {
     // Cache only — never auto-send `list` (that spams the console).
@@ -485,7 +573,13 @@ export default function App() {
   }
 
   const goHome = (
-    tab: 'overview' | 'settings' | 'audit' | 'nodes' | 'extensions' = 'overview',
+    tab:
+      | 'overview'
+      | 'settings'
+      | 'audit'
+      | 'nodes'
+      | 'extensions'
+      | 'network' = 'overview',
   ) => {
     setSelectedId(null)
     setHomeTab(tab)
@@ -506,6 +600,12 @@ export default function App() {
   const memTotal = selected?.spec.memory_mib
   const tpsVal = selected?.last_metrics?.tps
   const playersCount = selected?.last_metrics?.players
+  const netRx = selected?.last_metrics?.net_rx_bps
+  const netTx = selected?.last_metrics?.net_tx_bps
+  const netConns = selected?.last_metrics?.net_connections
+  const netListen = selected?.last_metrics?.net_listen
+  const netAlerts = selected?.last_metrics?.net_alerts ?? []
+  const alertsTeaser = netAlerts.length ? ` · ${netAlerts.length} 条告警` : ''
   const statusOk = selected?.status === 'running'
 
   if (gate !== 'app') {
@@ -552,12 +652,12 @@ export default function App() {
           <div className="auth-gate">
             <header className="topbar">
               <div className="topbar-brand">
-                <div className="brand-mark" aria-hidden>
+                <div className="brand-mark splash" aria-hidden>
                   <img src="/logo.png" alt="" className="brand-logo-img" />
                 </div>
                 <div>
                   <h1>Cocktail</h1>
-                  <span className="brand-sub">Manager · 26Q3</span>
+                  <span className="brand-sub">正在连接控制面…</span>
                 </div>
               </div>
             </header>
@@ -771,6 +871,18 @@ export default function App() {
               <button
                 type="button"
                 className={
+                  !selected && homeTab === 'network'
+                    ? 'nav-item active'
+                    : 'nav-item'
+                }
+                onClick={() => goHome('network')}
+              >
+                <i className="fa fa-globe" />
+                全局网络
+              </button>
+              <button
+                type="button"
+                className={
                   !selected && homeTab === 'settings'
                     ? 'nav-item active'
                     : 'nav-item'
@@ -817,29 +929,60 @@ export default function App() {
                 审计日志
               </button>
             </div>
-            {selected &&
-              NAV_GROUPS.map((group) => (
-                <div key={group.label} className="nav-group">
-                  <p className="nav-group-label">{group.label}</p>
-                  {group.items.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={
-                        tab === item.id ? 'nav-item active' : 'nav-item'
-                      }
-                      onClick={() => setTab(item.id)}
-                    >
-                      <i className={`fa ${item.icon}`} />
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              ))}
           </nav>
         </aside>
 
+        <div className="workspace">
+          {view === 'manager' && selected && (
+            <nav className="subnav" aria-label="实例操作">
+              <div className="subnav-id">
+                <button
+                  type="button"
+                  className="subnav-back"
+                  onClick={() => goHome('overview')}
+                >
+                  <i className="fa fa-chevron-left" /> 机群
+                </button>
+                <strong className="subnav-name">{selected.spec.name}</strong>
+                <span className={`status-pill status-${selected.status}`}>
+                  <span className="pulse" />
+                  {STATUS_LABEL[selected.status]}
+                </span>
+              </div>
+              <div className="subnav-groups">
+                {NAV_GROUPS.map((group) => (
+                  <div key={group.label} className="subnav-group">
+                    <span className="subnav-group-label">{group.label}</span>
+                    {group.items.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={
+                          tab === item.id ? 'subnav-item active' : 'subnav-item'
+                        }
+                        onClick={() => setTab(item.id)}
+                      >
+                        <i className={`fa ${item.icon}`} />
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </nav>
+          )}
+
         <main className="main">
+          <div
+            className="page-stage"
+            key={
+              view !== 'manager'
+                ? view
+                : selected
+                  ? `${selected.id}:${tab}`
+                  : homeTab
+            }
+          >
           {view === 'create' && (
             <CreateInstancePage
               usedPorts={instances.map((i) => i.spec.port)}
@@ -949,6 +1092,13 @@ export default function App() {
                   }
                   onOpenSettings={() => goHome('settings')}
                 />
+              ) : homeTab === 'network' ? (
+                <GlobalNetworkPage
+                  onBack={() => goHome('overview')}
+                  onOpenSettings={() => goHome('settings')}
+                  onOpenInstance={selectInstance}
+                  onError={setError}
+                />
               ) : homeTab === 'nodes' ? (
                 <NodesPage
                   onBack={() => goHome('overview')}
@@ -1057,6 +1207,59 @@ export default function App() {
                       </div>
                       <i className="fa fa-tachometer icon primary" />
                     </div>
+                    <div className="card-panel stat-card">
+                      <div>
+                        <p className="label">下行 / 上行</p>
+                        <p className="value net-rate">
+                          {statusOk ? `${formatBps(netRx)} ↓` : '—'}
+                          <span className="net-split">·</span>
+                          {statusOk ? `${formatBps(netTx)} ↑` : '—'}
+                        </p>
+                      </div>
+                      <i className="fa fa-exchange icon primary" />
+                    </div>
+                    <div className="card-panel stat-card">
+                      <div>
+                        <p className="label">端口连接</p>
+                        <p className="value">
+                          {statusOk ? String(netConns ?? 0) : '—'}
+                          <span className="net-sub">
+                            {' '}
+                            :{selected.spec.port}
+                          </span>
+                        </p>
+                      </div>
+                      <i className="fa fa-plug icon warning" />
+                    </div>
+                  </div>
+
+                  <div className="card-panel net-panel">
+                    <div className="store-head" style={{ marginBottom: '0.6rem' }}>
+                      <div>
+                        <h3 className="card-title">
+                          <i className="fa fa-globe" /> 网络
+                        </h3>
+                        <p className="store-sub">
+                          {netListen || `0.0.0.0:${selected.spec.port}`}
+                          {selected.last_metrics?.net_rtt_ms != null
+                            ? ` · ping ${selected.last_metrics.net_rtt_ms.toFixed(0)} ms`
+                            : ''}
+                          {alertsTeaser}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => setTab('network')}
+                      >
+                        详细分析
+                      </button>
+                    </div>
+                    <p className="meta">
+                      {statusOk
+                        ? `${netConns ?? 0} 条 TCP · ${selected.last_metrics?.net_unique_ips ?? 0} IP · ↓ ${formatBps(netRx)} · ↑ ${formatBps(netTx)}`
+                        : '启动后采集该端口的连接、流量与 status ping。'}
+                    </p>
                   </div>
 
                   <div className="grid-2">
@@ -1411,30 +1614,68 @@ export default function App() {
                         在线核心
                         <select
                           value={installCore}
-                          onChange={(e) =>
-                            setInstallCore(
-                              e.target.value as 'paper' | 'vanilla',
-                            )
-                          }
+                          onChange={(e) => setInstallCore(e.target.value)}
                         >
-                          <option value="paper">Paper</option>
-                          <option value="vanilla">Vanilla</option>
+                          {INSTALLABLE_CORE_GROUPS.map((g) => (
+                            <optgroup key={g.label} label={g.label}>
+                              {g.items.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.label}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))}
                         </select>
                       </label>
                       <label>
-                        版本
+                        游戏版本
                         <select
                           value={installVer}
                           onChange={(e) => setInstallVer(e.target.value)}
                         >
                           {coreVersions.map((v) => (
                             <option key={v.id} value={v.id}>
-                              {v.id}
+                              {v.label ?? v.id}
                               {v.latest ? ' (latest)' : ''}
                             </option>
                           ))}
                         </select>
                       </label>
+                      {coreHasLoaders(installCore) && (
+                        <label>
+                          {installCore === 'arclight'
+                            ? '混合变体（可选）'
+                            : '加载器版本（可选）'}
+                          <select
+                            value={installLoader}
+                            onChange={(e) => setInstallLoader(e.target.value)}
+                          >
+                            <option value="">
+                              {installCore === 'arclight'
+                                ? '优先 NeoForge，没有则回退'
+                                : '最新稳定（默认）'}
+                            </option>
+                            {installLoaders.map((l) => (
+                              <option key={l.id} value={l.id}>
+                                {l.label ? `${l.id}（${l.label}）` : l.id}
+                                {l.latest ? ' · latest' : ''}
+                                {l.recommended && !l.label
+                                  ? ' · recommended'
+                                  : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      <p className="meta">
+                        {installCore === 'forge' ||
+                        installCore === 'neoforge' ||
+                        installCore === 'quilt'
+                          ? '将下载安装器并在本机用 Java 执行；请确保 PATH 中有 java。安装后自动写入启动参数（含 @unix_args.txt）。'
+                          : installCore === 'arclight'
+                            ? '可指定 NeoForge / Forge / Fabric 变体；未选则优先 NeoForge。'
+                            : '下载官方构建为 server.jar，并自动配置 java -jar server.jar nogui。'}
+                      </p>
                       <button
                         type="button"
                         className="btn btn-primary"
@@ -1451,8 +1692,9 @@ export default function App() {
                                 selected.id,
                                 installCore,
                                 installVer,
+                                installLoader || undefined,
                               ),
-                            `下载安装 ${installCore} ${installVer}…`,
+                            `下载安装 ${installCore} ${installVer}${installLoader ? ` / ${installLoader}` : ''}…`,
                           )
                         }
                       >
@@ -1461,6 +1703,16 @@ export default function App() {
                     </div>
                   </div>
                 </>
+              )}
+
+              {tab === 'network' && (
+                <NetworkPage
+                  instance={selected}
+                  history={metricHistory}
+                  running={statusOk}
+                  onBusy={setBusyState}
+                  onError={setError}
+                />
               )}
 
               {tab === 'players' && (
@@ -1642,9 +1894,10 @@ export default function App() {
                     <PluginStore
                       instanceId={selected.id}
                       busy={busy}
-                      defaultLoader={
-                        selected.spec.core === 'fabric' ? 'fabric' : 'paper'
-                      }
+                      defaultLoader={defaultModrinthLoader(selected.spec.core)}
+                      defaultProjectType={defaultModrinthProjectType(
+                        selected.spec.core,
+                      )}
                       onInstalled={() =>
                         api.listPlugins(selected.id).then(setPlugins)
                       }
@@ -2372,7 +2625,9 @@ export default function App() {
               </button>
             </div>
           )}
+          </div>
         </main>
+        </div>
       </div>
     </div>
   )

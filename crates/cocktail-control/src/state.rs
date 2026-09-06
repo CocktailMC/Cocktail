@@ -8,11 +8,13 @@ use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 use crate::db;
 use crate::instance::{self, Instance, InstanceEvent, LogLine, Schedule};
+use crate::ops::OpsRuntime;
 use crate::proto::AgentDown;
 
 pub type SharedState = Arc<AppState>;
 
-const LOG_BUFFER: usize = 500;
+pub(crate) const LOG_BUFFER: usize = 500;
+pub(crate) const METRIC_BUFFER: usize = 120;
 const STATE_PATH: &str = "data/state.json";
 
 pub struct AppState {
@@ -20,9 +22,11 @@ pub struct AppState {
     pub schedules: RwLock<Vec<Schedule>>,
     pub events: broadcast::Sender<InstanceEvent>,
     pub log_buffers: RwLock<HashMap<String, VecDeque<LogLine>>>,
+    pub metric_history: RwLock<HashMap<String, VecDeque<instance::MetricSample>>>,
     pub db: Mutex<rusqlite::Connection>,
     pub agents: Mutex<HashMap<String, mpsc::UnboundedSender<AgentDown>>>,
     pub http: reqwest::Client,
+    pub ops: OpsRuntime,
     pub plugin_host: String,
     pub plugin_token: String,
     pub env_api_token: Option<String>,
@@ -67,9 +71,11 @@ impl AppState {
             schedules: RwLock::new(schedules),
             events,
             log_buffers: RwLock::new(HashMap::new()),
+            metric_history: RwLock::new(HashMap::new()),
             db: Mutex::new(db),
             agents: Mutex::new(HashMap::new()),
             http,
+            ops: OpsRuntime::new(),
             plugin_host,
             plugin_token,
             env_api_token,
@@ -145,7 +151,10 @@ impl AppState {
                             }
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        instance::recover_stale_statuses(&state).await;
+                        continue;
+                    }
                     Err(_) => break,
                 }
             }
@@ -199,6 +208,15 @@ impl AppState {
 
     pub async fn recent_logs(&self, id: &str) -> Vec<LogLine> {
         self.log_buffers
+            .read()
+            .await
+            .get(id)
+            .map(|b| b.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub async fn recent_metrics(&self, id: &str) -> Vec<instance::MetricSample> {
+        self.metric_history
             .read()
             .await
             .get(id)

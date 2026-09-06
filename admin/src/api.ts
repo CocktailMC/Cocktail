@@ -26,12 +26,62 @@ export type InstanceSpec = {
   desired_running?: boolean
 }
 
+export function formatBps(n?: number | null): string {
+  if (n == null || !Number.isFinite(n)) return '—'
+  const abs = Math.abs(n)
+  if (abs < 1024) return `${abs.toFixed(0)} B/s`
+  if (abs < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB/s`
+  return `${(n / (1024 * 1024)).toFixed(2)} MiB/s`
+}
+
+export function formatBytes(n?: number | null): string {
+  if (n == null || !Number.isFinite(n)) return '—'
+  const abs = Math.abs(n)
+  if (abs < 1024) return `${abs.toFixed(0)} B`
+  if (abs < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`
+  if (abs < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MiB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GiB`
+}
+
+export type NetPeer = {
+  ip: string
+  connections: number
+  scope?: string
+  ipv6?: boolean
+}
+
 export type MetricSample = {
   ts: string
   cpu_pct: number
   memory_mib: number
   tps: number | null
   players: number
+  net_rx_bps?: number
+  net_tx_bps?: number
+  net_connections?: number
+  net_unique_ips?: number
+  net_listen?: string | null
+  net_peers?: NetPeer[]
+  net_syn_recv?: number
+  net_time_wait?: number
+  net_fin_wait?: number
+  net_udp?: number
+  net_rx_pps?: number
+  net_tx_pps?: number
+  net_rx_bytes?: number
+  net_tx_bytes?: number
+  net_session_rx?: number
+  net_session_tx?: number
+  net_peak_rx_bps?: number
+  net_peak_tx_bps?: number
+  net_drops?: number
+  net_errors?: number
+  net_rtt_ms?: number | null
+  net_ping_online?: number | null
+  net_ping_max?: number | null
+  net_ping_version?: string | null
+  net_source?: string | null
+  net_alerts?: string[]
 }
 
 export type Instance = {
@@ -132,6 +182,14 @@ export type CoreVersion = {
   id: string
   core: string
   latest: boolean
+  label?: string | null
+}
+
+export type CoreLoader = {
+  id: string
+  latest: boolean
+  recommended: boolean
+  label?: string | null
 }
 
 export type ModrinthHit = {
@@ -308,6 +366,90 @@ export type PanelSettings = {
   bind: string
   db_path: string
   plugin_host?: string
+  qq_app_id?: string
+  qq_app_secret_set?: boolean
+  qq_group_openid?: string
+  qq_user_openid?: string
+  qq_sandbox?: boolean
+  qq_alerts?: boolean
+  qq_status_secs?: number
+  net_alert_rx_mbps?: number
+  qq_ready?: boolean
+}
+
+export type HostNicRow = {
+  name: string
+  rx_bytes: number
+  tx_bytes: number
+  rx_bps: number
+  tx_bps: number
+  drops: number
+  errors: number
+}
+
+export type HostInstanceNet = {
+  id: string
+  name: string
+  status: string
+  port: number
+  rx_bps: number
+  tx_bps: number
+  connections: number
+  unique_ips: number
+  alerts: string[]
+}
+
+export type HostNetSample = {
+  ts: string
+  rx_bps: number
+  tx_bps: number
+  rx_pps: number
+  tx_pps: number
+  rx_bytes: number
+  tx_bytes: number
+  peak_rx_bps: number
+  peak_tx_bps: number
+  drops: number
+  errors: number
+  tcp_estab: number
+  syn_recv: number
+  time_wait: number
+  nics: HostNicRow[]
+  instances: HostInstanceNet[]
+  alerts: string[]
+}
+
+export type HostNetworkResponse = {
+  live: HostNetSample | null
+  history: HostNetSample[]
+}
+
+export type NetopsRule = {
+  id: string
+  cidr: string
+  verdict: string
+  proto: string
+  port?: number | null
+  instance_id?: string | null
+  ttl_secs: number
+  expires_at?: string | null
+  comment?: string | null
+  game_ban: boolean
+  created_at: string
+  applied: boolean
+  apply_error?: string | null
+}
+
+export type NetopsStatus = {
+  backend: string
+  privileged: boolean
+  nft: boolean
+  iptables: boolean
+  conntrack: boolean
+  ss: boolean
+  game_ports: number[]
+  hint: string
+  rules: NetopsRule[]
 }
 
 export type NodeInfo = {
@@ -392,11 +534,54 @@ export const api = {
     panel_name?: string
     webhook_url?: string
     username?: string
+    qq_app_id?: string
+    qq_app_secret?: string
+    qq_group_openid?: string
+    qq_user_openid?: string
+    qq_sandbox?: boolean
+    qq_alerts?: boolean
+    qq_status_secs?: number
+    net_alert_rx_mbps?: number
   }) =>
     request<PanelSettings>('/api/v1/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    }),
+  hostNetwork: () => request<HostNetworkResponse>('/api/v1/network'),
+  netops: () => request<NetopsStatus>('/api/v1/netops'),
+  createNetop: (body: {
+    cidr: string
+    verdict?: string
+    proto?: string
+    port?: number
+    instance_id?: string
+    ttl_secs?: number
+    comment?: string
+    firewall?: boolean
+    drop_conns?: boolean
+    game_ban?: boolean
+  }) =>
+    request<NetopsRule>('/api/v1/netops', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  deleteNetop: (id: string) =>
+    request<void>(`/api/v1/netops/${id}`, { method: 'DELETE' }),
+  kickNetops: (body: { cidr: string; port?: number }) =>
+    request<{ ok: boolean }>('/api/v1/netops/kick', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  resyncNetops: () =>
+    request<NetopsStatus>('/api/v1/netops/resync', { method: 'POST' }),
+  testQqBot: (message?: string) =>
+    request<{ ok: boolean }>('/api/v1/qqbot/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: message || undefined }),
     }),
   changePassword: (body: { current_password: string; new_password: string }) =>
     request<void>('/api/v1/auth/password', {
@@ -639,12 +824,22 @@ export const api = {
     ),
   listCoreVersions: (core: string) =>
     request<CoreVersion[]>(`/api/v1/cores/${core}/versions`),
-  installCore: (id: string, core: string, version: string) =>
+  listCoreLoaders: (core: string, version: string) =>
+    request<CoreLoader[]>(
+      `/api/v1/cores/${encodeURIComponent(core)}/versions/${encodeURIComponent(version)}/loaders`,
+    ),
+  installCore: (id: string, core: string, version: string, loader?: string) =>
     request<Instance>(`/api/v1/instances/${id}/install`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ core, version }),
+      body: JSON.stringify({
+        core,
+        version,
+        loader: loader || undefined,
+      }),
     }),
+  listMetrics: (id: string) =>
+    request<MetricSample[]>(`/api/v1/instances/${id}/metrics`),
   listPlayers: (id: string, opts?: { probe?: boolean }) => {
     const q = opts?.probe ? '?probe=true' : ''
     return request<PlayerInfo[]>(`/api/v1/instances/${id}/players${q}`)

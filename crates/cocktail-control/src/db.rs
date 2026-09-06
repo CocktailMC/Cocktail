@@ -61,8 +61,52 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             node_id TEXT NOT NULL,
             payload TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS netops_rules (
+            id TEXT PRIMARY KEY,
+            cidr TEXT NOT NULL,
+            verdict TEXT NOT NULL,
+            proto TEXT NOT NULL,
+            port INTEGER,
+            instance_id TEXT,
+            ttl_secs INTEGER NOT NULL DEFAULT 0,
+            expires_at TEXT,
+            comment TEXT,
+            game_ban INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            applied INTEGER NOT NULL DEFAULT 0,
+            apply_error TEXT
+        );
         "#,
     )?;
+    for (name, decl) in [
+        ("qq_app_id", "TEXT"),
+        ("qq_app_secret", "TEXT"),
+        ("qq_group_openid", "TEXT"),
+        ("qq_user_openid", "TEXT"),
+        ("qq_sandbox", "INTEGER NOT NULL DEFAULT 0"),
+        ("qq_alerts", "INTEGER NOT NULL DEFAULT 1"),
+        ("qq_status_secs", "INTEGER NOT NULL DEFAULT 0"),
+        ("net_alert_rx_bps", "REAL NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "panel_settings", name, decl)?;
+    }
+    Ok(())
+}
+
+fn ensure_column(conn: &Connection, table: &str, name: &str, decl: &str) -> anyhow::Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let exists = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|col| col == name);
+    drop(stmt);
+    if !exists {
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {name} {decl}"),
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -244,6 +288,14 @@ pub fn load_instances(conn: &Connection) -> anyhow::Result<Vec<crate::instance::
 pub struct PanelRow {
     pub panel_name: String,
     pub webhook_url: Option<String>,
+    pub qq_app_id: String,
+    pub qq_app_secret: String,
+    pub qq_group_openid: String,
+    pub qq_user_openid: String,
+    pub qq_sandbox: bool,
+    pub qq_alerts: bool,
+    pub qq_status_secs: u64,
+    pub net_alert_rx_bps: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -257,12 +309,22 @@ pub struct AdminRow {
 
 pub fn panel(conn: &Connection) -> anyhow::Result<PanelRow> {
     conn.query_row(
-        "SELECT panel_name, webhook_url FROM panel_settings WHERE id = 1",
+        "SELECT panel_name, webhook_url, qq_app_id, qq_app_secret, qq_group_openid,
+                qq_user_openid, qq_sandbox, qq_alerts, qq_status_secs, net_alert_rx_bps
+         FROM panel_settings WHERE id = 1",
         [],
         |r| {
             Ok(PanelRow {
                 panel_name: r.get(0)?,
                 webhook_url: r.get(1)?,
+                qq_app_id: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                qq_app_secret: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                qq_group_openid: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                qq_user_openid: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                qq_sandbox: r.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
+                qq_alerts: r.get::<_, Option<i64>>(7)?.unwrap_or(1) != 0,
+                qq_status_secs: r.get::<_, Option<i64>>(8)?.unwrap_or(0).max(0) as u64,
+                net_alert_rx_bps: r.get::<_, Option<f64>>(9)?.unwrap_or(0.0) as f32,
             })
         },
     )
@@ -287,10 +349,99 @@ pub fn update_panel(
             .filter(|s| !s.is_empty())
             .map(str::to_string);
     }
+    write_panel(conn, &current)?;
+    Ok(current)
+}
+
+fn write_panel(conn: &Connection, row: &PanelRow) -> anyhow::Result<()> {
     conn.execute(
-        "UPDATE panel_settings SET panel_name = ?1, webhook_url = ?2 WHERE id = 1",
-        params![current.panel_name, current.webhook_url],
+        "UPDATE panel_settings SET
+            panel_name = ?1, webhook_url = ?2,
+            qq_app_id = ?3, qq_app_secret = ?4, qq_group_openid = ?5, qq_user_openid = ?6,
+            qq_sandbox = ?7, qq_alerts = ?8, qq_status_secs = ?9, net_alert_rx_bps = ?10
+         WHERE id = 1",
+        params![
+            row.panel_name,
+            row.webhook_url,
+            null_if_empty(&row.qq_app_id),
+            null_if_empty(&row.qq_app_secret),
+            null_if_empty(&row.qq_group_openid),
+            null_if_empty(&row.qq_user_openid),
+            row.qq_sandbox as i64,
+            row.qq_alerts as i64,
+            row.qq_status_secs as i64,
+            row.net_alert_rx_bps as f64,
+        ],
     )?;
+    Ok(())
+}
+
+fn null_if_empty(s: &str) -> Option<&str> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
+}
+
+#[derive(Default)]
+pub struct PanelPatch {
+    pub panel_name: Option<String>,
+    pub webhook_url: Option<Option<String>>,
+    pub qq_app_id: Option<String>,
+    pub qq_app_secret: Option<String>,
+    pub qq_group_openid: Option<String>,
+    pub qq_user_openid: Option<String>,
+    pub qq_sandbox: Option<bool>,
+    pub qq_alerts: Option<bool>,
+    pub qq_status_secs: Option<u64>,
+    pub net_alert_rx_bps: Option<f32>,
+}
+
+pub fn patch_panel(conn: &Connection, patch: PanelPatch) -> anyhow::Result<PanelRow> {
+    let mut current = panel(conn)?;
+    if let Some(name) = patch.panel_name.as_deref() {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            current.panel_name = trimmed.to_string();
+        }
+    }
+    if let Some(url) = patch.webhook_url {
+        current.webhook_url = url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+    }
+    if let Some(v) = patch.qq_app_id {
+        current.qq_app_id = v.trim().to_string();
+    }
+    if let Some(v) = patch.qq_app_secret {
+        let t = v.trim();
+        if !t.is_empty() && t != "********" {
+            current.qq_app_secret = t.to_string();
+        }
+    }
+    if let Some(v) = patch.qq_group_openid {
+        current.qq_group_openid = v.trim().to_string();
+    }
+    if let Some(v) = patch.qq_user_openid {
+        current.qq_user_openid = v.trim().to_string();
+    }
+    if let Some(v) = patch.qq_sandbox {
+        current.qq_sandbox = v;
+    }
+    if let Some(v) = patch.qq_alerts {
+        current.qq_alerts = v;
+    }
+    if let Some(v) = patch.qq_status_secs {
+        current.qq_status_secs = if v == 0 { 0 } else { v.max(60) };
+    }
+    if let Some(v) = patch.net_alert_rx_bps {
+        current.net_alert_rx_bps = v.max(0.0);
+    }
+    write_panel(conn, &current)?;
     Ok(current)
 }
 
@@ -389,5 +540,99 @@ pub fn session_admin(conn: &Connection, token: &str) -> anyhow::Result<Option<Ad
 
 pub fn delete_session(conn: &Connection, token: &str) -> anyhow::Result<()> {
     conn.execute("DELETE FROM sessions WHERE token = ?1", params![token])?;
+    Ok(())
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct NetopsRule {
+    pub id: String,
+    pub cidr: String,
+    pub verdict: String,
+    pub proto: String,
+    pub port: Option<u16>,
+    pub instance_id: Option<String>,
+    pub ttl_secs: u64,
+    pub expires_at: Option<String>,
+    pub comment: Option<String>,
+    pub game_ban: bool,
+    pub created_at: String,
+    pub applied: bool,
+    pub apply_error: Option<String>,
+}
+
+pub fn list_netops(conn: &Connection) -> anyhow::Result<Vec<NetopsRule>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, cidr, verdict, proto, port, instance_id, ttl_secs, expires_at,
+                comment, game_ban, created_at, applied, apply_error
+         FROM netops_rules ORDER BY created_at DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(NetopsRule {
+            id: r.get(0)?,
+            cidr: r.get(1)?,
+            verdict: r.get(2)?,
+            proto: r.get(3)?,
+            port: r.get::<_, Option<i64>>(4)?.map(|p| p as u16),
+            instance_id: r.get(5)?,
+            ttl_secs: r.get::<_, i64>(6)? as u64,
+            expires_at: r.get(7)?,
+            comment: r.get(8)?,
+            game_ban: r.get::<_, i64>(9)? != 0,
+            created_at: r.get(10)?,
+            applied: r.get::<_, i64>(11)? != 0,
+            apply_error: r.get(12)?,
+        })
+    })?;
+    Ok(rows.filter_map(Result::ok).collect())
+}
+
+pub fn insert_netops(conn: &Connection, rule: &NetopsRule) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT INTO netops_rules (
+            id, cidr, verdict, proto, port, instance_id, ttl_secs, expires_at,
+            comment, game_ban, created_at, applied, apply_error
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+        params![
+            rule.id,
+            rule.cidr,
+            rule.verdict,
+            rule.proto,
+            rule.port.map(|p| p as i64),
+            rule.instance_id,
+            rule.ttl_secs as i64,
+            rule.expires_at,
+            rule.comment,
+            rule.game_ban as i64,
+            rule.created_at,
+            rule.applied as i64,
+            rule.apply_error,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn delete_netops(conn: &Connection, id: &str) -> anyhow::Result<Option<NetopsRule>> {
+    let found = list_netops(conn)?.into_iter().find(|r| r.id == id);
+    conn.execute("DELETE FROM netops_rules WHERE id = ?1", params![id])?;
+    Ok(found)
+}
+
+pub fn expire_netops(conn: &Connection, now: &str) -> anyhow::Result<usize> {
+    let n = conn.execute(
+        "DELETE FROM netops_rules WHERE expires_at IS NOT NULL AND expires_at <= ?1",
+        params![now],
+    )?;
+    Ok(n)
+}
+
+pub fn mark_netops_applied(
+    conn: &Connection,
+    applied: bool,
+    error: Option<&str>,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE netops_rules SET applied = ?1, apply_error = ?2",
+        params![applied as i64, error],
+    )?;
     Ok(())
 }

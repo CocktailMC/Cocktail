@@ -5,10 +5,14 @@ mod api;
 mod auth;
 mod cluster;
 mod db;
+mod hostnet;
 mod instance;
+mod netops;
+mod ops;
 mod platform;
 mod plugin_bridge;
 mod proto;
+mod qqbot;
 mod state;
 mod util;
 
@@ -45,6 +49,7 @@ pub async fn run_plane() -> anyhow::Result<()> {
     instance::reattach_running(&state).await;
     state.spawn_scheduler();
     state.spawn_reconciler();
+    crate::ops::spawn(&state);
     crate::plugin_bridge::spawn_event_forwarder(&state);
     crate::plugin_bridge::maybe_autostart(&state);
 

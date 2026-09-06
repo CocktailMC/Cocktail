@@ -38,6 +38,14 @@ export default function HomeSettings({
   const [currentPw, setCurrentPw] = useState('')
   const [newPw, setNewPw] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
+  const [qqAppId, setQqAppId] = useState('')
+  const [qqSecret, setQqSecret] = useState('')
+  const [qqGroup, setQqGroup] = useState('')
+  const [qqUser, setQqUser] = useState('')
+  const [qqSandbox, setQqSandbox] = useState(false)
+  const [qqAlerts, setQqAlerts] = useState(true)
+  const [qqStatusSecs, setQqStatusSecs] = useState(0)
+  const [rxAlertMbps, setRxAlertMbps] = useState(80)
   const [saved, setSaved] = useState<string | null>(null)
 
   const load = async () => {
@@ -46,6 +54,14 @@ export default function HomeSettings({
     setPanelName(s.panel_name)
     setWebhook(s.webhook_url ?? '')
     setUsername(s.admin_username)
+    setQqAppId(s.qq_app_id ?? '')
+    setQqSecret('')
+    setQqGroup(s.qq_group_openid ?? '')
+    setQqUser(s.qq_user_openid ?? '')
+    setQqSandbox(!!s.qq_sandbox)
+    setQqAlerts(s.qq_alerts !== false)
+    setQqStatusSecs(s.qq_status_secs ?? 0)
+    setRxAlertMbps(s.net_alert_rx_mbps ?? 80)
     onPanelName(s.panel_name)
     onAdminName(s.admin_username)
   }
@@ -64,11 +80,20 @@ export default function HomeSettings({
         panel_name: panelName.trim(),
         webhook_url: webhook.trim(),
         username: username.trim(),
+        qq_app_id: qqAppId.trim(),
+        qq_app_secret: qqSecret.trim() || undefined,
+        qq_group_openid: qqGroup.trim(),
+        qq_user_openid: qqUser.trim(),
+        qq_sandbox: qqSandbox,
+        qq_alerts: qqAlerts,
+        qq_status_secs: qqStatusSecs,
+        net_alert_rx_mbps: rxAlertMbps,
       })
       setSettings(s)
       onPanelName(s.panel_name)
       onAdminName(s.admin_username)
       setSaved('服务器设置已保存')
+      setQqSecret('')
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -150,9 +175,132 @@ export default function HomeSettings({
                 autoComplete="username"
               />
             </label>
-            <button type="submit" className="btn btn-primary">
-              保存设置
-            </button>
+            <p className="card-title" style={{ marginTop: '0.4rem' }}>
+              <i className="fa fa-comments" /> QQ 机器人（API v2）
+            </p>
+            <p className="meta">
+              在{' '}
+              <a href="https://bot.q.qq.com/wiki/develop/api-v2/" target="_blank" rel="noreferrer">
+                QQ 开放平台
+              </a>{' '}
+              创建机器人，拿到 AppID / AppSecret。把机器人拉进群后，从事件里复制群
+              openid。主动消息有平台额度；沙箱仅调试用。
+            </p>
+            <label>
+              AppID
+              <input
+                value={qqAppId}
+                onChange={(e) => setQqAppId(e.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              AppSecret
+              <input
+                type="password"
+                value={qqSecret}
+                onChange={(e) => setQqSecret(e.target.value)}
+                placeholder={
+                  settings?.qq_app_secret_set ? '已保存，留空则不改' : 'clientSecret'
+                }
+                autoComplete="new-password"
+              />
+            </label>
+            <label>
+              群 openid
+              <input
+                value={qqGroup}
+                onChange={(e) => setQqGroup(e.target.value)}
+                placeholder="group_openid"
+              />
+            </label>
+            <label>
+              单聊用户 openid（可选）
+              <input
+                value={qqUser}
+                onChange={(e) => setQqUser(e.target.value)}
+                placeholder="user_openid"
+              />
+            </label>
+            <label>
+              定时状态（秒，0 关闭）
+              <select
+                value={qqStatusSecs}
+                onChange={(e) => setQqStatusSecs(Number(e.target.value))}
+              >
+                <option value={0}>关闭</option>
+                <option value={300}>每 5 分钟</option>
+                <option value={900}>每 15 分钟</option>
+                <option value={1800}>每 30 分钟</option>
+                <option value={3600}>每小时</option>
+                <option value={21600}>每 6 小时</option>
+              </select>
+            </label>
+            <label>
+              主机下行告警阈值（MiB/s）
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={rxAlertMbps}
+                onChange={(e) => setRxAlertMbps(Number(e.target.value))}
+              />
+            </label>
+            <label className="home-check">
+              <input
+                type="checkbox"
+                checked={qqAlerts}
+                onChange={(e) => setQqAlerts(e.target.checked)}
+              />
+              发送崩溃 / 网络告警
+            </label>
+            <label className="home-check">
+              <input
+                type="checkbox"
+                checked={qqSandbox}
+                onChange={(e) => setQqSandbox(e.target.checked)}
+              />
+              使用沙箱环境
+            </label>
+            <div className="btn-row">
+              <button type="submit" className="btn btn-primary">
+                保存设置
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={async () => {
+                  onBusy(true, '发送 QQ 测试…')
+                  onError(null)
+                  setSaved(null)
+                  try {
+                    await api.updateSettings({
+                      qq_app_id: qqAppId.trim(),
+                      qq_app_secret: qqSecret.trim() || undefined,
+                      qq_group_openid: qqGroup.trim(),
+                      qq_user_openid: qqUser.trim(),
+                      qq_sandbox: qqSandbox,
+                    })
+                    await api.testQqBot()
+                    setSaved('已向 QQ 发送测试消息')
+                    setQqSecret('')
+                    const s = await api.getSettings()
+                    setSettings(s)
+                  } catch (err) {
+                    onError(err instanceof Error ? err.message : String(err))
+                  } finally {
+                    onBusy(false)
+                  }
+                }}
+              >
+                发送测试消息
+              </button>
+            </div>
+            {settings?.qq_ready ? (
+              <p className="ok">机器人配置齐全，告警与定时状态会走 QQ。</p>
+            ) : (
+              <p className="meta">配置未完成时不会发 QQ。</p>
+            )}
           </div>
         </form>
 
@@ -271,7 +419,10 @@ export default function HomeSettings({
             <li>
               账号与面板配置保存在 SQLite；实例列表仍在 <code>data/state.json</code>。
             </li>
-            <li>登录与实例操作会写入审计日志，可在侧栏「审计日志」查看。</li>
+            <li>
+              QQ 机器人按开放平台 API v2 主动发消息；群/单聊 openid 与 AppID 绑定，不能混用别的机器人的
+              id。
+            </li>
           </ul>
         </div>
       </div>

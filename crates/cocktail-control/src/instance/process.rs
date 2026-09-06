@@ -35,15 +35,18 @@ pub struct ProcessHandle {
 
 impl ProcessHandle {
     pub async fn stop(self, mode: StopMode) {
-        let _ = self.stop_tx.send(mode).await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), self.stop_tx.send(mode)).await;
         if let Some(name) = self.container_name {
             // Ensure container is removed even if docker run hung.
-            let _ = tokio::process::Command::new("docker")
-                .args(["rm", "-f", &name])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .await;
+            let _ = tokio::time::timeout(Duration::from_secs(20), async {
+                tokio::process::Command::new("docker")
+                    .args(["rm", "-f", &name])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await
+            })
+            .await;
         }
     }
 
@@ -61,6 +64,7 @@ pub async fn spawn_instance(
     command: Option<String>,
     mut args: Vec<String>,
     memory_mib: u32,
+    port: u16,
     events: broadcast::Sender<InstanceEvent>,
 ) -> anyhow::Result<ProcessHandle> {
     std::fs::create_dir_all(&workdir)?;
@@ -75,7 +79,7 @@ pub async fn spawn_instance(
     }
 
     let child = build_command(bin, &args, &workdir, &instance_id)?;
-    attach_child(instance_id, child, events, None, Some(workdir), false).await
+    attach_child(instance_id, child, events, None, Some(workdir), false, port).await
 }
 
 /// Spawn an arbitrary external command (used by Docker runtime).
@@ -94,7 +98,7 @@ pub async fn spawn_external_command(
         .stderr(Stdio::piped())
         .kill_on_drop(false)
         .spawn()?;
-    attach_child(instance_id, child, events, container_name, None, false).await
+    attach_child(instance_id, child, events, container_name, None, false, 0).await
 }
 
 async fn attach_child(
@@ -104,6 +108,7 @@ async fn attach_child(
     container_name: Option<String>,
     workdir: Option<String>,
     reattached: bool,
+    port: u16,
 ) -> anyhow::Result<ProcessHandle> {
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -205,6 +210,8 @@ async fn attach_child(
     tokio::spawn(metric_ticker(
         instance_id.clone(),
         child_id,
+        port,
+        container_name.is_some(),
         events,
         stop_metrics_rx,
         live,
@@ -336,6 +343,8 @@ async fn spawn_demo(
     tokio::spawn(metric_ticker(
         instance_id,
         0,
+        25565,
+        false,
         events,
         stop_metrics_rx,
         live,
@@ -507,6 +516,7 @@ pub async fn adopt_running(
     events: broadcast::Sender<InstanceEvent>,
     container_name: Option<String>,
     reattached: bool,
+    port: u16,
 ) -> anyhow::Result<ProcessHandle> {
     if container_name.is_none() && (pid == 0 || !pid_is_alive(pid)) {
         anyhow::bail!("process {pid} is not running");
@@ -650,6 +660,8 @@ pub async fn adopt_running(
     tokio::spawn(metric_ticker(
         instance_id,
         pid,
+        port,
+        container_name.is_some(),
         events,
         stop_metrics_rx,
         live,
@@ -821,7 +833,7 @@ async fn force_kill(pid: u32, container_name: Option<&str>) {
     }
 }
 
-async fn docker_container_running(name: &str) -> bool {
+pub(crate) async fn docker_container_running(name: &str) -> bool {
     let Ok(out) = tokio::process::Command::new("docker")
         .args(["inspect", "-f", "{{.State.Running}}", name])
         .stdout(std::process::Stdio::piped())
@@ -989,12 +1001,16 @@ async fn follow_file(
 async fn metric_ticker(
     instance_id: String,
     child_id: u32,
+    port: u16,
+    docker: bool,
     events: broadcast::Sender<InstanceEvent>,
     mut stop_rx: mpsc::Receiver<()>,
     live: Arc<Mutex<LiveStats>>,
 ) {
     let mut sys = System::new();
     let mut interval = tokio::time::interval(Duration::from_secs(3));
+    let mut net_prev = super::netmon::NetCounters::default();
+    let mut demo_tick = 0u32;
     // Prime CPU measurement.
     if child_id != 0 {
         sys.refresh_processes(ProcessesToUpdate::All, true);
@@ -1004,7 +1020,6 @@ async fn metric_ticker(
             _ = stop_rx.recv() => break,
             _ = interval.tick() => {
                 let (cpu_pct, memory_mib) = if child_id == 0 {
-                    // Demo: report light synthetic host-like usage still labeled demo via game stats.
                     (1.5_f32, 64.0_f32)
                 } else {
                     let pid = Pid::from_u32(child_id);
@@ -1018,12 +1033,51 @@ async fn metric_ticker(
                     }
                 };
                 let game = live.lock().await.game.clone();
+                let net = if child_id == 0 {
+                    demo_tick = demo_tick.wrapping_add(1);
+                    super::netmon::demo_sample(demo_tick, &net_prev)
+                } else {
+                    let pid = child_id;
+                    let prev = net_prev.clone();
+                    tokio::task::spawn_blocking(move || {
+                        super::netmon::sample(port, pid, docker, &prev)
+                    })
+                    .await
+                    .unwrap_or_else(|_| super::netmon::NetSample::default())
+                };
+                net_prev = net.counters.clone();
                 let sample = MetricSample {
                     ts: Utc::now(),
                     cpu_pct,
                     memory_mib,
                     tps: game.tps,
                     players: game.players.unwrap_or(0),
+                    net_rx_bps: net.rx_bps,
+                    net_tx_bps: net.tx_bps,
+                    net_connections: net.connections,
+                    net_unique_ips: net.unique_ips,
+                    net_listen: net.listen,
+                    net_peers: net.peers,
+                    net_syn_recv: net.syn_recv,
+                    net_time_wait: net.time_wait,
+                    net_fin_wait: net.fin_wait,
+                    net_udp: net.udp,
+                    net_rx_pps: net.rx_pps,
+                    net_tx_pps: net.tx_pps,
+                    net_rx_bytes: net.rx_bytes,
+                    net_tx_bytes: net.tx_bytes,
+                    net_session_rx: net.session_rx,
+                    net_session_tx: net.session_tx,
+                    net_peak_rx_bps: net.peak_rx_bps,
+                    net_peak_tx_bps: net.peak_tx_bps,
+                    net_drops: net.drops,
+                    net_errors: net.errors,
+                    net_rtt_ms: net.rtt_ms,
+                    net_ping_online: net.ping_online,
+                    net_ping_max: net.ping_max,
+                    net_ping_version: net.ping_version,
+                    net_source: Some(net.source.into()),
+                    net_alerts: net.alerts,
                 };
                 if events
                     .send(InstanceEvent::Metric {

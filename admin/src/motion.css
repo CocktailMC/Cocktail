@@ -1,0 +1,340 @@
+/* Motion — keep it short and respect reduced-motion */
+
+:root {
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 140ms;
+  --dur: 280ms;
+  --dur-slow: 480ms;
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes card-pop {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  }
+  50% {
+    transform: scale(1.06);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 0 0 6px rgba(125, 179, 232, 0.18);
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+@keyframes live-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(34, 197, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+@keyframes banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.page-stage {
+  animation: page-enter var(--dur-slow) var(--ease-out) both;
+}
+
+.auth-gate {
+  background:
+    radial-gradient(ellipse 80% 45% at 50% -8%, rgba(15, 76, 129, 0.14), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 100% 100%, rgba(15, 76, 129, 0.06), transparent 50%),
+    var(--content-bg);
+}
+
+.auth-gate-main {
+  animation: fade-in var(--dur-slow) var(--ease-soft) both;
+}
+
+.auth-card {
+  animation: card-pop 520ms var(--ease-out) both;
+}
+
+.brand-mark.splash {
+  animation: breathe 2.2s var(--ease-soft) infinite;
+}
+
+.error-banner {
+  animation: banner-in var(--dur) var(--ease-out) both;
+}
+
+.busy-overlay {
+  animation: overlay-in var(--dur-fast) var(--ease-soft) both;
+}
+
+.busy-card {
+  animation: rise-in 320ms var(--ease-out) both;
+}
+
+.status-toast {
+  animation: toast-in 360ms var(--ease-out) both;
+}
+
+.stat-grid > * {
+  animation: rise-in 420ms var(--ease-out) both;
+}
+
+.stat-grid > *:nth-child(1) {
+  animation-delay: 40ms;
+}
+.stat-grid > *:nth-child(2) {
+  animation-delay: 90ms;
+}
+.stat-grid > *:nth-child(3) {
+  animation-delay: 140ms;
+}
+.stat-grid > *:nth-child(4) {
+  animation-delay: 190ms;
+}
+
+.server-cards > * {
+  animation: rise-in 400ms var(--ease-out) both;
+}
+
+.server-cards > *:nth-child(1) {
+  animation-delay: 40ms;
+}
+.server-cards > *:nth-child(2) {
+  animation-delay: 80ms;
+}
+.server-cards > *:nth-child(3) {
+  animation-delay: 120ms;
+}
+.server-cards > *:nth-child(4) {
+  animation-delay: 160ms;
+}
+.server-cards > *:nth-child(n + 5) {
+  animation-delay: 200ms;
+}
+
+.nav-item {
+  position: relative;
+  transition:
+    background var(--dur-fast) var(--ease-soft),
+    color var(--dur-fast) var(--ease-soft),
+    border-color var(--dur-fast) var(--ease-soft);
+}
+
+.nav-item.active {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+.btn-primary:hover:not(:disabled) {
+  box-shadow: 0 6px 16px rgba(15, 76, 129, 0.28);
+}
+
+.card-panel {
+  transition:
+    box-shadow var(--dur) var(--ease-soft),
+    border-color var(--dur) var(--ease-soft),
+    transform var(--dur) var(--ease-soft);
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(15, 35, 55, 0.08);
+}
+
+.home-page > .grid-2 > .card-panel:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(15, 35, 55, 0.08);
+}
+
+.server-card {
+  transition:
+    border-color var(--dur) var(--ease-soft),
+    box-shadow var(--dur) var(--ease-soft),
+    transform var(--dur) var(--ease-soft),
+    background var(--dur) var(--ease-soft);
+}
+
+.server-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 24px rgba(15, 35, 55, 0.1);
+}
+
+.instance-pick .pick-btn {
+  transition:
+    background var(--dur-fast) var(--ease-soft),
+    color var(--dur-fast) var(--ease-soft),
+    transform var(--dur-fast) var(--ease-soft);
+}
+
+.instance-pick .pick-btn:hover {
+  transform: translateX(2px);
+}
+
+.health-pill .dot {
+  animation: live-ring 1.8s ease-out infinite;
+}
+
+.health-pill.offline .dot {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+.status-pill .pulse {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+.status-pill.status-running .pulse {
+  animation: live-ring 1.8s ease-out infinite;
+}
+
+.badge.status-running {
+  animation: fade-in var(--dur) both;
+}
+
+.link-btn {
+  transition: color var(--dur-fast), opacity var(--dur-fast);
+}
+
+.link-btn:hover {
+  opacity: 0.85;
+}
+
+.file-row,
+.backup-row,
+.data-table tbody tr {
+  transition: background var(--dur-fast) var(--ease-soft);
+}
+
+.wizard-steps li {
+  transition:
+    background var(--dur) var(--ease-soft),
+    color var(--dur) var(--ease-soft),
+    transform var(--dur) var(--ease-soft);
+}
+
+.wizard-steps li.active {
+  transform: scale(1.04);
+}
+
+.store-empty i {
+  animation: breathe 2.8s var(--ease-soft) infinite;
+}
+
+.topbar-right button {
+  transition: color var(--dur-fast) var(--ease-soft);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(15, 76, 129, 0.45);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+
+  .btn:hover:not(:disabled),
+  .stat-card:hover,
+  .home-page > .grid-2 > .card-panel:hover,
+  .server-card:hover,
+  .wizard-steps li.active {
+    transform: none;
+  }
+}

@@ -148,6 +148,7 @@ pub async fn spawn_docker_instance(
         events,
         Some(name),
         false,
+        port,
     )
     .await
 }

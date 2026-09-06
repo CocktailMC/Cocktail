@@ -154,6 +154,134 @@
   overflow: hidden;
 }
 
+.workspace {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.subnav {
+  flex-shrink: 0;
+  z-index: 12;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  padding: 0.55rem 1.25rem;
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(8px);
+  animation: page-enter var(--dur) var(--ease-out) both;
+}
+
+.subnav-id {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  padding-right: 0.75rem;
+  border-right: 1px solid var(--line);
+}
+
+.subnav-back {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 0.28rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition:
+    background var(--dur-fast) var(--ease-soft),
+    color var(--dur-fast) var(--ease-soft);
+}
+
+.subnav-back:hover {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.subnav-name {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subnav-id .status-pill {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+}
+
+.subnav-groups {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 1.1rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.subnav-group {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.subnav-group-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-right: 0.25rem;
+  flex-shrink: 0;
+}
+
+.subnav-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.38rem 0.6rem;
+  border-radius: 7px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease-soft),
+    color var(--dur-fast) var(--ease-soft);
+}
+
+.subnav-item i {
+  font-size: 0.78rem;
+  opacity: 0.85;
+}
+
+.subnav-item:hover {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.subnav-item.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.subnav-item.active i {
+  opacity: 1;
+}
+
 .sidebar {
   width: 248px;
   background: var(--sidebar-bg);
@@ -397,6 +525,7 @@
   overflow-y: auto;
   padding: 1.5rem 1.75rem 2rem;
   min-width: 0;
+  min-height: 0;
 }
 
 .page-head {
@@ -498,7 +627,7 @@
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 1rem;
   margin-bottom: 1.25rem;
 }
@@ -568,7 +697,152 @@
 }
 
 .stat-card .icon.warning {
-  color: var(--warning);
+  color: var(--warning, #d97706);
+}
+
+.stat-card .value.net-rate {
+  font-size: 1.05rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.35rem;
+  align-items: baseline;
+}
+
+.net-split {
+  opacity: 0.4;
+}
+
+.net-sub {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted, #6b7280);
+}
+
+.net-panel {
+  margin-bottom: 1.25rem;
+}
+
+.net-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.net-table th,
+.net-table td {
+  text-align: left;
+  padding: 0.45rem 0.35rem;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.9);
+}
+
+.net-table th {
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.sparkline {
+  width: 100%;
+  height: 56px;
+  display: block;
+  margin: 0.35rem 0 0.5rem;
+}
+
+.spark-empty {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  color: #9ca3af;
+  font-size: 0.85rem;
+}
+
+.net-alerts {
+  background: rgba(217, 119, 6, 0.12);
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  border-radius: 10px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.net-alerts p {
+  margin: 0.2rem 0;
+  color: #b45309;
+}
+
+.net-kpis .net-sub {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.net-dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem 1rem;
+  margin: 0.75rem 0 0;
+}
+
+.net-dl dt {
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.net-dl dd {
+  margin: 0.1rem 0 0;
+  font-weight: 600;
+}
+
+.net-states {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem 0.8rem;
+  margin-top: 0.75rem;
+  font-size: 0.88rem;
+}
+
+.net-legend {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.82rem;
+  color: #6b7280;
+  margin: 0.2rem 0 0.4rem;
+}
+
+.net-legend .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 0.35rem;
+}
+
+.net-legend .dot.rx {
+  background: #2563eb;
+}
+
+.net-legend .dot.tx {
+  background: #059669;
+}
+
+.net-badge {
+  margin-left: 0.4rem;
+  font-size: 0.7rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.net-actions {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.net-scope-public {
+  color: #b45309;
+  font-weight: 600;
 }
 
 .grid-2 {
@@ -787,10 +1061,9 @@
   color: var(--danger);
 }
 
-.settings {
-  display: grid;
-  gap: 0.85rem;
-  max-width: 520px;
+.settings.netops-form {
+  max-width: none;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
 }
 
 .settings label,
@@ -1016,7 +1289,20 @@
 
   .sidebar {
     width: 100%;
-    max-height: 42vh;
+    max-height: 36vh;
+  }
+
+  .subnav-id {
+    border-right: none;
+    width: 100%;
+    padding-right: 0;
+  }
+
+  .subnav-groups {
+    width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 0.2rem;
   }
 
   .stat-grid {
@@ -2167,6 +2453,19 @@
   margin-right: 0.25rem;
 }
 
+button.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #2563eb;
+  cursor: pointer;
+  font: inherit;
+}
+
+button.linkish:hover {
+  text-decoration: underline;
+}
+
 .server-cards {
   list-style: none;
   margin: 0;
@@ -2286,7 +2585,10 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--content-bg);
+  background:
+    radial-gradient(ellipse 80% 45% at 50% -8%, rgba(15, 76, 129, 0.14), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 100% 100%, rgba(15, 76, 129, 0.06), transparent 50%),
+    var(--content-bg);
 }
 
 .auth-gate-main {

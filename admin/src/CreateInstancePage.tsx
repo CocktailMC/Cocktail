@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
-import { api, type CreateInstanceBody, type Instance, type NodeInfo } from './api'
+import {
+  api,
+  type CoreLoader,
+  type CoreVersion,
+  type CreateInstanceBody,
+  type Instance,
+  type NodeInfo,
+} from './api'
+import {
+  INSTALLABLE_CORE_GROUPS,
+  coreHasLoaders,
+  isInstallableCore,
+} from './cores'
 import {
   EULA_AKA_URL,
   EULA_OFFICIAL_URL,
@@ -35,9 +47,7 @@ export default function CreateInstancePage({
   const [name, setName] = useState('my-server')
   const [group, setGroup] = useState('default')
   const [tags, setTags] = useState('')
-  const [core, setCore] = useState<'custom' | 'paper' | 'vanilla' | 'demo'>(
-    'custom',
-  )
+  const [core, setCore] = useState('custom')
   const [runtime, setRuntime] = useState<'process' | 'docker'>('process')
   const [image, setImage] = useState('eclipse-temurin:21-jre')
   const [cpu, setCpu] = useState(1)
@@ -55,6 +65,11 @@ export default function CreateInstancePage({
   const [jarFile, setJarFile] = useState<File | null>(null)
   const [nodes, setNodes] = useState<NodeInfo[]>([])
   const [nodeId, setNodeId] = useState('local')
+  const [gameVersions, setGameVersions] = useState<CoreVersion[]>([])
+  const [gameVersion, setGameVersion] = useState('')
+  const [loaders, setLoaders] = useState<CoreLoader[]>([])
+  const [loader, setLoader] = useState('')
+  const [versionsLoading, setVersionsLoading] = useState(false)
 
   useEffect(() => {
     api
@@ -67,6 +82,63 @@ export default function CreateInstancePage({
       })
       .catch(() => undefined)
   }, [])
+
+  useEffect(() => {
+    if (!isInstallableCore(core)) {
+      setGameVersions([])
+      setGameVersion('')
+      setLoaders([])
+      setLoader('')
+      return
+    }
+    let cancelled = false
+    setVersionsLoading(true)
+    setLoaders([])
+    setLoader('')
+    api
+      .listCoreVersions(core)
+      .then((list) => {
+        if (cancelled) return
+        setGameVersions(list)
+        setGameVersion(list.find((v) => v.latest)?.id ?? list[0]?.id ?? '')
+      })
+      .catch((err: Error) => {
+        if (cancelled) return
+        setGameVersions([])
+        setGameVersion('')
+        onError(err.message)
+      })
+      .finally(() => {
+        if (!cancelled) setVersionsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [core])
+
+  useEffect(() => {
+    if (!isInstallableCore(core) || !gameVersion || !coreHasLoaders(core)) {
+      setLoaders([])
+      setLoader('')
+      return
+    }
+    let cancelled = false
+    api
+      .listCoreLoaders(core, gameVersion)
+      .then((list) => {
+        if (cancelled) return
+        setLoaders(list)
+        setLoader('')
+      })
+      .catch(() => {
+        if (cancelled) return
+        setLoaders([])
+        setLoader('')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [core, gameVersion])
 
   const needsEula = core !== 'demo'
   const portConflict = usedPorts.includes(port)
@@ -99,7 +171,16 @@ export default function CreateInstancePage({
       setStep((s) => s + 1)
       return
     }
-    onBusy(true, jarFile ? '创建实例并导入 jar…' : '创建实例…')
+    const autoInstall =
+      isInstallableCore(core) && Boolean(gameVersion) && !jarFile
+    onBusy(
+      true,
+      jarFile
+        ? '创建实例并导入 jar…'
+        : autoInstall
+          ? `创建实例并安装 ${core} ${gameVersion}${loader ? ` / ${loader}` : ''}…`
+          : '创建实例…',
+    )
     onError(null)
     try {
       const body: CreateInstanceBody = {
@@ -130,9 +211,14 @@ export default function CreateInstancePage({
           core: 'custom',
           accept_eula: eulaAccepted || !needsEula,
         })
+      } else if (autoInstall) {
+        await api.installCore(created.id, core, gameVersion, loader || undefined)
       }
       const fresh = (await api.listInstances()).find((i) => i.id === created.id)
-      onCreated(fresh ?? created, core === 'demo' || jarFile ? 'dashboard' : 'version')
+      onCreated(
+        fresh ?? created,
+        core === 'demo' || jarFile || autoInstall ? 'dashboard' : 'version',
+      )
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -298,13 +384,18 @@ export default function CreateInstancePage({
               服务端类型
               <select
                 value={core}
-                onChange={(e) =>
-                  setCore(e.target.value as typeof core)
-                }
+                onChange={(e) => setCore(e.target.value)}
               >
                 <option value="custom">自定义 jar（推荐）</option>
-                <option value="paper">Paper（创建后可在线安装）</option>
-                <option value="vanilla">Vanilla（创建后可在线安装）</option>
+                {INSTALLABLE_CORE_GROUPS.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.items.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.label}（创建后可在线安装）
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
                 <option value="demo">Demo（无需 jar，仅联调）</option>
               </select>
             </label>
@@ -346,11 +437,56 @@ export default function CreateInstancePage({
                 </p>
               </>
             )}
-            {(core === 'paper' || core === 'vanilla') && (
-              <p className="meta">
-                创建完成后会进入「版本/导入jar」页，可下载官方构建或上传自定义
-                jar；启动命令会自动写入。
-              </p>
+            {isInstallableCore(core) && (
+              <>
+                <label>
+                  游戏版本（可选，默认最新）
+                  <select
+                    value={gameVersion}
+                    onChange={(e) => setGameVersion(e.target.value)}
+                    disabled={versionsLoading}
+                  >
+                    <option value="">稍后安装</option>
+                    {gameVersions.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.label ?? v.id}
+                        {v.latest ? '（最新）' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {coreHasLoaders(core) && gameVersion && (
+                  <label>
+                    {core === 'arclight' ? '混合变体（可选）' : '加载器版本（可选）'}
+                    <select
+                      value={loader}
+                      onChange={(e) => setLoader(e.target.value)}
+                    >
+                      <option value="">
+                        {core === 'arclight'
+                          ? '优先 NeoForge，没有则回退'
+                          : '最新稳定（默认）'}
+                      </option>
+                      {loaders.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.label ? `${l.id}（${l.label}）` : l.id}
+                          {l.latest ? ' · latest' : ''}
+                          {l.recommended && !l.label ? ' · recommended' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <p className="meta">
+                  {gameVersion
+                    ? core === 'forge' ||
+                      core === 'neoforge' ||
+                      core === 'quilt'
+                      ? '创建后会自动下载安装器并用本机 Java 安装，随后写入启动命令。请确保 PATH 中有 java。'
+                      : '创建后会自动下载服务器包并配置启动命令。'
+                    : '未选版本则创建空实例，之后可在「版本 / jar」页安装。'}
+                </p>
+              </>
             )}
             {core === 'demo' && (
               <p className="meta">Demo 模式不需要 EULA 与 jar，适合验证控制面。</p>
@@ -440,7 +576,13 @@ export default function CreateInstancePage({
                   <td>核心</td>
                   <td>
                     {core}
-                    {jarFile ? ` · 将导入 ${jarFile.name}` : ''}
+                    {jarFile
+                      ? ` · 将导入 ${jarFile.name}`
+                      : isInstallableCore(core) && gameVersion
+                        ? ` · ${gameVersion}${loader ? ` / ${loader}` : ''}`
+                        : isInstallableCore(core)
+                          ? ' · 稍后安装'
+                          : ''}
                   </td>
                 </tr>
                 <tr>

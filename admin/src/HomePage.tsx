@@ -1,4 +1,5 @@
 import type { HealthInfo, Instance, InstanceStatus } from './api'
+import { formatBps } from './api'
 import { BrandImg, BRAND } from './brandIcons'
 import EnvBrandBar from './EnvBrandBar'
 
@@ -296,6 +297,12 @@ export default function HomePage(props: Props) {
                     <span>
                       <i className="fa fa-tachometer" />{' '}
                       {tps != null ? tps.toFixed(1) : '—'}
+                    </span>
+                    <span>
+                      <i className="fa fa-exchange" />{' '}
+                      {running
+                        ? `${formatBps(inst.last_metrics?.net_rx_bps)} ↓`
+                        : '—'}
                     </span>
                   </div>
                   <div className="server-card-actions">

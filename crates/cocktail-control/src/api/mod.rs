@@ -40,6 +40,10 @@ pub fn router() -> Router<SharedState> {
         )
         .route("/api/v1/instances/{id}/eula", post(handlers::accept_eula))
         .route("/api/v1/instances/{id}/logs", get(handlers::recent_logs))
+        .route(
+            "/api/v1/instances/{id}/metrics",
+            get(handlers::metric_history),
+        )
         .route("/api/v1/instances/{id}/files", get(handlers::list_files))
         .route(
             "/api/v1/instances/{id}/files/content",
@@ -100,6 +104,10 @@ pub fn router() -> Router<SharedState> {
         .route(
             "/api/v1/cores/{core}/versions",
             get(handlers::list_core_versions),
+        )
+        .route(
+            "/api/v1/cores/{core}/versions/{version}/loaders",
+            get(handlers::list_core_loaders),
         )
         .route(
             "/api/v1/instances/{id}/install",
@@ -166,6 +174,12 @@ pub fn router() -> Router<SharedState> {
         )
         .route("/api/v1/schedules/{id}", delete(handlers::delete_schedule))
         .route("/api/v1/fleet/summary", get(handlers::fleet_summary))
+        .route("/api/v1/network", get(handlers::host_network))
+        .route("/api/v1/netops", get(handlers::list_netops).post(handlers::create_netops))
+        .route("/api/v1/netops/kick", post(handlers::kick_netops))
+        .route("/api/v1/netops/resync", post(handlers::resync_netops))
+        .route("/api/v1/netops/{id}", delete(handlers::delete_netops))
+        .route("/api/v1/qqbot/test", post(handlers::qq_test))
         .route("/api/v1/fleet/bulk", post(handlers::fleet_bulk))
         .route("/api/v1/docker/status", get(handlers::docker_status))
         .route("/api/v1/events/ws", get(handlers::events_ws))

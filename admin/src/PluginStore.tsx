@@ -17,6 +17,7 @@ type Props = {
   busy: boolean
   defaultGameVersion?: string
   defaultLoader?: string
+  defaultProjectType?: 'plugin' | 'mod'
   onInstalled: () => void
   run: (fn: () => Promise<unknown>, label?: string) => Promise<void>
 }
@@ -82,12 +83,15 @@ export default function PluginStore({
   busy,
   defaultGameVersion = '',
   defaultLoader = 'paper',
+  defaultProjectType = 'plugin',
   onInstalled,
   run,
 }: Props) {
   const [source, setSource] = useState<Source>('modrinth')
   const [query, setQuery] = useState('')
-  const [projectType, setProjectType] = useState<'plugin' | 'mod'>('plugin')
+  const [projectType, setProjectType] = useState<'plugin' | 'mod'>(
+    defaultProjectType,
+  )
   const [gameVersion, setGameVersion] = useState(defaultGameVersion)
   const [loader, setLoader] = useState(defaultLoader)
   const [platform, setPlatform] = useState('PAPER')
@@ -230,11 +234,14 @@ export default function PluginStore({
                     <option value="paper">paper</option>
                     <option value="spigot">spigot</option>
                     <option value="purpur">purpur</option>
+                    <option value="folia">folia</option>
+                    <option value="bukkit">bukkit</option>
                     <option value="velocity">velocity</option>
                   </>
                 ) : (
                   <>
                     <option value="fabric">fabric</option>
+                    <option value="quilt">quilt</option>
                     <option value="forge">forge</option>
                     <option value="neoforge">neoforge</option>
                   </>

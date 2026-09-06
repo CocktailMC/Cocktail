@@ -274,6 +274,7 @@ async fn spawn_live(
                 command,
                 args,
                 spec.memory_mib,
+                spec.port,
                 events,
             )
             .await

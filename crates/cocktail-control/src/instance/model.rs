@@ -13,6 +13,23 @@ pub enum InstanceStatus {
     Crashed,
 }
 
+impl InstanceStatus {
+    /// Whether an async `StatusChanged` may overwrite `current`.
+    /// Stale in-flight events must not resurrect Stopping/Starting after the process is gone.
+    pub fn can_apply_over(self, current: Self) -> bool {
+        use InstanceStatus::*;
+        if self == current {
+            return true;
+        }
+        match (current, self) {
+            (Stopped | Crashed | Created, Stopping) => false,
+            (Running, Starting) => false,
+            (Stopping, Running | Starting) => false,
+            _ => true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeKind {
@@ -80,6 +97,16 @@ fn default_port() -> u16 {
     25565
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NetPeer {
+    pub ip: String,
+    pub connections: u32,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub ipv6: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricSample {
     pub ts: DateTime<Utc>,
@@ -87,6 +114,58 @@ pub struct MetricSample {
     pub memory_mib: f32,
     pub tps: Option<f32>,
     pub players: u32,
+    #[serde(default)]
+    pub net_rx_bps: f32,
+    #[serde(default)]
+    pub net_tx_bps: f32,
+    #[serde(default)]
+    pub net_connections: u32,
+    #[serde(default)]
+    pub net_unique_ips: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_listen: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub net_peers: Vec<NetPeer>,
+    #[serde(default)]
+    pub net_syn_recv: u32,
+    #[serde(default)]
+    pub net_time_wait: u32,
+    #[serde(default)]
+    pub net_fin_wait: u32,
+    #[serde(default)]
+    pub net_udp: u32,
+    #[serde(default)]
+    pub net_rx_pps: f32,
+    #[serde(default)]
+    pub net_tx_pps: f32,
+    #[serde(default)]
+    pub net_rx_bytes: u64,
+    #[serde(default)]
+    pub net_tx_bytes: u64,
+    #[serde(default)]
+    pub net_session_rx: u64,
+    #[serde(default)]
+    pub net_session_tx: u64,
+    #[serde(default)]
+    pub net_peak_rx_bps: f32,
+    #[serde(default)]
+    pub net_peak_tx_bps: f32,
+    #[serde(default)]
+    pub net_drops: u64,
+    #[serde(default)]
+    pub net_errors: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_rtt_ms: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_ping_online: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_ping_max: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_ping_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub net_alerts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -120,6 +120,15 @@ pub struct SettingsResponse {
     pub bind: String,
     pub db_path: &'static str,
     pub plugin_host: String,
+    pub qq_app_id: String,
+    pub qq_app_secret_set: bool,
+    pub qq_group_openid: String,
+    pub qq_user_openid: String,
+    pub qq_sandbox: bool,
+    pub qq_alerts: bool,
+    pub qq_status_secs: u64,
+    pub net_alert_rx_mbps: f32,
+    pub qq_ready: bool,
 }
 
 #[derive(Deserialize)]
@@ -127,6 +136,14 @@ pub struct UpdateSettingsRequest {
     pub panel_name: Option<String>,
     pub webhook_url: Option<String>,
     pub username: Option<String>,
+    pub qq_app_id: Option<String>,
+    pub qq_app_secret: Option<String>,
+    pub qq_group_openid: Option<String>,
+    pub qq_user_openid: Option<String>,
+    pub qq_sandbox: Option<bool>,
+    pub qq_alerts: Option<bool>,
+    pub qq_status_secs: Option<u64>,
+    pub net_alert_rx_mbps: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -321,6 +338,21 @@ pub async fn get_settings(State(state): State<SharedState>) -> impl IntoResponse
         bind: state.bind.clone(),
         db_path: crate::db::DB_PATH,
         plugin_host: state.plugin_host.clone(),
+        qq_app_id: panel.qq_app_id.clone(),
+        qq_app_secret_set: !panel.qq_app_secret.is_empty(),
+        qq_group_openid: panel.qq_group_openid.clone(),
+        qq_user_openid: panel.qq_user_openid.clone(),
+        qq_sandbox: panel.qq_sandbox,
+        qq_alerts: panel.qq_alerts,
+        qq_status_secs: panel.qq_status_secs,
+        net_alert_rx_mbps: if panel.net_alert_rx_bps > 0.0 {
+            panel.net_alert_rx_bps / (1024.0 * 1024.0)
+        } else {
+            80.0
+        },
+        qq_ready: !panel.qq_app_id.is_empty()
+            && !panel.qq_app_secret.is_empty()
+            && (!panel.qq_group_openid.is_empty() || !panel.qq_user_openid.is_empty()),
     })
     .into_response()
 }
@@ -330,8 +362,25 @@ pub async fn update_settings(
     Json(body): Json<UpdateSettingsRequest>,
 ) -> impl IntoResponse {
     let conn = state.db.lock().await;
-    let webhook = body.webhook_url.as_deref().map(Some);
-    if let Err(e) = crate::db::update_panel(&conn, body.panel_name.as_deref(), webhook) {
+    let patch = crate::db::PanelPatch {
+        panel_name: body.panel_name.clone(),
+        webhook_url: body.webhook_url.as_ref().map(|s| Some(s.clone())),
+        qq_app_id: body.qq_app_id.clone(),
+        qq_app_secret: body.qq_app_secret.clone(),
+        qq_group_openid: body.qq_group_openid.clone(),
+        qq_user_openid: body.qq_user_openid.clone(),
+        qq_sandbox: body.qq_sandbox,
+        qq_alerts: body.qq_alerts,
+        qq_status_secs: body.qq_status_secs,
+        net_alert_rx_bps: body.net_alert_rx_mbps.map(|m| {
+            if m <= 0.0 {
+                0.0
+            } else {
+                m * 1024.0 * 1024.0
+            }
+        }),
+    };
+    if let Err(e) = crate::db::patch_panel(&conn, patch) {
         return bad_request(e.to_string()).into_response();
     }
     if let Some(new_name) = body.username.as_deref() {
@@ -538,6 +587,82 @@ pub async fn recent_logs(
         return Err(not_found("instance not found"));
     }
     Ok(Json(state.recent_logs(&id).await))
+}
+
+pub async fn metric_history(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    if instance::get_instance(&state, &id).await.is_none() {
+        return Err(not_found("instance not found"));
+    }
+    Ok(Json(state.recent_metrics(&id).await))
+}
+
+#[derive(Serialize)]
+pub struct HostNetworkResponse {
+    pub live: Option<crate::hostnet::HostNetSample>,
+    pub history: Vec<crate::hostnet::HostNetSample>,
+}
+
+pub async fn host_network(State(state): State<SharedState>) -> impl IntoResponse {
+    let live = state.ops.latest.read().await.clone();
+    let history: Vec<_> = state.ops.history.read().await.iter().cloned().collect();
+    Json(HostNetworkResponse { live, history })
+}
+
+pub async fn list_netops(State(state): State<SharedState>) -> impl IntoResponse {
+    Json(crate::netops::status(&state).await)
+}
+
+pub async fn create_netops(
+    State(state): State<SharedState>,
+    Json(req): Json<crate::netops::CreateNetopsRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    map_result(crate::netops::create(&state, req).await)
+}
+
+pub async fn delete_netops(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    match crate::netops::delete(&state, &id).await {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(e) if e.to_string().contains("not found") => Err(not_found(e.to_string())),
+        Err(e) => Err(bad_request(e.to_string())),
+    }
+}
+
+pub async fn kick_netops(
+    State(state): State<SharedState>,
+    Json(req): Json<crate::netops::KickRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    map_result(crate::netops::kick(&state, req).await.map(|_| serde_json::json!({ "ok": true })))
+}
+
+pub async fn resync_netops(
+    State(state): State<SharedState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    map_result(crate::netops::resync(&state).await)
+}
+
+#[derive(Deserialize)]
+pub struct QqTestRequest {
+    pub message: Option<String>,
+}
+
+pub async fn qq_test(
+    State(state): State<SharedState>,
+    Json(body): Json<QqTestRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let text = body
+        .message
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "Cocktail 测试：QQ 机器人接入正常。".into());
+    match crate::ops::send_now(&state, &text).await {
+        Ok(()) => Ok(Json(serde_json::json!({ "ok": true }))),
+        Err(e) => Err(bad_request(e.to_string())),
+    }
 }
 
 pub async fn list_files(
@@ -788,6 +913,12 @@ pub async fn list_core_versions(
     Path(core): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
     map_result(instance::list_versions(&core).await)
+}
+
+pub async fn list_core_loaders(
+    Path((core, version)): Path<(String, String)>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    map_result(instance::list_loaders(&core, &version).await)
 }
 
 pub async fn install_core(
