@@ -9,7 +9,7 @@ const USER_AGENT: &str =
     "Cocktail-Manager/0.1 (contact=dev@local; +https://spiget.org)";
 
 fn client() -> reqwest::Client {
-    reqwest::Client::builder()
+    crate::http::builder()
         .user_agent(USER_AGENT)
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()
@@ -309,7 +309,7 @@ pub async fn download_resource(
             .and_then(|s| s.as_str())
             .filter(|s| !s.is_empty())
         {
-            let bytes = download_url(ext).await?;
+            let bytes = download_url(ext, &format!("Spiget {}", req.resource_id)).await?;
             let name = filename_from_url(ext).unwrap_or_else(|| {
                 format!("spiget-{}.jar", req.resource_id)
             });
@@ -330,7 +330,7 @@ pub async fn download_resource(
         format!("{API}/resources/{}/download", req.resource_id)
     };
 
-    let bytes = download_url(&url).await?;
+    let bytes = download_url(&url, &format!("Spiget {}", req.resource_id)).await?;
     let name = format!(
         "spiget-{}-{}.jar",
         req.resource_id,
@@ -355,28 +355,19 @@ fn filename_from_url(url: &str) -> Option<String> {
     }
 }
 
-async fn download_url(url: &str) -> anyhow::Result<Vec<u8>> {
-    let resp = client().get(url).send().await?.error_for_status()?;
-    let ctype = resp
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    let bytes = resp.bytes().await?;
-    if bytes.len() > 512 * 1024 * 1024 {
-        anyhow::bail!("Spiget file too large (>512MiB)");
-    }
+async fn download_url(url: &str, label: &str) -> anyhow::Result<Vec<u8>> {
+    let job = crate::http::Transfer::new(label);
+    let bytes = crate::http::download_vec(&client(), url, &job, 512 * 1024 * 1024).await?;
     if bytes.len() < 64 {
         anyhow::bail!("Spiget download empty (may be HTML / rate-limited)");
     }
     // Heuristic: jar files start with PK (zip)
     if !bytes.starts_with(b"PK") {
-        if ctype.contains("text/html") || bytes.starts_with(b"<!") || bytes.starts_with(b"<html") {
+        if bytes.starts_with(b"<!") || bytes.starts_with(b"<html") {
             anyhow::bail!(
                 "Spiget returned HTML instead of jar (external/premium/login wall or rate-limit)"
             );
         }
     }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }

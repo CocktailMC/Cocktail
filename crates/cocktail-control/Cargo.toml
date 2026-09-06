@@ -36,6 +36,9 @@ libc.workspace = true
 serde_yaml.workspace = true
 tokio-tungstenite.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+reqwest = { workspace = true, features = ["native-tls"] }
+
 [lib]
 name = "cocktail_control"
 path = "src/lib.rs"

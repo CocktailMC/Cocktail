@@ -7,6 +7,7 @@ mod auth;
 mod cluster;
 mod db;
 mod hostnet;
+mod http;
 mod instance;
 mod java;
 mod netops;
@@ -16,8 +17,12 @@ mod plugin_bridge;
 mod proto;
 mod qqbot;
 mod state;
+mod stdin_bridge;
 mod util;
 mod wincompat;
+mod winnet;
+
+pub use stdin_bridge::run_stdin_bridge;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

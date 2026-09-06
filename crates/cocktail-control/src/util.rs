@@ -430,7 +430,7 @@ pub async fn notify_webhook(url: &str, instance_id: &str, status: &str, name: &s
         "status": status,
         "at": Utc::now().to_rfc3339(),
     });
-    let client = reqwest::Client::new();
+    let client = crate::http::client();
     if let Err(e) = client.post(url).json(&body).send().await {
         tracing::warn!(error = %e, "webhook notify failed");
     }

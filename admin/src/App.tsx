@@ -22,6 +22,7 @@ import {
   type CoreLoader,
   type MetricSample,
   type PanelEvent,
+  type DownloadProgress,
 } from './api'
 import CreateInstancePage from './CreateInstancePage'
 import EulaPage from './EulaPage'
@@ -143,6 +144,7 @@ export default function App() {
   } | null>(null)
   const [busy, setBusy] = useState(false)
   const [busyLabel, setBusyLabel] = useState('处理中…')
+  const [dlProgress, setDlProgress] = useState<DownloadProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [health, setHealth] = useState<string>('…')
   const [envInfo, setEnvInfo] = useState<HealthInfo | null>(null)
@@ -273,6 +275,12 @@ export default function App() {
           type?: string
           instance_id?: string
           status?: InstanceStatus
+          id?: string
+          label?: string
+          phase?: string
+          received?: number
+          total?: number | null
+          pct?: number | null
           sample?: {
             ts: string
             cpu_pct: number
@@ -290,6 +298,18 @@ export default function App() {
         }
         // Logs already stream on logs WS — never re-list for them.
         if (msg.type === 'log') return
+        if (msg.type === 'download_progress') {
+          const next: DownloadProgress = {
+            id: String(msg.id ?? ''),
+            label: String(msg.label ?? ''),
+            phase: String(msg.phase ?? 'download'),
+            received: Number(msg.received ?? 0),
+            total: msg.total ?? null,
+            pct: msg.pct ?? null,
+          }
+          setDlProgress(next)
+          return
+        }
         if (msg.type === 'metric' && msg.instance_id && msg.sample) {
           const sample = msg.sample
           setInstances((prev) =>
@@ -525,7 +545,10 @@ export default function App() {
     setError(null)
   }
 
-  const endBusy = () => setBusy(false)
+  const endBusy = () => {
+    setBusy(false)
+    setDlProgress(null)
+  }
 
   const setBusyState = (v: boolean, label?: string) => {
     if (v) beginBusy(label ?? '处理中…')
@@ -660,6 +683,7 @@ export default function App() {
         <BusyOverlay
           active={busy || gate === 'loading'}
           label={gate === 'loading' ? '正在连接控制面…' : busyLabel}
+          progress={dlProgress}
         />
         {gate === 'setup' && (
           <SetupPage
@@ -718,6 +742,7 @@ export default function App() {
       <BusyOverlay
         active={busy}
         label={busyLabel}
+        progress={dlProgress}
         statusHint={
           selected?.status === 'starting'
             ? `正在启动 ${selected.spec.name}…`

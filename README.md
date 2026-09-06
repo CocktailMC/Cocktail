@@ -64,6 +64,8 @@ cd admin && npm install && npm run dev
 | `COCKTAIL_API_TOKEN` | 机器 Token，供脚本调用（与登录并存） |
 | `COCKTAIL_WEBHOOK_URL` | 全局崩溃 Webhook；也可在面板里覆盖 |
 | `COCKTAIL_WEB_ROOT` | 生产环境 Admin 静态目录 |
+| `COCKTAIL_PROXY` | 强制 HTTP 代理，例如 `http://127.0.0.1:7890` |
+| `HTTPS_PROXY` | 标准代理变量；未设置时 Windows 会读取系统代理（Clash / IE） |
 
 数据目录（相对工作目录）：
 
@@ -109,7 +111,7 @@ sudo systemctl start cocktail-control
 
 会生成 `dist/cocktail-<ver>-windows-x64.zip`。双击 `Start-Cocktail.cmd` 启动控制面（控制台保留日志），浏览器打开 http://127.0.0.1:11011。便携包数据在 exe 旁的 `data\`；MSI 安装后数据在 `%ProgramData%\Cocktail`。
 
-防火墙拉黑需要**以管理员运行**控制面（写入 Windows 防火墙分组 Cocktail）。控制面重启后可认回仍在跑的 Java 进程，但控制台指令依赖启动时的 stdin 管道，认回后无法再向该进程写指令（可在游戏内或下次启动后操作）。踢连接依赖 Linux `ss`/`conntrack`，Windows 上靠防火墙规则与游戏 ban-ip。
+防火墙拉黑与立即踢掉 IPv4 连接需要**以管理员运行**控制面：规则写入 Windows 防火墙分组 Cocktail，踢连接走 IP Helper（`SetTcpEntry`）。IPv6 拦截靠防火墙规则。控制面重启后可认回仍在跑的 Java 进程，并通过命名管道继续向控制台写指令（`stop`、kick 等）。实例网络连接列表不依赖 Linux `ss`/`conntrack`。
 
 若已安装 [WiX v3](https://wixtoolset.org/)（`candle` / `light` / `heat`），额外打出 MSI。
 

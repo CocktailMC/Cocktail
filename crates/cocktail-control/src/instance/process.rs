@@ -386,7 +386,12 @@ fn build_command(bin: &str, args: &[String], workdir: &str, instance_id: &str) -
         let fifo = open_cmd_fifo(workdir)?;
         cmd.stdin(Stdio::from(fifo));
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let bridge_out = crate::stdin_bridge::spawn_bridge(workdir)?;
+        cmd.stdin(Stdio::from(bridge_out));
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         cmd.stdin(Stdio::piped());
     }
@@ -785,7 +790,11 @@ fn open_cmd_fifo(workdir: &str) -> anyhow::Result<std::fs::File> {
             .write(true)
             .open(path)?)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        crate::stdin_bridge::open_pipe_writer(workdir)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = workdir;
         anyhow::bail!("command fifo is not supported on this platform")

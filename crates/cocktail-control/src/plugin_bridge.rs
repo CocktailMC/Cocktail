@@ -50,7 +50,12 @@ pub fn spawn_event_forwarder(state: &std::sync::Arc<AppState>) {
             match rx.recv().await {
                 Ok(event) => {
                     let skip = !verbose
-                        && matches!(event, InstanceEvent::Log { .. } | InstanceEvent::Metric { .. });
+                        && matches!(
+                            event,
+                            InstanceEvent::Log { .. }
+                                | InstanceEvent::Metric { .. }
+                                | InstanceEvent::DownloadProgress { .. }
+                        );
                     if skip {
                         continue;
                     }

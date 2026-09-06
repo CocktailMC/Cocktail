@@ -69,13 +69,21 @@ struct Target {
 
 pub async fn status(state: &AppState) -> NetopsStatus {
     let (nft, iptables, conntrack, ss, privileged) = tokio::task::spawn_blocking(|| {
-        (
-            has_cmd("nft"),
-            has_cmd("iptables"),
-            has_cmd("conntrack"),
-            has_cmd("ss"),
-            is_privileged(),
-        )
+        #[cfg(windows)]
+        {
+            let privileged = is_privileged();
+            (false, false, true, true, privileged)
+        }
+        #[cfg(not(windows))]
+        {
+            (
+                has_cmd("nft"),
+                has_cmd("iptables"),
+                has_cmd("conntrack"),
+                has_cmd("ss"),
+                is_privileged(),
+            )
+        }
     })
     .await
     .unwrap_or((false, false, false, false, false));
@@ -99,9 +107,9 @@ pub async fn status(state: &AppState) -> NetopsStatus {
     };
     let hint = if cfg!(windows) {
         if !privileged {
-            "未以管理员运行：防火墙规则会记下来但无法写入 Windows 防火墙；仍可使用游戏 ban-ip。".into()
+            "未以管理员运行：防火墙规则会记下来但无法写入 Windows 防火墙；踢连接（IP Helper）与游戏 ban-ip 仍可用。建议用管理员启动控制面。".into()
         } else {
-            "规则写入 Windows 高级防火墙分组 Cocktail，只拦截指定游戏端口。".into()
+            "规则写入 Windows 高级防火墙分组 Cocktail。踢连接使用 IP Helper（SetTcpEntry）立即断开 IPv4 TCP；IPv6 靠防火墙规则。".into()
         }
     } else if !privileged {
         "控制面没有 NET_ADMIN/root，防火墙规则会记下来但无法写入内核；仍可踢连接（若有权限）和游戏 ban-ip。".into()
@@ -477,7 +485,7 @@ fn apply_netsh(rules: &[(NetopsRule, Vec<u16>)]) -> anyhow::Result<()> {
         for proto in protos {
             for port in &port_list {
                 let short = rule.id.chars().take(8).collect::<String>();
-                let name = format!("Cocktail {short} {proto} {port} {}", rule.cidr);
+                let name = format!("Cocktail-{short}-{proto}-{port}");
                 let mut args = vec![
                     "advfirewall".into(),
                     "firewall".into(),
@@ -634,7 +642,10 @@ fn ensure_ipt_chain(tool: &str) -> anyhow::Result<()> {
 }
 
 #[cfg(windows)]
-fn kick_conns(_cidr: &str, _ports: &[u16]) {}
+fn kick_conns(cidr: &str, ports: &[u16]) {
+    let n = crate::winnet::kick_conns(cidr, ports);
+    tracing::info!(cidr, killed = n, "windows tcp kick");
+}
 
 #[cfg(not(windows))]
 fn kick_conns(cidr: &str, ports: &[u16]) {

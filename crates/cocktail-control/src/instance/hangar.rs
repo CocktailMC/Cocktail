@@ -9,7 +9,7 @@ const USER_AGENT: &str =
     "Cocktail-Manager/0.1 (contact=dev@local; +https://github.com/HangarMC/Hangar)";
 
 fn client() -> reqwest::Client {
-    reqwest::Client::builder()
+    crate::http::builder()
         .user_agent(USER_AGENT)
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()
@@ -302,14 +302,11 @@ pub async fn pick_version(req: &InstallRequest) -> anyhow::Result<VersionInfo> {
     Ok(versions.remove(0))
 }
 
-pub async fn download_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
-    let resp = client().get(url).send().await?.error_for_status()?;
-    let bytes = resp.bytes().await?;
-    if bytes.len() > 512 * 1024 * 1024 {
-        anyhow::bail!("Hangar file too large (>512MiB)");
-    }
+pub async fn download_bytes(url: &str, label: &str) -> anyhow::Result<Vec<u8>> {
+    let job = crate::http::Transfer::new(label);
+    let bytes = crate::http::download_vec(&client(), url, &job, 512 * 1024 * 1024).await?;
     if bytes.len() < 64 {
         anyhow::bail!("Hangar download too small / empty");
     }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }

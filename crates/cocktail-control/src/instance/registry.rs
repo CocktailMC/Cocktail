@@ -1255,7 +1255,7 @@ pub async fn install_modrinth(
         anyhow::bail!("unsupported file type from Modrinth: {safe_name}");
     }
 
-    let bytes = super::modrinth::download_bytes(&version.primary_url).await?;
+    let bytes = super::modrinth::download_bytes(&version.primary_url, &safe_name).await?;
     let rel = format!("{target}/{safe_name}");
     files::write_bytes(&view.spec.workdir, &rel, &bytes)?;
     util::audit(
@@ -1289,13 +1289,13 @@ pub async fn install_hangar(
         .await
         .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
     let version = super::hangar::pick_version(&req).await?;
-    let bytes = super::hangar::download_bytes(&version.download_url).await?;
     let safe_name = version
         .filename
         .rsplit(['/', '\\'])
         .next()
         .unwrap_or("hangar.jar")
         .to_string();
+    let bytes = super::hangar::download_bytes(&version.download_url, &safe_name).await?;
     let rel = format!("plugins/{safe_name}");
     files::write_bytes(&view.spec.workdir, &rel, &bytes)?;
     util::audit(
@@ -1506,6 +1506,7 @@ pub async fn apply_event(state: &std::sync::Arc<AppState>, event: &InstanceEvent
                 }
             }
         }
+        InstanceEvent::DownloadProgress { .. } => {}
     }
 }
 

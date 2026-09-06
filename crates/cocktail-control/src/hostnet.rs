@@ -285,6 +285,10 @@ fn tcp_states() -> (u32, u32, u32) {
 
 #[cfg(windows)]
 fn tcp_states_netstat() -> (u32, u32, u32) {
+    let helper = crate::winnet::tcp_state_counts();
+    if helper != (0, 0, 0) {
+        return helper;
+    }
     let mut cmd = std::process::Command::new("netstat");
     cmd.args(["-ano", "-p", "tcp"]);
     crate::wincompat::hide_console_std(&mut cmd);
@@ -296,11 +300,11 @@ fn tcp_states_netstat() -> (u32, u32, u32) {
     let mut tw = 0u32;
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         let u = line.to_ascii_uppercase();
-        if u.contains("ESTAB") {
+        if u.contains("ESTAB") || line.contains("已建立") {
             estab += 1;
         } else if u.contains("SYN") {
             syn += 1;
-        } else if u.contains("TIME_WAIT") || u.contains("TIME-WAIT") {
+        } else if u.contains("TIME_WAIT") || u.contains("TIME-WAIT") || line.contains("等待") {
             tw += 1;
         }
     }

@@ -219,6 +219,14 @@ pub enum InstanceEvent {
         instance_id: String,
         sample: MetricSample,
     },
+    DownloadProgress {
+        id: String,
+        label: String,
+        phase: String,
+        received: u64,
+        total: Option<u64>,
+        pct: Option<f32>,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]

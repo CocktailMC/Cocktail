@@ -9,7 +9,7 @@ const USER_AGENT: &str =
     "Cocktail-Manager/0.1 (contact=dev@local; +https://docs.modrinth.com/api/)";
 
 fn client() -> reqwest::Client {
-    reqwest::Client::builder()
+    crate::http::builder()
         .user_agent(USER_AGENT)
         .build()
         .expect("http client")
@@ -133,13 +133,17 @@ pub async fn search(q: &SearchQuery) -> anyhow::Result<SearchResponse> {
         qp.append_pair("facets", &facets_json);
     }
 
+    let url_s = url.as_str().to_string();
     let v: Value = client()
         .get(url)
         .send()
-        .await?
-        .error_for_status()?
+        .await
+        .map_err(|e| crate::http::explain(e, &url_s))?
+        .error_for_status()
+        .map_err(|e| crate::http::explain(e, &url_s))?
         .json()
-        .await?;
+        .await
+        .map_err(|e| crate::http::explain(e, &url_s))?;
 
     let hits = v
         .get("hits")
@@ -341,13 +345,9 @@ pub async fn pick_version(req: &InstallModrinthRequest) -> anyhow::Result<Versio
     Ok(versions.remove(0))
 }
 
-pub async fn download_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
-    let resp = client().get(url).send().await?.error_for_status()?;
-    let bytes = resp.bytes().await?;
-    if bytes.len() > 512 * 1024 * 1024 {
-        anyhow::bail!("modrinth file too large (>512MiB)");
-    }
-    Ok(bytes.to_vec())
+pub async fn download_bytes(url: &str, label: &str) -> anyhow::Result<Vec<u8>> {
+    let job = crate::http::Transfer::new(label);
+    crate::http::download_vec(&client(), url, &job, 512 * 1024 * 1024).await
 }
 
 pub fn infer_target(project_type: &str, loaders: &[String], explicit: Option<&str>) -> String {

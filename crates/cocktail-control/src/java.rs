@@ -8,10 +8,8 @@ use std::time::Duration;
 
 use anyhow::Context;
 use flate2::read::GzDecoder;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tar::Archive;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use zip::ZipArchive;
 
@@ -153,9 +151,8 @@ pub fn runtime_id(major: u32, image: ImageType) -> String {
 }
 
 fn client() -> reqwest::Client {
-    reqwest::Client::builder()
+    crate::http::builder()
         .user_agent(USER_AGENT)
-        .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(600))
         .redirect(reqwest::redirect::Policy::limited(16))
         .build()
@@ -325,7 +322,8 @@ pub fn find_managed(major: u32, prefer: Option<ImageType>) -> Option<InstalledRu
 }
 
 pub async fn probe_system() -> Option<SystemJava> {
-    let mut cmd = tokio::process::Command::new("java");
+    let bin = which_java()?;
+    let mut cmd = tokio::process::Command::new(&bin);
     cmd.arg("-version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -341,7 +339,6 @@ pub async fn probe_system() -> Option<SystemJava> {
         String::from_utf8_lossy(&output.stdout)
     );
     let (major, version) = parse_java_version(&text)?;
-    let bin = which_java().unwrap_or_else(|| "java".into());
     Some(SystemJava {
         java_bin: bin,
         major,
@@ -371,7 +368,10 @@ fn which_java() -> Option<String> {
             }
             if cfg!(windows) {
                 let lower = l.to_ascii_lowercase();
-                lower.ends_with("java.exe") && !lower.ends_with("javaw.exe")
+                lower.ends_with("java.exe")
+                    && !lower.ends_with("javaw.exe")
+                    && !lower.contains(r"\windowsapps\")
+                    && !lower.contains("/windowsapps/")
             } else {
                 true
             }
@@ -503,7 +503,12 @@ pub async fn install(major: u32, image: ImageType) -> anyhow::Result<InstalledRu
     let _ = fs::remove_file(&archive);
     fs::create_dir_all(&staging)?;
 
-    download_to(&url, &archive).await.with_context(|| format!("下载 Temurin {major} 失败"))?;
+    let label = format!("Temurin {major} {}", image.as_str().to_ascii_uppercase());
+    let job = crate::http::Transfer::new(&label);
+    download_to(&url, &archive, &job)
+        .await
+        .with_context(|| format!("下载 Temurin {major} 失败"))?;
+    job.emit("extract", 0, None);
     extract_archive(&archive, &staging)
         .with_context(|| format!("解压 {} 失败", archive.display()))?;
     let _ = fs::remove_file(&archive);
@@ -538,6 +543,7 @@ pub async fn install(major: u32, image: ImageType) -> anyhow::Result<InstalledRu
     }
 
     let installed = read_installed(&dest).ok_or_else(|| anyhow::anyhow!("安装完成但无法读取运行时"))?;
+    job.finish(installed.size_bytes, Some(installed.size_bytes.max(1)));
     tracing::info!(id = %installed.id, bin = %installed.java_bin, "Temurin installed");
     Ok(installed)
 }
@@ -595,17 +601,8 @@ async fn resolve_asset(
     Ok((link, name, release))
 }
 
-async fn download_to(url: &str, dest: &Path) -> anyhow::Result<()> {
-    let resp = client().get(url).send().await?.error_for_status()?;
-    let mut file = tokio::fs::File::create(dest).await?;
-    let mut stream = resp.bytes_stream();
-    let mut written: u64 = 0;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        written += chunk.len() as u64;
-        file.write_all(&chunk).await?;
-    }
-    file.flush().await?;
+async fn download_to(url: &str, dest: &Path, job: &crate::http::Transfer) -> anyhow::Result<()> {
+    let written = crate::http::download_to_path(&client(), url, dest, job).await?;
     if written < 1024 * 1024 {
         anyhow::bail!("下载文件过小（{written} bytes），可能不是完整的 JDK/JRE");
     }
@@ -793,9 +790,17 @@ pub fn apply_java_home(cmd: &mut tokio::process::Command, bin: &str) {
     if !crate::util::is_java_command(bin) {
         return;
     }
-    if let Some(home) = path.parent().and_then(|p| p.parent()) {
-        if home.join("release").is_file() || home.join("lib").is_dir() {
-            cmd.env("JAVA_HOME", home);
+    if let Some(bin_dir) = path.parent() {
+        if let Ok(old) = std::env::var("PATH") {
+            let sep = if cfg!(windows) { ';' } else { ':' };
+            cmd.env("PATH", format!("{}{sep}{old}", bin_dir.display()));
+        } else {
+            cmd.env("PATH", bin_dir);
+        }
+        if let Some(home) = bin_dir.parent() {
+            if home.join("release").is_file() || home.join("lib").is_dir() {
+                cmd.env("JAVA_HOME", home);
+            }
         }
     }
 }

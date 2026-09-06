@@ -18,7 +18,7 @@ chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 regex = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream", "socks"] }
 flate2 = "1"
 tar = "0.4"
 serde = { version = "1", features = ["derive"] }
@@ -33,4 +33,4 @@ uuid = { version = "1", features = ["v4", "serde"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 libc = "0.2"
 serde_yaml = "0.9"
-tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }

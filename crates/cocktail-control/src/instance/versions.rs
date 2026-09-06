@@ -52,9 +52,8 @@ pub fn core_needs_eula(core: &str) -> bool {
 }
 
 fn client() -> reqwest::Client {
-    reqwest::Client::builder()
+    crate::http::builder()
         .user_agent(USER_AGENT)
-        .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(180))
         .build()
         .expect("http client")
@@ -110,7 +109,7 @@ pub async fn download_and_install(
         "quilt" => install_quilt(workdir, version, loader).await,
         "fabric" => {
             let url = resolve_fabric_server_jar(version, loader).await?;
-            write_server_jar(workdir, &url).await
+            write_server_jar(workdir, &url, &format!("Fabric {version}")).await
         }
         "paper" | "folia" | "purpur" | "leaves" | "vanilla" | "mohist" | "banner" | "arclight" => {
             let url = match core {
@@ -124,7 +123,7 @@ pub async fn download_and_install(
                 "arclight" => resolve_arclight_download_url(version, loader).await?,
                 _ => unreachable!(),
             };
-            write_server_jar(workdir, &url).await
+            write_server_jar(workdir, &url, &format!("{core} {version}")).await
         }
         other => anyhow::bail!("unsupported core: {other}"),
     }
@@ -198,25 +197,24 @@ fn take_newest(mut ids: Vec<String>, core: &str) -> Vec<CoreVersion> {
 }
 
 async fn get_json(url: &str) -> anyhow::Result<Value> {
-    Ok(client()
+    let resp = client()
         .get(url)
         .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?)
+        .await
+        .map_err(|e| crate::http::explain(e, url))?;
+    let resp = resp
+        .error_for_status()
+        .map_err(|e| crate::http::explain(e, url))?;
+    resp.json()
+        .await
+        .map_err(|e| crate::http::explain(e, url))
 }
 
-async fn write_server_jar(workdir: &str, url: &str) -> anyhow::Result<(String, Vec<String>)> {
+async fn write_server_jar(workdir: &str, url: &str, label: &str) -> anyhow::Result<(String, Vec<String>)> {
     let jar_path = Path::new(workdir).join("server.jar");
     tracing::info!(%url, "downloading server jar");
-    let bytes = client()
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+    let job = crate::http::Transfer::new(label);
+    let bytes = crate::http::download_vec(&client(), url, &job, 512 * 1024 * 1024).await?;
     if bytes.len() < 1024 {
         anyhow::bail!("downloaded jar looks too small ({} bytes)", bytes.len());
     }
@@ -225,21 +223,20 @@ async fn write_server_jar(workdir: &str, url: &str) -> anyhow::Result<(String, V
     Ok(crate::util::java_jar_startup("server.jar"))
 }
 
-async fn download_file(url: &str, dest: &Path) -> anyhow::Result<u64> {
+async fn download_file(url: &str, dest: &Path, label: &str) -> anyhow::Result<u64> {
     tracing::info!(%url, path = %dest.display(), "downloading");
-    let bytes = client()
-        .get(url)
+    let job = crate::http::Transfer::new(label);
+    let client = crate::http::builder()
+        .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(300))
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
-    if bytes.len() < 1024 {
-        anyhow::bail!("downloaded file looks too small ({} bytes)", bytes.len());
+        .build()
+        .expect("http client");
+    let n = crate::http::download_to_path(&client, url, dest, &job).await?;
+    job.finish(n, Some(n));
+    if n < 1024 {
+        anyhow::bail!("downloaded file looks too small ({n} bytes)");
     }
-    fs::write(dest, &bytes)?;
-    Ok(bytes.len() as u64)
+    Ok(n)
 }
 
 // --- Paper Fill (paper / folia) ---
@@ -596,7 +593,7 @@ async fn install_quilt(
     };
     let (_ver, url) = latest_quilt_installer_url().await?;
     let installer = Path::new(workdir).join("quilt-installer.jar");
-    download_file(&url, &installer).await?;
+    download_file(&url, &installer, "Quilt 安装器").await?;
     let java = installer_java(mc).await?;
     run_java_installer(
         &java,
@@ -695,13 +692,17 @@ fn strip_mc_prefix(mc: &str, loader: &str) -> String {
 }
 
 async fn get_text(url: &str) -> anyhow::Result<String> {
-    Ok(client()
+    let resp = client()
         .get(url)
         .send()
-        .await?
-        .error_for_status()?
-        .text()
-        .await?)
+        .await
+        .map_err(|e| crate::http::explain(e, url))?;
+    let resp = resp
+        .error_for_status()
+        .map_err(|e| crate::http::explain(e, url))?;
+    resp.text()
+        .await
+        .map_err(|e| crate::http::explain(e, url))
 }
 
 async fn list_forge_loaders(mc: &str) -> anyhow::Result<Vec<CoreLoader>> {
@@ -748,7 +749,7 @@ async fn install_forge(
         "https://maven.minecraftforge.net/net/minecraftforge/forge/{combo}/forge-{combo}-installer.jar"
     );
     let installer = Path::new(workdir).join("forge-installer.jar");
-    download_file(&url, &installer).await?;
+    download_file(&url, &installer, &format!("Forge {mc}")).await?;
     let java = installer_java(mc).await?;
     run_java_installer(&java, workdir, &installer, &["--installServer"]).await?;
     let _ = fs::remove_file(&installer);
@@ -865,7 +866,7 @@ async fn install_neoforge(
         "https://maven.neoforged.net/releases/net/neoforged/neoforge/{build}/neoforge-{build}-installer.jar"
     );
     let installer = Path::new(workdir).join("neoforge-installer.jar");
-    download_file(&url, &installer).await?;
+    download_file(&url, &installer, &format!("NeoForge {build}")).await?;
     let java = installer_java(mc).await?;
     run_java_installer(&java, workdir, &installer, &["--installServer"]).await?;
     let _ = fs::remove_file(&installer);

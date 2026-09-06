@@ -1398,6 +1398,35 @@
   animation: load-slide 1.1s ease-in-out infinite;
 }
 
+.load-bar-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #60a5fa, #0f4c81);
+  transition: width 0.18s linear;
+}
+
+.busy-progress {
+  margin: 0.9rem 0 0;
+  height: 8px;
+  border-radius: 99px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.busy-progress > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #60a5fa, #0f4c81);
+  transition: width 0.18s linear;
+}
+
+.busy-progress.pulse > span {
+  width: 40%;
+  animation: load-slide 1.1s ease-in-out infinite;
+}
+
 @keyframes load-slide {
   0% {
     transform: translateX(-120%);

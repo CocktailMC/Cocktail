@@ -54,7 +54,8 @@ struct PersistedState {
 
 impl AppState {
     pub fn new() -> Self {
-        let (events, _) = broadcast::channel(1024);
+        let (events, _) = broadcast::channel(2048);
+        crate::http::attach_events(events.clone());
         let db = db::open().expect("open sqlite database (data/cocktail.db)");
         if let Err(e) = db::ensure_local_node(&db) {
             tracing::warn!(error = %e, "ensure local node");
@@ -72,8 +73,7 @@ impl AppState {
             .filter(|s| !s.is_empty());
         let plugin_host = crate::plugin_bridge::default_host_url();
         let plugin_token = crate::plugin_bridge::resolve_token();
-        let http = reqwest::Client::builder()
-            .no_proxy()
+        let http = crate::http::builder()
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         let setup_pending = crate::auth::setup_required(&db).unwrap_or(true);

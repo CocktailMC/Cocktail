@@ -238,7 +238,27 @@ fn collect_sockets(port: u16, pid: u32, docker: bool) -> Vec<Sock> {
         parse_proc_table(Path::new("/proc/net/udp"), port, true, &mut out);
         parse_proc_table(Path::new("/proc/net/udp6"), port, true, &mut out);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let _ = (pid, docker);
+        let helper = crate::winnet::sockets_on_port(port);
+        if !helper.is_empty() {
+            out.extend(helper.into_iter().map(|s| Sock {
+                local_ip: s.local_ip,
+                remote_ip: s.remote_ip,
+                remote_port: s.remote_port,
+                listen: s.listen,
+                established: s.established,
+                syn_recv: s.syn_recv,
+                time_wait: s.time_wait,
+                fin_wait: s.fin_wait,
+                udp: s.udp,
+            }));
+        } else if let Some(extra) = ss_sockets(port) {
+            out.extend(extra);
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (pid, docker);
         if let Some(extra) = ss_sockets(port) {
@@ -269,7 +289,21 @@ fn byte_counters(port: u16, pid: u32, docker: bool) -> Traffic {
             };
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let _ = (pid, docker);
+        if let Some((rx, tx)) = crate::winnet::tcp_bytes_on_port(port) {
+            return Traffic {
+                rx,
+                tx,
+                rx_pkts: 0,
+                tx_pkts: 0,
+                drops: 0,
+                errors: 0,
+            };
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (port, pid, docker);
     }
@@ -597,8 +631,8 @@ fn netstat_sockets(port: u16) -> Option<Vec<Sock>> {
                 .map(|r| r.0)
                 .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
             remote_port: remote.map(|r| r.1).unwrap_or(0),
-            listen: st.contains("LISTEN") || st.contains("LISTENING"),
-            established: st.contains("ESTAB") || st.contains("已建立"),
+            listen: st.contains("LISTEN") || state.contains("侦听"),
+            established: st.contains("ESTAB") || state.contains("已建立"),
             syn_recv: st.contains("SYN"),
             time_wait: st.contains("TIME_WAIT") || st.contains("TIME-WAIT"),
             fin_wait: st.contains("FIN"),

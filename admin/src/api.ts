@@ -47,6 +47,15 @@ export function formatBytes(n?: number | null): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GiB`
 }
 
+export type DownloadProgress = {
+  id: string
+  label: string
+  phase: string
+  received: number
+  total?: number | null
+  pct?: number | null
+}
+
 export type NetPeer = {
   ip: string
   connections: number

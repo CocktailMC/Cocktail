@@ -117,6 +117,7 @@ async fn serve_once(url: &str) -> anyhow::Result<()> {
                         let up = AgentUp::Status { instance_id, status, pid };
                         sink.send(Message::Text(serde_json::to_string(&up)?.into())).await?;
                     }
+                    Ok(InstanceEvent::DownloadProgress { .. }) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(_) => break,
                 }
