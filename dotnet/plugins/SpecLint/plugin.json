@@ -1,0 +1,18 @@
+{
+  "id": "speclint",
+  "name": "Spec 巡检",
+  "version": "0.1.0",
+  "description": "对声明式实例 spec 做 GameOps 巡检：EULA、期望状态、节点、端口。",
+  "entryAssembly": "Cocktail.Plugins.SpecLint.dll",
+  "entryType": "Cocktail.Plugins.SpecLint.SpecLintPlugin",
+  "permissions": [
+    "http.expose",
+    "controlplane.instances.read",
+    "ui.contribute"
+  ],
+  "ui": {
+    "label": "Spec 巡检",
+    "icon": "fa-check-square",
+    "path": "/report"
+  }
+}

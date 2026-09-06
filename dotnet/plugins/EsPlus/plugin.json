@@ -1,0 +1,20 @@
+{
+  "id": "esplus",
+  "name": "ESPlus 适配",
+  "version": "0.1.0",
+  "description": "扫描 NeoForge 实例的 ESPlus 模组与面板配置；可写入 loopback 面板密码、从 GitHub Releases 安装 jar，并只读代理 dashboard/audit/alerts。",
+  "entryAssembly": "Cocktail.Plugins.EsPlus.dll",
+  "entryType": "Cocktail.Plugins.EsPlus.EsPlusPlugin",
+  "permissions": [
+    "http.expose",
+    "controlplane.instances.read",
+    "controlplane.files.read",
+    "controlplane.files.write",
+    "ui.contribute"
+  ],
+  "ui": {
+    "label": "ESPlus",
+    "icon": "fa-shield",
+    "path": "/summary"
+  }
+}

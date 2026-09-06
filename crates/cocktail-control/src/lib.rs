@@ -7,6 +7,7 @@ mod cluster;
 mod db;
 mod instance;
 mod platform;
+mod plugin_bridge;
 mod proto;
 mod state;
 mod util;
@@ -44,6 +45,8 @@ pub async fn run_plane() -> anyhow::Result<()> {
     instance::reattach_running(&state).await;
     state.spawn_scheduler();
     state.spawn_reconciler();
+    crate::plugin_bridge::spawn_event_forwarder(&state);
+    crate::plugin_bridge::maybe_autostart(&state);
 
     let api = api::router()
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))

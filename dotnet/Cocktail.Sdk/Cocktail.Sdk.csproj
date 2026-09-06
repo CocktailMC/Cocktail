@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Cocktail.Sdk</RootNamespace>
+    <AssemblyName>Cocktail.Sdk</AssemblyName>
+    <IsPackable>true</IsPackable>
+    <PackageId>Cocktail.Sdk</PackageId>
+  </PropertyGroup>
+</Project>

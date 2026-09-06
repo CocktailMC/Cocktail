@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <RootNamespace>Cocktail.PluginHost</RootNamespace>
+    <AssemblyName>Cocktail.PluginHost</AssemblyName>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Cocktail.Sdk\Cocktail.Sdk.csproj" />
+  </ItemGroup>
+</Project>

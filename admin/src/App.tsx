@@ -27,6 +27,7 @@ import HomePage from './HomePage'
 import HomeSettings from './HomeSettings'
 import AuditPage from './AuditPage'
 import NodesPage from './NodesPage'
+import ExtensionsPage from './ExtensionsPage'
 import SpecYamlPanel from './SpecYamlPanel'
 import SetupPage from './SetupPage'
 import LoginPage from './LoginPage'
@@ -95,7 +96,7 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [view, setView] = useState<'manager' | 'create' | 'eula'>('manager')
   const [homeTab, setHomeTab] = useState<
-    'overview' | 'settings' | 'audit' | 'nodes'
+    'overview' | 'settings' | 'audit' | 'nodes' | 'extensions'
   >('overview')
   const [mkdirName, setMkdirName] = useState('')
   const [setCommand, setSetCommand] = useState('java')
@@ -484,7 +485,7 @@ export default function App() {
   }
 
   const goHome = (
-    tab: 'overview' | 'settings' | 'audit' | 'nodes' = 'overview',
+    tab: 'overview' | 'settings' | 'audit' | 'nodes' | 'extensions' = 'overview',
   ) => {
     setSelectedId(null)
     setHomeTab(tab)
@@ -794,6 +795,18 @@ export default function App() {
               <button
                 type="button"
                 className={
+                  !selected && homeTab === 'extensions'
+                    ? 'nav-item active'
+                    : 'nav-item'
+                }
+                onClick={() => goHome('extensions')}
+              >
+                <i className="fa fa-puzzle-piece" />
+                .NET 插件
+              </button>
+              <button
+                type="button"
+                className={
                   !selected && homeTab === 'audit'
                     ? 'nav-item active'
                     : 'nav-item'
@@ -938,6 +951,11 @@ export default function App() {
                 />
               ) : homeTab === 'nodes' ? (
                 <NodesPage
+                  onBack={() => goHome('overview')}
+                  onError={setError}
+                />
+              ) : homeTab === 'extensions' ? (
+                <ExtensionsPage
                   onBack={() => goHome('overview')}
                   onError={setError}
                 />

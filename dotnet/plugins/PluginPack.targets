@@ -1,0 +1,16 @@
+<Project>
+  <Target Name="PackPlugin" AfterTargets="Build">
+    <PropertyGroup>
+      <_PluginOut>$(MSBuildThisFileDirectory)..\dist\plugins\$(PluginId)\</_PluginOut>
+    </PropertyGroup>
+    <MakeDir Directories="$(_PluginOut)" />
+    <ItemGroup>
+      <_PluginFiles Include="$(OutputPath)$(AssemblyName).dll" />
+      <_PluginFiles Include="$(OutputPath)$(AssemblyName).pdb" Condition="Exists('$(OutputPath)$(AssemblyName).pdb')" />
+      <_PluginFiles Include="$(MSBuildProjectDirectory)\plugin.json" />
+      <_PluginDeps Include="$(OutputPath)*.dll" Exclude="$(OutputPath)$(AssemblyName).dll;$(OutputPath)Cocktail.Sdk.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PluginFiles)" DestinationFolder="$(_PluginOut)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_PluginDeps)" DestinationFolder="$(_PluginOut)" SkipUnchangedFiles="true" Condition="'@(_PluginDeps)' != ''" />
+  </Target>
+</Project>

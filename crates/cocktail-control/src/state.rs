@@ -22,6 +22,9 @@ pub struct AppState {
     pub log_buffers: RwLock<HashMap<String, VecDeque<LogLine>>>,
     pub db: Mutex<rusqlite::Connection>,
     pub agents: Mutex<HashMap<String, mpsc::UnboundedSender<AgentDown>>>,
+    pub http: reqwest::Client,
+    pub plugin_host: String,
+    pub plugin_token: String,
     pub env_api_token: Option<String>,
     pub env_webhook_url: Option<String>,
     pub bind: String,
@@ -52,6 +55,12 @@ impl AppState {
         let env_webhook_url = std::env::var("COCKTAIL_WEBHOOK_URL")
             .ok()
             .filter(|s| !s.is_empty());
+        let plugin_host = crate::plugin_bridge::default_host_url();
+        let plugin_token = crate::plugin_bridge::resolve_token();
+        let http = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         let setup_pending = crate::auth::setup_required(&db).unwrap_or(true);
         let state = Self {
             instances: RwLock::new(instances),
@@ -60,6 +69,9 @@ impl AppState {
             log_buffers: RwLock::new(HashMap::new()),
             db: Mutex::new(db),
             agents: Mutex::new(HashMap::new()),
+            http,
+            plugin_host,
+            plugin_token,
             env_api_token,
             env_webhook_url,
             bind,
@@ -94,6 +106,9 @@ impl AppState {
             .as_ref()
             .is_some_and(|expected| expected == token)
         {
+            return true;
+        }
+        if !self.plugin_token.is_empty() && self.plugin_token == token {
             return true;
         }
         let conn = self.db.lock().await;

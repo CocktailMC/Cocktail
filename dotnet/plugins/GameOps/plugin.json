@@ -1,0 +1,23 @@
+{
+  "id": "gameops",
+  "name": "GameOps 资源控制",
+  "version": "0.1.0",
+  "description": "声明式 World / PluginSet / Proxy / Network；Node 与 Instance 从控制面观察并协调。",
+  "entryAssembly": "Cocktail.Plugins.GameOps.dll",
+  "entryType": "Cocktail.Plugins.GameOps.GameOpsPlugin",
+  "permissions": [
+    "http.expose",
+    "scheduler",
+    "events.subscribe",
+    "controlplane.instances.read",
+    "controlplane.instances.write",
+    "controlplane.nodes.read",
+    "controlplane.files.write",
+    "ui.contribute"
+  ],
+  "ui": {
+    "label": "GameOps",
+    "icon": "fa-cubes",
+    "path": "/summary"
+  }
+}

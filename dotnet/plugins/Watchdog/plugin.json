@@ -1,0 +1,21 @@
+{
+  "id": "watchdog",
+  "name": "崩溃看门狗",
+  "version": "0.1.0",
+  "description": "记录实例崩溃事件，可按策略请求控制面再次启动。",
+  "entryAssembly": "Cocktail.Plugins.Watchdog.dll",
+  "entryType": "Cocktail.Plugins.Watchdog.WatchdogPlugin",
+  "permissions": [
+    "http.expose",
+    "events.subscribe",
+    "scheduler",
+    "controlplane.instances.read",
+    "controlplane.instances.write",
+    "ui.contribute"
+  ],
+  "ui": {
+    "label": "看门狗",
+    "icon": "fa-heartbeat",
+    "path": "/summary"
+  }
+}

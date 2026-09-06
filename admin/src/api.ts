@@ -307,6 +307,7 @@ export type PanelSettings = {
   admin_created_at: string
   bind: string
   db_path: string
+  plugin_host?: string
 }
 
 export type NodeInfo = {
@@ -344,6 +345,29 @@ export type HealthInfo = {
   distro_version?: string
   kernel?: string
   wsl?: boolean
+  plugin_host?: string
+  plugin_host_ok?: boolean
+  plugins?: number
+}
+
+export type ExtensionInfo = {
+  id: string
+  name: string
+  version: string
+  description?: string
+  permissions?: string[]
+  ui?: { label?: string; icon?: string; path?: string } | null
+  enabled: boolean
+  running: boolean
+  error?: string | null
+  directory?: string
+}
+
+export type ExtensionsList = {
+  host: string
+  online: boolean
+  error?: string | null
+  items: ExtensionInfo[]
 }
 
 export const api = {
@@ -414,6 +438,33 @@ export const api = {
       headers: { 'Content-Type': 'application/yaml' },
       body: yaml,
     }),
+  listExtensions: () => request<ExtensionsList>('/api/v1/extensions'),
+  reloadExtensions: () =>
+    request<{ ok?: boolean; plugins?: number }>('/api/v1/extensions/reload', {
+      method: 'POST',
+    }),
+  setExtensionEnabled: (id: string, enabled: boolean) =>
+    request<{ ok?: boolean }>(`/api/v1/extensions/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    }),
+  extensionGet: (pluginId: string, path: string) => {
+    const p = path.startsWith('/') ? path : `/${path}`
+    return request<unknown>(`/api/v1/ext/${pluginId}${p}`)
+  },
+  extensionPost: (pluginId: string, path: string, body: unknown) => {
+    const p = path.startsWith('/') ? path : `/${path}`
+    return request<unknown>(`/api/v1/ext/${pluginId}${p}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  },
+  extensionText: (pluginId: string, path: string) => {
+    const p = path.startsWith('/') ? path : `/${path}`
+    return requestText(`/api/v1/ext/${pluginId}${p}`)
+  },
   listInstances: () => request<Instance[]>('/api/v1/instances'),
   createInstance: (body: CreateInstanceBody) =>
     request<Instance>('/api/v1/instances', {

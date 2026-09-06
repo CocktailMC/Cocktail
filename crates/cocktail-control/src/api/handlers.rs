@@ -37,6 +37,9 @@ pub struct HealthResponse {
     pub distro_version: String,
     pub kernel: String,
     pub wsl: bool,
+    pub plugin_host: String,
+    pub plugin_host_ok: bool,
+    pub plugins: usize,
 }
 
 pub async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
@@ -51,6 +54,7 @@ pub async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
         .flatten()
         .map(|a| a.username);
     drop(conn);
+    let (plugin_host_ok, plugins) = crate::plugin_bridge::health_snapshot(&state).await;
     Json(HealthResponse {
         name: "cocktail-control",
         version: env!("CARGO_PKG_VERSION"),
@@ -69,6 +73,9 @@ pub async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
         distro_version: p.distro_version,
         kernel: p.kernel,
         wsl: p.wsl,
+        plugin_host: state.plugin_host.clone(),
+        plugin_host_ok,
+        plugins,
     })
 }
 
@@ -112,6 +119,7 @@ pub struct SettingsResponse {
     pub admin_created_at: String,
     pub bind: String,
     pub db_path: &'static str,
+    pub plugin_host: String,
 }
 
 #[derive(Deserialize)]
@@ -312,6 +320,7 @@ pub async fn get_settings(State(state): State<SharedState>) -> impl IntoResponse
         admin_created_at: admin.created_at,
         bind: state.bind.clone(),
         db_path: crate::db::DB_PATH,
+        plugin_host: state.plugin_host.clone(),
     })
     .into_response()
 }
@@ -1188,6 +1197,86 @@ pub async fn apply_instance_spec(
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
     map_result(instance::apply_spec_body(&state, &id, &body).await)
+}
+
+#[derive(Serialize)]
+pub struct ExtensionsList {
+    pub host: String,
+    pub online: bool,
+    pub error: Option<String>,
+    pub items: Vec<serde_json::Value>,
+}
+
+pub async fn list_extensions(State(state): State<SharedState>) -> impl IntoResponse {
+    match crate::plugin_bridge::catalog(&state).await {
+        Ok(items) => Json(ExtensionsList {
+            host: state.plugin_host.clone(),
+            online: true,
+            error: None,
+            items,
+        }),
+        Err(e) => Json(ExtensionsList {
+            host: state.plugin_host.clone(),
+            online: false,
+            error: Some(e.to_string()),
+            items: Vec::new(),
+        }),
+    }
+}
+
+pub async fn reload_extensions(
+    State(state): State<SharedState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    crate::plugin_bridge::reload(&state)
+        .await
+        .map(Json)
+        .map_err(|e| bad_request(e.to_string()))
+}
+
+#[derive(Deserialize)]
+pub struct ExtensionEnabledBody {
+    pub enabled: bool,
+}
+
+pub async fn set_extension_enabled(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Json(body): Json<ExtensionEnabledBody>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    crate::plugin_bridge::set_enabled(&state, &id, body.enabled)
+        .await
+        .map(Json)
+        .map_err(|e| bad_request(e.to_string()))
+}
+
+pub async fn proxy_extension_root(
+    State(state): State<SharedState>,
+    Path(plugin_id): Path<String>,
+    req: axum::http::Request<Body>,
+) -> Response {
+    proxy_extension_inner(state, plugin_id, String::new(), req).await
+}
+
+pub async fn proxy_extension(
+    State(state): State<SharedState>,
+    Path((plugin_id, rest)): Path<(String, String)>,
+    req: axum::http::Request<Body>,
+) -> Response {
+    proxy_extension_inner(state, plugin_id, rest, req).await
+}
+
+async fn proxy_extension_inner(
+    state: SharedState,
+    plugin_id: String,
+    rest: String,
+    req: axum::http::Request<Body>,
+) -> Response {
+    let method = req.method().clone();
+    let headers = req.headers().clone();
+    let body = axum::body::to_bytes(req.into_body(), 32 * 1024 * 1024)
+        .await
+        .unwrap_or_default();
+    crate::plugin_bridge::proxy(&state, &plugin_id, &rest, method, headers, body).await
 }
 
 fn map_result<T: Serialize>(

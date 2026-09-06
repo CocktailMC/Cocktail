@@ -1,6 +1,6 @@
 mod handlers;
 
-use axum::routing::{delete, get, post};
+use axum::routing::{any, delete, get, post, put};
 use axum::Router;
 
 use crate::state::SharedState;
@@ -179,5 +179,16 @@ pub fn router() -> Router<SharedState> {
         .route(
             "/api/v1/instances/{id}/spec",
             get(handlers::get_instance_spec).put(handlers::apply_instance_spec),
+        )
+        .route("/api/v1/extensions", get(handlers::list_extensions))
+        .route("/api/v1/extensions/reload", post(handlers::reload_extensions))
+        .route(
+            "/api/v1/extensions/{id}",
+            put(handlers::set_extension_enabled),
+        )
+        .route("/api/v1/ext/{plugin_id}", any(handlers::proxy_extension_root))
+        .route(
+            "/api/v1/ext/{plugin_id}/{*rest}",
+            any(handlers::proxy_extension),
         )
 }

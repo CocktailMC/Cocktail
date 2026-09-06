@@ -7,3 +7,6 @@ admin/dist/
 .DS_Store
 .env
 .env.*
+dotnet/**/bin/
+dotnet/**/obj/
+dotnet/dist/

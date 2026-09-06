@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Cocktail.Plugins.SpecLint</RootNamespace>
+    <AssemblyName>Cocktail.Plugins.SpecLint</AssemblyName>
+    <PluginId>speclint</PluginId>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Cocktail.Sdk\Cocktail.Sdk.csproj">
+      <Private>false</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Import Project="..\PluginPack.targets" />
+</Project>
