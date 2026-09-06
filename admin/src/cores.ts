@@ -38,6 +38,24 @@ export const INSTALLABLE_CORE_IDS = INSTALLABLE_CORE_GROUPS.flatMap((g) =>
   g.items.map((i) => i.id),
 )
 
+export function recommendedJavaMajor(mc?: string): number {
+  if (!mc) return 21
+  const nums = mc
+    .split(/[^\d]+/)
+    .filter(Boolean)
+    .map((s) => Number(s))
+    .filter((n) => Number.isFinite(n))
+  const minor =
+    nums[0] === 1 ? (nums[1] ?? 0) : (nums[0] ?? 0)
+  const patch =
+    nums[0] === 1 ? (nums[2] ?? 0) : (nums[1] ?? 0)
+  if (minor >= 21 || (minor === 20 && patch >= 5)) return 21
+  if (minor >= 17) return 17
+  return 8
+}
+
+export const JAVA_MAJORS = [8, 11, 17, 21, 25] as const
+
 export function isInstallableCore(core: string): boolean {
   return INSTALLABLE_CORE_IDS.includes(core)
 }

@@ -20,6 +20,7 @@ pub struct OpsRuntime {
     prev: Mutex<HostNetPrev>,
     alert_seen: Mutex<HashMap<String, Instant>>,
     last_status: Mutex<Option<Instant>>,
+    pub auto_hold: Mutex<HashMap<String, Instant>>,
 }
 
 impl OpsRuntime {
@@ -31,6 +32,7 @@ impl OpsRuntime {
             prev: Mutex::new(HostNetPrev::default()),
             alert_seen: Mutex::new(HashMap::new()),
             last_status: Mutex::new(None),
+            auto_hold: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -42,6 +44,9 @@ pub fn spawn(state: &SharedState) {
         loop {
             interval.tick().await;
             let _ = crate::netops::expire_now(&state).await;
+            crate::automations::tick(&state).await;
+            crate::automations::run_backup_hours(&state).await;
+            sample_local_node(&state).await;
             if let Err(e) = tick(&state).await {
                 tracing::debug!(error = %e, "ops tick");
             }
@@ -264,4 +269,33 @@ pub async fn notify_event(state: &SharedState, title: &str, body: &str) {
     if let Err(e) = state.ops.qq.send_text(&state.http, &qq, &text).await {
         tracing::warn!(error = %e, "qq event notify failed");
     }
+}
+
+async fn sample_local_node(state: &SharedState) {
+    let (cpu_pct, memory_mib) = tokio::task::spawn_blocking(|| {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_cpu_all();
+        sys.refresh_memory();
+        (
+            sys.global_cpu_usage(),
+            (sys.used_memory() as f32) / (1024.0 * 1024.0),
+        )
+    })
+    .await
+    .unwrap_or((0.0, 0.0));
+    let host = state.ops.latest.read().await;
+    let (rx_bps, tx_bps) = host
+        .as_ref()
+        .map(|s| (s.rx_bps, s.tx_bps))
+        .unwrap_or((0.0, 0.0));
+    drop(host);
+    state.node_live.write().await.insert(
+        "local".into(),
+        crate::state::NodeLive {
+            cpu_pct,
+            memory_mib,
+            rx_bps,
+            tx_bps,
+        },
+    );
 }

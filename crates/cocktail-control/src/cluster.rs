@@ -132,9 +132,24 @@ async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
             let conn = state.db.lock().await;
             let _ = db::touch_node(&conn, node_id, Some(&hostname), Some(&os), Some(&arch));
         }
-        AgentUp::Heartbeat => {
+        AgentUp::Heartbeat {
+            cpu_pct,
+            memory_mib,
+            rx_bps,
+            tx_bps,
+        } => {
             let conn = state.db.lock().await;
             let _ = db::touch_node(&conn, node_id, None, None, None);
+            drop(conn);
+            state.node_live.write().await.insert(
+                node_id.to_string(),
+                crate::state::NodeLive {
+                    cpu_pct,
+                    memory_mib,
+                    rx_bps,
+                    tx_bps,
+                },
+            );
         }
         AgentUp::Status {
             instance_id,
@@ -208,10 +223,27 @@ pub async fn list_views(state: &crate::state::AppState) -> anyhow::Result<Vec<db
     let mut nodes = db::list_nodes(&conn)?;
     drop(conn);
     let agents = state.agents.lock().await;
+    let live = state.node_live.read().await;
+    let inst_counts = {
+        let g = state.instances.read().await;
+        let mut m = std::collections::HashMap::<String, usize>::new();
+        for i in g.values() {
+            *m.entry(i.spec.node_id.clone()).or_insert(0) += 1;
+        }
+        m
+    };
     let mut out = Vec::new();
     for n in nodes.drain(..) {
         let online = n.kind == "local" || agents.contains_key(&n.id);
-        out.push(n.into_view(online));
+        let mut v = n.into_view(online);
+        if let Some(s) = live.get(&v.id) {
+            v.cpu_pct = s.cpu_pct;
+            v.memory_mib = s.memory_mib;
+            v.rx_bps = s.rx_bps;
+            v.tx_bps = s.tx_bps;
+        }
+        v.instance_count = inst_counts.get(&v.id).copied().unwrap_or(0);
+        out.push(v);
     }
     Ok(out)
 }

@@ -88,6 +88,10 @@ pub async fn create_instance(
         group: req.group,
         node_id,
         desired_running: false,
+        backup_keep: req.backup_keep.unwrap_or(7).clamp(1, 90),
+        backup_hour: req.backup_hour.filter(|h| *h <= 23),
+        java_major: req.java_major.filter(|m| *m >= 8),
+        mc_version: None,
     };
 
     let instance = Instance::new(spec);
@@ -187,6 +191,15 @@ pub async fn update_instance(
     }
     if let Some(desired) = req.desired_running {
         instance.spec.desired_running = desired;
+    }
+    if let Some(k) = req.backup_keep {
+        instance.spec.backup_keep = k.clamp(1, 90);
+    }
+    if let Some(h) = req.backup_hour {
+        instance.spec.backup_hour = if h <= 23 { Some(h) } else { None };
+    }
+    if let Some(m) = req.java_major {
+        instance.spec.java_major = if m >= 8 { Some(m) } else { None };
     }
     instance.generation = instance.generation.saturating_add(1);
     instance.updated_at = Utc::now();
@@ -314,6 +327,8 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
         .clone()
         .unwrap_or_else(|| "eclipse-temurin:21-jre".into());
     let cpu_limit = instance.spec.cpu_limit;
+    let java_major = instance.spec.java_major;
+    let mc_version = instance.spec.mc_version.clone();
     let events = state.events.clone();
 
     // Auto-wire java -jar if server.jar exists but command was never set.
@@ -350,6 +365,44 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
         status: InstanceStatus::Starting,
         at: Utc::now(),
     });
+    drop(guard);
+
+    let docker_image = if runtime == RuntimeKind::Docker
+        && (docker_image.is_empty() || docker_image.starts_with("eclipse-temurin:"))
+    {
+        crate::java::docker_image_for(
+            java_major.unwrap_or_else(|| crate::java::recommended_java_major(mc_version.as_deref())),
+        )
+    } else {
+        docker_image
+    };
+    let command = if runtime == RuntimeKind::Process
+        && command
+            .as_deref()
+            .is_some_and(util::is_java_command)
+    {
+        match crate::java::ensure_for_spec(java_major, mc_version.as_deref()).await {
+            Ok(bin) => crate::java::rewrite_java_command(command, &bin),
+            Err(e) => {
+                let mut g = state.instances.write().await;
+                if let Some(inst) = g.get_mut(&instance_id) {
+                    inst.status = InstanceStatus::Stopped;
+                    inst.spec.desired_running = false;
+                    inst.updated_at = Utc::now();
+                }
+                drop(g);
+                let _ = state.persist().await;
+                anyhow::bail!("无法准备 Java 运行时（Adoptium Temurin）：{e}");
+            }
+        }
+    } else {
+        command
+    };
+
+    let mut guard = state.instances.write().await;
+    let instance = guard
+        .get_mut(&instance_id)
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
 
     let handle = match runtime {
         RuntimeKind::Docker => {
@@ -1020,6 +1073,11 @@ pub async fn set_startup_jar(
 pub async fn create_backup(state: &AppState, id: &str) -> anyhow::Result<BackupInfo> {
     let workdir = workdir_of(state, id).await?;
     let bak = files::create_backup(id, &workdir)?;
+    let keep = get_instance(state, id)
+        .await
+        .map(|v| v.spec.backup_keep.max(1))
+        .unwrap_or(7);
+    let _ = files::prune_backups(id, keep);
     util::audit("backup.create", Some(id), json!({ "id": bak.id }), "api");
     Ok(bak)
 }
@@ -1402,6 +1460,7 @@ pub async fn apply_event(state: &std::sync::Arc<AppState>, event: &InstanceEvent
                         &format!("{sname} ({sid}) 进程异常退出"),
                     )
                     .await;
+                    crate::automations::on_crash(&state, &sid, &sname).await;
                 });
             }
             if should_restart {
@@ -1439,6 +1498,7 @@ pub async fn apply_event(state: &std::sync::Arc<AppState>, event: &InstanceEvent
             line,
         } => {
             util::append_instance_log(instance_id, &line.stream, &line.line);
+            super::players::ingest_line(state, instance_id, &line.line).await;
             if let Some(names) = super::players::parse_online_players(&line.line) {
                 let mut guard = state.instances.write().await;
                 if let Some(inst) = guard.get_mut(instance_id) {
@@ -1479,6 +1539,7 @@ pub async fn install_core(
     instance.spec.command = Some(command);
     instance.spec.args = args;
     instance.spec.core = req.core.clone();
+    instance.spec.mc_version = Some(req.version.clone());
     instance.updated_at = Utc::now();
     let out = instance.public_view();
     drop(guard);
@@ -1496,11 +1557,7 @@ pub async fn list_players(state: &AppState, id: &str) -> anyhow::Result<Vec<Play
     let view = get_instance(state, id)
         .await
         .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
-    Ok(view
-        .last_players
-        .into_iter()
-        .map(|name| PlayerInfo { name })
-        .collect())
+    Ok(super::players::list_enriched(state, id, &view.last_players).await)
 }
 
 /// Optionally probe the server with `list` (writes to console). Prefer cached names.
@@ -1541,6 +1598,8 @@ pub async fn player_action(
         "pardon" => format!("pardon {name}"),
         "op" => format!("op {name}"),
         "deop" => format!("deop {name}"),
+        "whitelist" => format!("whitelist add {name}"),
+        "unwhitelist" => format!("whitelist remove {name}"),
         other => anyhow::bail!("unknown action: {other}"),
     };
     send_command(
@@ -1719,6 +1778,17 @@ pub async fn run_due_schedules(state: &std::sync::Arc<AppState>) {
 
 pub async fn docker_engine_status() -> super::container::DockerStatus {
     super::container::docker_status().await
+}
+
+pub async fn docker_list_images() -> anyhow::Result<Vec<super::container::DockerImage>> {
+    super::container::list_images().await
+}
+
+pub async fn player_history(state: &AppState, id: &str) -> anyhow::Result<Vec<PlayerInfo>> {
+    let _ = get_instance(state, id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+    Ok(super::players::history(state, id).await)
 }
 
 pub async fn fleet_summary(state: &AppState) -> FleetSummary {

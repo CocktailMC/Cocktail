@@ -39,7 +39,7 @@ impl ProcessHandle {
         if let Some(name) = self.container_name {
             // Ensure container is removed even if docker run hung.
             let _ = tokio::time::timeout(Duration::from_secs(20), async {
-                tokio::process::Command::new("docker")
+                docker_cli()
                     .args(["rm", "-f", &name])
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
@@ -91,13 +91,14 @@ pub async fn spawn_external_command(
     container_name: Option<String>,
 ) -> anyhow::Result<ProcessHandle> {
     use std::process::Stdio;
-    let child = Command::new(&bin)
-        .args(&args)
+    let mut cmd = Command::new(&bin);
+    cmd.args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(false)
-        .spawn()?;
+        .kill_on_drop(false);
+    crate::wincompat::hide_console(&mut cmd);
+    let child = cmd.spawn()?;
     attach_child(instance_id, child, events, container_name, None, false, 0).await
 }
 
@@ -215,6 +216,7 @@ async fn attach_child(
         events,
         stop_metrics_rx,
         live,
+        Some(cmd_tx.clone()),
     ));
 
     info!(pid = child_id, reattached, "instance process spawned");
@@ -321,10 +323,15 @@ async fn spawn_demo(
                     {
                         let mut g = live_demo.lock().await;
                         g.game.tps = Some(tps);
+                        g.game.mspt = Some(4.0);
                         g.game.players = Some(players);
+                        g.game.entities = Some(120);
+                        g.game.chunks = Some(50);
+                        g.game.heap_used_mib = Some(256.0);
+                        g.game.heap_max_mib = Some(1024.0);
                     }
                     let line = format!(
-                        "[{}] [Server thread/INFO]: TPS={tps:.1} players={players} tick={tick}",
+                        "[{}] [Server thread/INFO]: TPS={tps:.1} MSPT=4.0 players={players} entities=120 chunks=50 Heap: 256M / 1024M",
                         Utc::now().to_rfc3339()
                     );
                     let _ = events_run.send(InstanceEvent::Log {
@@ -348,6 +355,7 @@ async fn spawn_demo(
         events,
         stop_metrics_rx,
         live,
+        Some(cmd_tx.clone()),
     ));
     Ok(ProcessHandle {
         child_id: 0,
@@ -369,6 +377,8 @@ fn build_command(bin: &str, args: &[String], workdir: &str, instance_id: &str) -
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(err))
         .kill_on_drop(false);
+    crate::java::apply_java_home(&mut cmd, bin);
+    crate::wincompat::hide_console(&mut cmd);
 
     #[cfg(unix)]
     {
@@ -396,14 +406,9 @@ async fn pipe_lines<R>(
     let mut lines = BufReader::new(reader).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let parsed = util::parse_game_stats(&line);
-        if parsed.tps.is_some() || parsed.players.is_some() {
+        {
             let mut g = live.lock().await;
-            if let Some(tps) = parsed.tps {
-                g.game.tps = Some(tps);
-            }
-            if let Some(players) = parsed.players {
-                g.game.players = Some(players);
-            }
+            util::merge_game_stats(&mut g.game, &parsed);
         }
         let _ = events.send(InstanceEvent::Log {
             instance_id: instance_id.clone(),
@@ -665,6 +670,7 @@ pub async fn adopt_running(
         events,
         stop_metrics_rx,
         live,
+        Some(cmd_tx.clone()),
     ));
 
     info!(pid, "instance process adopted");
@@ -702,8 +708,9 @@ pub fn process_matches(pid: u32, expected_start: Option<u64>, workdir: &str) -> 
     };
     if let Some(cwd) = cwd {
         if let Ok(got) = std::fs::canonicalize(&cwd) {
-            return got == want;
+            return crate::wincompat::paths_equal(&got, &want);
         }
+        return crate::wincompat::paths_equal(&cwd, &want);
     }
     true
 }
@@ -809,7 +816,7 @@ async fn request_graceful_stop(
 
 async fn force_kill(pid: u32, container_name: Option<&str>) {
     if let Some(name) = container_name {
-        let _ = tokio::process::Command::new("docker")
+        let _ = docker_cli()
             .args(["stop", "-t", "2", name])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -826,15 +833,23 @@ async fn force_kill(pid: u32, container_name: Option<&str>) {
     }
     #[cfg(windows)]
     {
-        let _ = tokio::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status()
-            .await;
+        let mut cmd = tokio::process::Command::new("taskkill");
+        cmd.args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        crate::wincompat::hide_console(&mut cmd);
+        let _ = cmd.status().await;
     }
 }
 
+fn docker_cli() -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("docker");
+    crate::wincompat::hide_console(&mut cmd);
+    cmd
+}
+
 pub(crate) async fn docker_container_running(name: &str) -> bool {
-    let Ok(out) = tokio::process::Command::new("docker")
+    let Ok(out) = docker_cli()
         .args(["inspect", "-f", "{{.State.Running}}", name])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -847,7 +862,7 @@ pub(crate) async fn docker_container_running(name: &str) -> bool {
 }
 
 pub async fn docker_container_pid(name: &str) -> Option<u32> {
-    let out = tokio::process::Command::new("docker")
+    let out = docker_cli()
         .args(["inspect", "-f", "{{.State.Running}} {{.State.Pid}}", name])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -870,7 +885,7 @@ pub async fn docker_container_pid(name: &str) -> Option<u32> {
 
 async fn docker_write_stdin(name: &str, command: &str) -> anyhow::Result<()> {
     use std::process::Stdio;
-    let mut child = tokio::process::Command::new("docker")
+    let mut child = docker_cli()
         .args(["exec", "-i", name, "sh", "-c", "cat > /proc/1/fd/0"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -892,7 +907,7 @@ async fn follow_docker_logs(
     mut stop_rx: mpsc::Receiver<()>,
 ) {
     use std::process::Stdio;
-    let Ok(mut child) = tokio::process::Command::new("docker")
+    let Ok(mut child) = docker_cli()
         .args(["logs", "-f", "--tail", "20", &name])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -975,14 +990,9 @@ async fn follow_file(
                         continue;
                     }
                     let parsed = util::parse_game_stats(&line);
-                    if parsed.tps.is_some() || parsed.players.is_some() {
+                    {
                         let mut g = live.lock().await;
-                        if let Some(tps) = parsed.tps {
-                            g.game.tps = Some(tps);
-                        }
-                        if let Some(players) = parsed.players {
-                            g.game.players = Some(players);
-                        }
+                        util::merge_game_stats(&mut g.game, &parsed);
                     }
                     let _ = events.send(InstanceEvent::Log {
                         instance_id: instance_id.clone(),
@@ -1006,12 +1016,13 @@ async fn metric_ticker(
     events: broadcast::Sender<InstanceEvent>,
     mut stop_rx: mpsc::Receiver<()>,
     live: Arc<Mutex<LiveStats>>,
+    cmd_tx: Option<mpsc::Sender<String>>,
 ) {
     let mut sys = System::new();
     let mut interval = tokio::time::interval(Duration::from_secs(3));
     let mut net_prev = super::netmon::NetCounters::default();
     let mut demo_tick = 0u32;
-    // Prime CPU measurement.
+    let mut probe_n = 0u32;
     if child_id != 0 {
         sys.refresh_processes(ProcessesToUpdate::All, true);
     }
@@ -1019,6 +1030,12 @@ async fn metric_ticker(
         tokio::select! {
             _ = stop_rx.recv() => break,
             _ = interval.tick() => {
+                probe_n = probe_n.wrapping_add(1);
+                if probe_n % 10 == 2 {
+                    if let Some(tx) = &cmd_tx {
+                        let _ = tx.try_send("tps".into());
+                    }
+                }
                 let (cpu_pct, memory_mib) = if child_id == 0 {
                     (1.5_f32, 64.0_f32)
                 } else {
@@ -1052,6 +1069,13 @@ async fn metric_ticker(
                     memory_mib,
                     tps: game.tps,
                     players: game.players.unwrap_or(0),
+                    mspt: game.mspt,
+                    players_max: game.players_max,
+                    entities: game.entities,
+                    chunks: game.chunks,
+                    gc_count: game.gc_delta,
+                    heap_used_mib: game.heap_used_mib,
+                    heap_max_mib: game.heap_max_mib,
                     net_rx_bps: net.rx_bps,
                     net_tx_bps: net.tx_bps,
                     net_connections: net.connections,

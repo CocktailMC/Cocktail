@@ -77,6 +77,33 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             applied INTEGER NOT NULL DEFAULT 0,
             apply_error TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS player_profiles (
+            instance_id TEXT NOT NULL,
+            name TEXT NOT NULL COLLATE NOCASE,
+            uuid TEXT,
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL,
+            last_left TEXT,
+            total_secs INTEGER NOT NULL DEFAULT 0,
+            last_world TEXT,
+            last_ping_ms REAL,
+            last_ip TEXT,
+            PRIMARY KEY (instance_id, name)
+        );
+
+        CREATE TABLE IF NOT EXISTS automations (
+            id TEXT PRIMARY KEY,
+            instance_id TEXT,
+            name TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            condition TEXT NOT NULL,
+            threshold REAL NOT NULL DEFAULT 0,
+            duration_secs INTEGER NOT NULL DEFAULT 0,
+            actions TEXT NOT NULL,
+            last_fired TEXT,
+            created_at TEXT NOT NULL
+        );
         "#,
     )?;
     for (name, decl) in [
@@ -134,6 +161,16 @@ pub struct NodeView {
     pub last_seen: Option<String>,
     pub created_at: String,
     pub online: bool,
+    #[serde(default)]
+    pub cpu_pct: f32,
+    #[serde(default)]
+    pub memory_mib: f32,
+    #[serde(default)]
+    pub rx_bps: f32,
+    #[serde(default)]
+    pub tx_bps: f32,
+    #[serde(default)]
+    pub instance_count: usize,
 }
 
 impl NodeRow {
@@ -148,6 +185,11 @@ impl NodeRow {
             last_seen: self.last_seen,
             created_at: self.created_at,
             online,
+            cpu_pct: 0.0,
+            memory_mib: 0.0,
+            rx_bps: 0.0,
+            tx_bps: 0.0,
+            instance_count: 0,
         }
     }
 }
@@ -634,5 +676,200 @@ pub fn mark_netops_applied(
         "UPDATE netops_rules SET applied = ?1, apply_error = ?2",
         params![applied as i64, error],
     )?;
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+pub struct PlayerRow {
+    pub name: String,
+    pub uuid: Option<String>,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub total_secs: u64,
+    pub last_world: Option<String>,
+    pub last_ping_ms: Option<f32>,
+    pub last_ip: Option<String>,
+}
+
+pub fn upsert_player(
+    conn: &Connection,
+    instance_id: &str,
+    name: &str,
+    uuid: Option<&str>,
+    ip: Option<&str>,
+    world: Option<&str>,
+    ping: Option<f32>,
+    now: &str,
+    left: bool,
+    add_secs: u64,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT INTO player_profiles (
+            instance_id, name, uuid, first_seen, last_seen, last_left, total_secs,
+            last_world, last_ping_ms, last_ip
+         ) VALUES (?1,?2,?3,?4,?4,?5,0,?6,?7,?8)
+         ON CONFLICT(instance_id, name) DO UPDATE SET
+            uuid = COALESCE(excluded.uuid, player_profiles.uuid),
+            last_ip = COALESCE(excluded.last_ip, player_profiles.last_ip),
+            last_world = COALESCE(excluded.last_world, player_profiles.last_world),
+            last_ping_ms = COALESCE(excluded.last_ping_ms, player_profiles.last_ping_ms),
+            last_seen = excluded.last_seen,
+            last_left = CASE WHEN ?9 THEN excluded.last_seen ELSE player_profiles.last_left END,
+            total_secs = player_profiles.total_secs + ?10",
+        params![
+            instance_id,
+            name,
+            uuid,
+            now,
+            if left { Some(now) } else { None::<&str> },
+            world,
+            ping,
+            ip,
+            left as i64,
+            add_secs as i64,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn list_players(conn: &Connection, instance_id: &str) -> anyhow::Result<Vec<PlayerRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT name, uuid, first_seen, last_seen, total_secs, last_world, last_ping_ms, last_ip
+         FROM player_profiles WHERE instance_id = ?1 ORDER BY last_seen DESC",
+    )?;
+    let rows = stmt.query_map(params![instance_id], |r| {
+        Ok(PlayerRow {
+            name: r.get(0)?,
+            uuid: r.get(1)?,
+            first_seen: r.get(2)?,
+            last_seen: r.get(3)?,
+            total_secs: r.get::<_, i64>(4)? as u64,
+            last_world: r.get(5)?,
+            last_ping_ms: r.get(6)?,
+            last_ip: r.get(7)?,
+        })
+    })?;
+    Ok(rows.filter_map(Result::ok).collect())
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct AutomationRow {
+    pub id: String,
+    pub instance_id: Option<String>,
+    pub name: String,
+    pub enabled: bool,
+    pub condition: String,
+    pub threshold: f32,
+    pub duration_secs: u64,
+    pub actions: Vec<String>,
+    pub last_fired: Option<String>,
+    pub created_at: String,
+}
+
+pub fn list_automations(
+    conn: &Connection,
+    instance_id: Option<&str>,
+) -> anyhow::Result<Vec<AutomationRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, instance_id, name, enabled, condition, threshold, duration_secs, actions, last_fired, created_at
+         FROM automations ORDER BY created_at DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let actions: String = r.get(7)?;
+        Ok(AutomationRow {
+            id: r.get(0)?,
+            instance_id: r.get(1)?,
+            name: r.get(2)?,
+            enabled: r.get::<_, i64>(3)? != 0,
+            condition: r.get(4)?,
+            threshold: r.get::<_, f64>(5)? as f32,
+            duration_secs: r.get::<_, i64>(6)? as u64,
+            actions: serde_json::from_str(&actions).unwrap_or_default(),
+            last_fired: r.get(8)?,
+            created_at: r.get(9)?,
+        })
+    })?;
+    let all: Vec<_> = rows.filter_map(Result::ok).collect();
+    Ok(match instance_id {
+        Some(id) => all
+            .into_iter()
+            .filter(|a| a.instance_id.as_deref() == Some(id) || a.instance_id.is_none())
+            .collect(),
+        None => all,
+    })
+}
+
+pub fn insert_automation(conn: &Connection, row: &AutomationRow) -> anyhow::Result<()> {
+    let actions = serde_json::to_string(&row.actions)?;
+    conn.execute(
+        "INSERT INTO automations (id, instance_id, name, enabled, condition, threshold, duration_secs, actions, last_fired, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        params![
+            row.id,
+            row.instance_id,
+            row.name,
+            row.enabled as i64,
+            row.condition,
+            row.threshold as f64,
+            row.duration_secs as i64,
+            actions,
+            row.last_fired,
+            row.created_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn delete_automation(conn: &Connection, id: &str) -> anyhow::Result<()> {
+    conn.execute("DELETE FROM automations WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn mark_automation_fired(conn: &Connection, id: &str, at: &str) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE automations SET last_fired = ?1 WHERE id = ?2",
+        params![at, id],
+    )?;
+    Ok(())
+}
+
+pub fn list_admins(conn: &Connection) -> anyhow::Result<Vec<AdminRow>> {
+    let mut stmt =
+        conn.prepare("SELECT id, username, password_hash, role, created_at FROM admins ORDER BY id")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(AdminRow {
+            id: r.get(0)?,
+            username: r.get(1)?,
+            password_hash: r.get(2)?,
+            role: r.get(3)?,
+            created_at: r.get(4)?,
+        })
+    })?;
+    Ok(rows.filter_map(Result::ok).collect())
+}
+
+pub fn insert_admin(
+    conn: &Connection,
+    username: &str,
+    password_hash: &str,
+    role: &str,
+    created_at: &str,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT INTO admins (username, password_hash, role, created_at) VALUES (?1,?2,?3,?4)",
+        params![username, password_hash, role, created_at],
+    )?;
+    Ok(())
+}
+
+pub fn delete_admin(conn: &Connection, id: i64) -> anyhow::Result<()> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM admins", [], |r| r.get(0))?;
+    if count <= 1 {
+        anyhow::bail!("至少保留一名管理员");
+    }
+    let n = conn.execute("DELETE FROM admins WHERE id = ?1", params![id])?;
+    if n == 0 {
+        anyhow::bail!("用户不存在");
+    }
     Ok(())
 }

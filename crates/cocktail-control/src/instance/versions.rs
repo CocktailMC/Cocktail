@@ -597,7 +597,9 @@ async fn install_quilt(
     let (_ver, url) = latest_quilt_installer_url().await?;
     let installer = Path::new(workdir).join("quilt-installer.jar");
     download_file(&url, &installer).await?;
+    let java = installer_java(mc).await?;
     run_java_installer(
+        &java,
         workdir,
         &installer,
         &[
@@ -747,7 +749,8 @@ async fn install_forge(
     );
     let installer = Path::new(workdir).join("forge-installer.jar");
     download_file(&url, &installer).await?;
-    run_java_installer(workdir, &installer, &["--installServer"]).await?;
+    let java = installer_java(mc).await?;
+    run_java_installer(&java, workdir, &installer, &["--installServer"]).await?;
     let _ = fs::remove_file(&installer);
     detect_modloader_startup(Path::new(workdir))
         .ok_or_else(|| anyhow::anyhow!("forge installer finished but no server launch files were found"))
@@ -863,7 +866,8 @@ async fn install_neoforge(
     );
     let installer = Path::new(workdir).join("neoforge-installer.jar");
     download_file(&url, &installer).await?;
-    run_java_installer(workdir, &installer, &["--installServer"]).await?;
+    let java = installer_java(mc).await?;
+    run_java_installer(&java, workdir, &installer, &["--installServer"]).await?;
     let _ = fs::remove_file(&installer);
     detect_modloader_startup(Path::new(workdir))
         .ok_or_else(|| anyhow::anyhow!("NeoForge installer finished but no server launch files were found"))
@@ -877,6 +881,9 @@ fn detect_modloader_startup(workdir: &Path) -> Option<(String, Vec<String>)> {
     };
     let mut args_files = Vec::new();
     find_files(workdir, arg_name, 8, &mut args_files);
+    if args_files.is_empty() && cfg!(windows) {
+        find_files(workdir, "unix_args.txt", 8, &mut args_files);
+    }
     args_files.sort_by_key(|p| {
         let s = p.to_string_lossy().to_ascii_lowercase();
         let score = if s.contains("neoforged") || s.contains("minecraftforge") {
@@ -943,15 +950,30 @@ fn find_files(dir: &Path, name: &str, depth: u32, out: &mut Vec<PathBuf>) {
     }
 }
 
-async fn run_java_installer(workdir: &str, jar: &Path, extra: &[&str]) -> anyhow::Result<()> {
+async fn installer_java(mc: &str) -> anyhow::Result<std::path::PathBuf> {
+    crate::java::ensure(
+        crate::java::recommended_java_major(Some(mc)),
+        crate::java::ImageType::Jre,
+    )
+    .await
+}
+
+async fn run_java_installer(
+    java: &Path,
+    workdir: &str,
+    jar: &Path,
+    extra: &[&str],
+) -> anyhow::Result<()> {
     let jar_name = jar
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or_else(|| anyhow::anyhow!("invalid installer path"))?;
     let mut args = vec!["-jar".to_string(), jar_name.to_string()];
     args.extend(extra.iter().map(|s| s.to_string()));
-    tracing::info!(dir = %workdir, jar = %jar_name, "running installer");
-    let mut cmd = tokio::process::Command::new("java");
+    tracing::info!(dir = %workdir, jar = %jar_name, java = %java.display(), "running installer");
+    let mut cmd = tokio::process::Command::new(java);
+    crate::java::apply_java_home(&mut cmd, &java.to_string_lossy());
+    crate::wincompat::hide_console(&mut cmd);
     cmd.current_dir(workdir)
         .args(&args)
         .stdin(Stdio::null())

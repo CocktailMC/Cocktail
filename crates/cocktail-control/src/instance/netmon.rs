@@ -551,35 +551,58 @@ fn ip_scope(ip: IpAddr) -> &'static str {
 
 #[cfg(not(unix))]
 fn ss_sockets(port: u16) -> Option<Vec<Sock>> {
-    let out = std::process::Command::new("ss")
-        .args(["-H", "-tn", "sport", "=", &format!(":{port}")])
-        .output()
-        .ok()?;
-    if !out.status.success() {
+    netstat_sockets(port)
+}
+
+#[cfg(not(unix))]
+fn netstat_sockets(port: u16) -> Option<Vec<Sock>> {
+    let mut cmd = std::process::Command::new("netstat");
+    cmd.args(["-ano"]);
+    crate::wincompat::hide_console_std(&mut cmd);
+    let out = cmd.output().ok()?;
+    if !out.status.success() && out.stdout.is_empty() {
         return None;
     }
     let mut socks = Vec::new();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         let cols: Vec<&str> = line.split_whitespace().collect();
-        if cols.len() < 5 {
+        if cols.len() < 4 {
             continue;
         }
-        let state = cols[0];
-        let Some(local) = parse_ss_endpoint(cols[3]) else {
+        let proto = cols[0].to_ascii_lowercase();
+        let udp = proto == "udp" || proto.starts_with("udp");
+        if proto != "tcp" && proto != "tcpv6" && !udp && proto != "udpv6" {
+            continue;
+        }
+        let local = parse_ss_endpoint(cols[1]);
+        let Some(local) = local else { continue };
+        if local.1 != port {
+            continue;
+        }
+        let (remote, state) = if udp {
+            if cols.len() >= 3 {
+                (parse_ss_endpoint(cols[2]), "")
+            } else {
+                (None, "")
+            }
+        } else if cols.len() >= 4 {
+            (parse_ss_endpoint(cols[2]), cols[3])
+        } else {
             continue;
         };
-        let remote = parse_ss_endpoint(cols[4]);
+        let st = state.to_ascii_uppercase();
         socks.push(Sock {
             local_ip: local.0,
-            remote_ip: remote.map(|r| r.0).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            remote_ip: remote
+                .map(|r| r.0)
+                .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
             remote_port: remote.map(|r| r.1).unwrap_or(0),
-            listen: state.eq_ignore_ascii_case("LISTEN"),
-            established: state.eq_ignore_ascii_case("ESTAB")
-                || state.eq_ignore_ascii_case("ESTABLISHED"),
-            syn_recv: state.eq_ignore_ascii_case("SYN-RECV"),
-            time_wait: state.eq_ignore_ascii_case("TIME-WAIT"),
-            fin_wait: state.to_ascii_uppercase().contains("FIN-WAIT"),
-            udp: false,
+            listen: st.contains("LISTEN") || st.contains("LISTENING"),
+            established: st.contains("ESTAB") || st.contains("已建立"),
+            syn_recv: st.contains("SYN"),
+            time_wait: st.contains("TIME_WAIT") || st.contains("TIME-WAIT"),
+            fin_wait: st.contains("FIN"),
+            udp,
         });
     }
     Some(socks)

@@ -24,6 +24,10 @@ const ACTION_LABEL: Record<string, string> = {
   'world.reset': '重置世界',
   'world.export': '导出世界',
   'world.import': '导入世界',
+  'player.action': '玩家操作',
+  'automation.fire': '自动化触发',
+  'user.create': '创建用户',
+  'user.delete': '删除用户',
 }
 
 const ACTION_FILTERS = [

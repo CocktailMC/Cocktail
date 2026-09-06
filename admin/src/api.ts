@@ -24,6 +24,10 @@ export type InstanceSpec = {
   group?: string | null
   node_id?: string
   desired_running?: boolean
+  backup_keep?: number
+  backup_hour?: number | null
+  java_major?: number | null
+  mc_version?: string | null
 }
 
 export function formatBps(n?: number | null): string {
@@ -55,7 +59,14 @@ export type MetricSample = {
   cpu_pct: number
   memory_mib: number
   tps: number | null
+  mspt?: number | null
   players: number
+  players_max?: number | null
+  entities?: number | null
+  chunks?: number | null
+  gc_count?: number | null
+  heap_used_mib?: number | null
+  heap_max_mib?: number | null
   net_rx_bps?: number
   net_tx_bps?: number
   net_connections?: number
@@ -97,6 +108,9 @@ export type Instance = {
   node_id?: string
   desired_running?: boolean
   generation?: number
+  docker_container?: string | null
+  health_score?: number
+  health_reasons?: string[]
 }
 
 export type LogLine = {
@@ -121,6 +135,9 @@ export type CreateInstanceBody = {
   tags?: string[]
   group?: string
   node_id?: string
+  backup_keep?: number
+  backup_hour?: number | null
+  java_major?: number
 }
 
 export type UpdateInstanceBody = {
@@ -138,6 +155,9 @@ export type UpdateInstanceBody = {
   cpu_limit?: number
   tags?: string[]
   group?: string
+  backup_keep?: number
+  backup_hour?: number | null
+  java_major?: number
 }
 
 export type FileEntry = {
@@ -262,7 +282,95 @@ export type SpigetVersion = {
   release_date: number
 }
 
-export type PlayerInfo = { name: string }
+export type PlayerInfo = {
+  name: string
+  uuid?: string | null
+  online?: boolean
+  ping_ms?: number | null
+  world?: string | null
+  session_secs?: number
+  total_secs?: number
+  first_seen?: string | null
+  last_seen?: string | null
+  ip?: string | null
+}
+
+export type PanelEvent = {
+  id: string
+  at: string
+  level: string
+  instance_id?: string | null
+  title: string
+  detail: string
+}
+
+export type Automation = {
+  id: string
+  instance_id?: string | null
+  name: string
+  enabled: boolean
+  condition: string
+  threshold: number
+  duration_secs: number
+  actions: string[]
+  last_fired?: string | null
+  created_at: string
+}
+
+export type PanelUser = {
+  id: number
+  username: string
+  role: string
+  created_at: string
+}
+
+export type DockerImage = {
+  repo_tag: string
+  id: string
+  size: string
+}
+
+export type JavaImageType = 'jre' | 'jdk'
+
+export type InstalledJava = {
+  id: string
+  vendor: string
+  major: number
+  image_type: JavaImageType
+  release_name: string
+  java_bin: string
+  java_home: string
+  size_bytes: number
+}
+
+export type JavaInventory = {
+  os: string
+  arch: string
+  adoptium_os: string
+  adoptium_arch: string
+  system: { java_bin: string; major: number; version: string } | null
+  installed: InstalledJava[]
+  available_lts: number[]
+  recommended_major: number
+}
+
+export type EnsureJavaResult = {
+  java_bin: string
+  java_home?: string | null
+  major: number
+  source: string
+}
+
+export function formatDuration(secs?: number | null): string {
+  if (secs == null || !Number.isFinite(secs) || secs <= 0) return '—'
+  const s = Math.floor(secs)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const r = s % 60
+  if (h > 0) return `${h}h${m}m`
+  if (m > 0) return `${m}m${r}s`
+  return `${r}s`
+}
 
 export type WorldInfo = {
   name: string
@@ -339,6 +447,7 @@ export type MeInfo = {
   role: string
   panel_name: string
   created_at: string
+  permissions?: string[]
 }
 
 export type AuditEntry = {
@@ -462,6 +571,11 @@ export type NodeInfo = {
   last_seen?: string | null
   created_at: string
   online: boolean
+  cpu_pct?: number
+  memory_mib?: number
+  rx_bps?: number
+  tx_bps?: number
+  instance_count?: number
 }
 
 export type CreatedNode = {
@@ -822,6 +936,28 @@ export const api = {
     request<{ available: boolean; version?: string; message: string }>(
       '/api/v1/docker/status',
     ),
+  dockerImages: () => request<DockerImage[]>('/api/v1/docker/images'),
+  javaInventory: () => request<JavaInventory>('/api/v1/java'),
+  installJava: (major: number, image_type: JavaImageType = 'jre') =>
+    request<InstalledJava>('/api/v1/java/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ major, image_type }),
+    }),
+  ensureJava: (body?: {
+    major?: number
+    image_type?: JavaImageType
+    managed?: boolean
+  }) =>
+    request<EnsureJavaResult>('/api/v1/java/ensure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    }),
+  deleteJava: (id: string) =>
+    request<void>(`/api/v1/java/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
   listCoreVersions: (core: string) =>
     request<CoreVersion[]>(`/api/v1/cores/${core}/versions`),
   listCoreLoaders: (core: string, version: string) =>
@@ -844,10 +980,19 @@ export const api = {
     const q = opts?.probe ? '?probe=true' : ''
     return request<PlayerInfo[]>(`/api/v1/instances/${id}/players${q}`)
   },
+  listPlayerHistory: (id: string) =>
+    request<PlayerInfo[]>(`/api/v1/instances/${id}/players/history`),
   playerAction: (
     id: string,
     name: string,
-    action: 'kick' | 'ban' | 'pardon' | 'op' | 'deop',
+    action:
+      | 'kick'
+      | 'ban'
+      | 'pardon'
+      | 'op'
+      | 'deop'
+      | 'whitelist'
+      | 'unwhitelist',
     reason?: string,
   ) =>
     request<void>(
@@ -1002,6 +1147,38 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
+  listEvents: () => request<PanelEvent[]>('/api/v1/events'),
+  listAutomations: (instanceId?: string) => {
+    const q = instanceId
+      ? `?instance_id=${encodeURIComponent(instanceId)}`
+      : ''
+    return request<Automation[]>(`/api/v1/automations${q}`)
+  },
+  createAutomation: (body: {
+    instance_id?: string | null
+    name: string
+    condition: string
+    threshold?: number
+    duration_secs?: number
+    actions: string[]
+    enabled?: boolean
+  }) =>
+    request<Automation>('/api/v1/automations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  deleteAutomation: (id: string) =>
+    request<void>(`/api/v1/automations/${id}`, { method: 'DELETE' }),
+  listUsers: () => request<PanelUser[]>('/api/v1/users'),
+  createUser: (body: { username: string; password: string; role: string }) =>
+    request<void>('/api/v1/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  deleteUser: (id: number) =>
+    request<void>(`/api/v1/users/${id}`, { method: 'DELETE' }),
 }
 
 export function eventsWsUrl(): string {

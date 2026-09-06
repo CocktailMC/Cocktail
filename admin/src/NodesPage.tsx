@@ -74,8 +74,8 @@ export default function NodesPage({ onBack, onError }: Props) {
       <div className="card-panel">
         <h3 className="card-title">注册远程节点</h3>
         <p className="meta mb-1">
-          本机控制面始终在线。远程机器安装同一套二进制后运行{' '}
-          <code>cocktail-agent</code>，用下面生成的 Token 接入。
+          本机控制面始终在线。远程机器运行 <code>cocktail-agent</code> 后会出现在列表（可命名为上海 / 北京 /
+          海外）。心跳会上报 CPU、内存与实例数。
         </p>
         <form className="settings" onSubmit={create}>
           <label>
@@ -120,6 +120,10 @@ cocktail-agent`}
                   <th>状态</th>
                   <th>主机</th>
                   <th>最近心跳</th>
+                  <th>CPU</th>
+                  <th>内存</th>
+                  <th>网络</th>
+                  <th>实例</th>
                   <th />
                 </tr>
               </thead>
@@ -141,6 +145,18 @@ cocktail-agent`}
                       {n.os ? ` · ${n.os}/${n.arch ?? ''}` : ''}
                     </td>
                     <td>{n.last_seen || '—'}</td>
+                    <td>{n.online ? `${(n.cpu_pct ?? 0).toFixed(0)}%` : '—'}</td>
+                    <td>
+                      {n.online
+                        ? `${((n.memory_mib ?? 0) / 1024).toFixed(1)} GiB`
+                        : '—'}
+                    </td>
+                    <td className="meta">
+                      {n.online
+                        ? `↓ ${((n.rx_bps ?? 0) / 1024).toFixed(0)} KiB/s · ↑ ${((n.tx_bps ?? 0) / 1024).toFixed(0)} KiB/s`
+                        : '—'}
+                    </td>
+                    <td>{n.instance_count ?? 0}</td>
                     <td>
                       {n.kind !== 'local' && (
                         <button

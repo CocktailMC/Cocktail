@@ -5,13 +5,16 @@ import {
   type CoreLoader,
   type CoreVersion,
   type CreateInstanceBody,
+  type DockerImage,
   type Instance,
   type NodeInfo,
 } from './api'
 import {
   INSTALLABLE_CORE_GROUPS,
+  JAVA_MAJORS,
   coreHasLoaders,
   isInstallableCore,
+  recommendedJavaMajor,
 } from './cores'
 import {
   EULA_AKA_URL,
@@ -70,6 +73,8 @@ export default function CreateInstancePage({
   const [loaders, setLoaders] = useState<CoreLoader[]>([])
   const [loader, setLoader] = useState('')
   const [versionsLoading, setVersionsLoading] = useState(false)
+  const [javaMajor, setJavaMajor] = useState(0)
+  const [dockerImages, setDockerImages] = useState<DockerImage[]>([])
 
   useEffect(() => {
     api
@@ -82,6 +87,14 @@ export default function CreateInstancePage({
       })
       .catch(() => undefined)
   }, [])
+
+  useEffect(() => {
+    if (!dockerAvailable) return
+    api
+      .dockerImages()
+      .then(setDockerImages)
+      .catch(() => setDockerImages([]))
+  }, [dockerAvailable])
 
   useEffect(() => {
     if (!isInstallableCore(core)) {
@@ -199,6 +212,7 @@ export default function CreateInstancePage({
           .filter(Boolean),
         docker_image: runtime === 'docker' ? image.trim() : undefined,
         cpu_limit: runtime === 'docker' ? cpu : undefined,
+        java_major: javaMajor >= 8 ? javaMajor : undefined,
       }
       if (core === 'custom' && !jarFile) {
         body.command = command.trim() || 'java'
@@ -276,11 +290,15 @@ export default function CreateInstancePage({
                     <option key={n.id} value={n.id}>
                       {n.name}
                       {n.kind === 'local' ? '（本机）' : n.online ? '（在线）' : '（离线）'}
+                      {n.instance_count != null ? ` · ${n.instance_count} 实例` : ''}
                     </option>
                   ),
                 )}
               </select>
             </label>
+            <p className="meta">
+              部署节点可选本机或远程 Agent。节点名称建议用「上海 / 北京 / 海外」区分区域。
+            </p>
             <label>
               分组
               <input
@@ -303,18 +321,62 @@ export default function CreateInstancePage({
         {step === 1 && (
           <div className="settings">
             <h3 className="card-title">运行时与资源</h3>
+            <fieldset className="settings" style={{ border: 0, padding: 0, margin: 0 }}>
+              <legend className="label">运行方式</legend>
+              <label className="check">
+                <input
+                  type="radio"
+                  name="runtime"
+                  checked={runtime === 'process'}
+                  onChange={() => setRuntime('process')}
+                />
+                Java 进程（本机 java）
+              </label>
+              <label className="check">
+                <input
+                  type="radio"
+                  name="runtime"
+                  checked={runtime === 'docker'}
+                  onChange={() => setRuntime('docker')}
+                  disabled={!dockerAvailable}
+                />
+                Docker 容器
+              </label>
+            </fieldset>
             <label>
-              运行时
+              Java 版本
               <select
-                value={runtime}
-                onChange={(e) =>
-                  setRuntime(e.target.value as 'process' | 'docker')
-                }
+                value={javaMajor}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  setJavaMajor(v)
+                  const major = v || recommendedJavaMajor(gameVersion || undefined)
+                  if (
+                    runtime === 'docker' &&
+                    (!image.trim() || image.startsWith('eclipse-temurin:'))
+                  ) {
+                    setImage(`eclipse-temurin:${major}-jre`)
+                  }
+                }}
               >
-                <option value="process">本机进程（需要本机 Java）</option>
-                <option value="docker">Docker 容器</option>
+                <option value={0}>
+                  自动（推荐 {recommendedJavaMajor(gameVersion || undefined)}
+                  {gameVersion ? ` · ${gameVersion}` : ''}）
+                </option>
+                {JAVA_MAJORS.map((m) => (
+                  <option key={m} value={m}>
+                    Java {m}
+                    {m === 8 ? '（1.16 及更早）' : ''}
+                    {m === 17 ? '（1.17–1.20.4）' : ''}
+                    {m === 21 ? '（1.20.5+）' : ''}
+                  </option>
+                ))}
               </select>
             </label>
+            <p className="meta">
+              本机进程：若 PATH 里没有合适的 Java，会从 Adoptium 自动下载 Temurin
+              JRE。Docker：默认使用 eclipse-temurin 镜像。
+            </p>
             {runtime === 'docker' && (
               <>
                 <p className={dockerAvailable ? 'meta ok' : 'error'}>
@@ -326,9 +388,23 @@ export default function CreateInstancePage({
                   <input
                     value={image}
                     onChange={(e) => setImage(e.target.value)}
+                    list="docker-images"
                     placeholder="eclipse-temurin:21-jre"
                   />
+                  <datalist id="docker-images">
+                    {dockerImages.map((im) => (
+                      <option key={im.id + im.repo_tag} value={im.repo_tag}>
+                        {im.size}
+                      </option>
+                    ))}
+                  </datalist>
                 </label>
+                {dockerImages.length > 0 && (
+                  <p className="meta">
+                    本机已有 {dockerImages.length} 个镜像；端口映射 主机:{port} →
+                    容器:25565，内存/CPU 作为资源限制。
+                  </p>
+                )}
                 <label>
                   CPU 限制（--cpus）
                   <input
@@ -482,7 +558,7 @@ export default function CreateInstancePage({
                     ? core === 'forge' ||
                       core === 'neoforge' ||
                       core === 'quilt'
-                      ? '创建后会自动下载安装器并用本机 Java 安装，随后写入启动命令。请确保 PATH 中有 java。'
+                      ? '创建后会自动下载安装器；若本机没有合适的 Java，会从 Adoptium 补全 Temurin 再安装。'
                       : '创建后会自动下载服务器包并配置启动命令。'
                     : '未选版本则创建空实例，之后可在「版本 / jar」页安装。'}
                 </p>
@@ -564,6 +640,7 @@ export default function CreateInstancePage({
                     {runtime === 'docker'
                       ? `Docker · ${image} · ${cpu} CPU`
                       : '本机进程'}
+                    {` · Java ${javaMajor >= 8 ? javaMajor : `自动 ${recommendedJavaMajor(gameVersion || undefined)}`}`}
                   </td>
                 </tr>
                 <tr>

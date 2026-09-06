@@ -6,12 +6,21 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
+use crate::automations::PanelEvent;
 use crate::db;
 use crate::instance::{self, Instance, InstanceEvent, LogLine, Schedule};
 use crate::ops::OpsRuntime;
 use crate::proto::AgentDown;
 
 pub type SharedState = Arc<AppState>;
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NodeLive {
+    pub cpu_pct: f32,
+    pub memory_mib: f32,
+    pub rx_bps: f32,
+    pub tx_bps: f32,
+}
 
 pub(crate) const LOG_BUFFER: usize = 500;
 pub(crate) const METRIC_BUFFER: usize = 120;
@@ -27,6 +36,8 @@ pub struct AppState {
     pub agents: Mutex<HashMap<String, mpsc::UnboundedSender<AgentDown>>>,
     pub http: reqwest::Client,
     pub ops: OpsRuntime,
+    pub feed: RwLock<VecDeque<PanelEvent>>,
+    pub node_live: RwLock<HashMap<String, NodeLive>>,
     pub plugin_host: String,
     pub plugin_token: String,
     pub env_api_token: Option<String>,
@@ -76,6 +87,8 @@ impl AppState {
             agents: Mutex::new(HashMap::new()),
             http,
             ops: OpsRuntime::new(),
+            feed: RwLock::new(VecDeque::new()),
+            node_live: RwLock::new(HashMap::new()),
             plugin_host,
             plugin_token,
             env_api_token,

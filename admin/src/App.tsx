@@ -7,6 +7,7 @@ import {
   logsWsUrl,
   setToken,
   formatBps,
+  formatDuration,
   type BackupInfo,
   type FileEntry,
   type HealthInfo,
@@ -20,6 +21,7 @@ import {
   type CoreVersion,
   type CoreLoader,
   type MetricSample,
+  type PanelEvent,
 } from './api'
 import CreateInstancePage from './CreateInstancePage'
 import EulaPage from './EulaPage'
@@ -33,15 +35,20 @@ import NetworkPage from './NetworkPage'
 import GlobalNetworkPage from './GlobalNetworkPage'
 import NodesPage from './NodesPage'
 import ExtensionsPage from './ExtensionsPage'
+import AutomationsPage from './AutomationsPage'
+import EventFeed from './EventFeed'
+import UsersPage from './UsersPage'
 import SpecYamlPanel from './SpecYamlPanel'
 import SetupPage from './SetupPage'
 import LoginPage from './LoginPage'
 import {
   INSTALLABLE_CORE_GROUPS,
+  JAVA_MAJORS,
   coreHasLoaders,
   defaultModrinthLoader,
   defaultModrinthProjectType,
   isInstallableCore,
+  recommendedJavaMajor,
 } from './cores'
 import './App.css'
 
@@ -64,6 +71,7 @@ type Tab =
   | 'properties'
   | 'version'
   | 'players'
+  | 'automations'
   | 'network'
   | 'worlds'
   | 'plugins'
@@ -78,7 +86,8 @@ const NAV_GROUPS: {
     items: [
       { id: 'dashboard', label: '仪表盘', icon: 'fa-dashboard' },
       { id: 'control', label: '服务器控制', icon: 'fa-power-off' },
-      { id: 'players', label: '在线玩家', icon: 'fa-users' },
+      { id: 'players', label: '玩家中心', icon: 'fa-users' },
+      { id: 'automations', label: '自动化', icon: 'fa-bolt' },
       { id: 'network', label: '网络', icon: 'fa-globe' },
       { id: 'console', label: '控制台', icon: 'fa-terminal' },
     ],
@@ -90,7 +99,7 @@ const NAV_GROUPS: {
       { id: 'plugins', label: '插件/模组', icon: 'fa-puzzle-piece' },
       { id: 'files', label: '文件', icon: 'fa-folder' },
       { id: 'worlds', label: '世界', icon: 'fa-globe' },
-      { id: 'backups', label: '世界备份', icon: 'fa-database' },
+      { id: 'backups', label: '备份策略', icon: 'fa-database' },
     ],
   },
   {
@@ -112,7 +121,14 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [view, setView] = useState<'manager' | 'create' | 'eula'>('manager')
   const [homeTab, setHomeTab] = useState<
-    'overview' | 'settings' | 'audit' | 'nodes' | 'extensions' | 'network'
+    | 'overview'
+    | 'settings'
+    | 'audit'
+    | 'nodes'
+    | 'extensions'
+    | 'network'
+    | 'events'
+    | 'users'
   >('overview')
   const [mkdirName, setMkdirName] = useState('')
   const [setCommand, setSetCommand] = useState('java')
@@ -150,6 +166,9 @@ export default function App() {
   const [setCpu, setSetCpu] = useState(1)
   const [setGroup, setSetGroup] = useState('default')
   const [setTags, setSetTags] = useState('')
+  const [setBackupKeep, setSetBackupKeep] = useState(7)
+  const [setBackupHour, setSetBackupHour] = useState<number | ''>('')
+  const [setJavaMajor, setSetJavaMajor] = useState(0)
   const [propsEntries, setPropsEntries] = useState<PropertyEntry[]>([])
   const [propsEpoch, setPropsEpoch] = useState(0)
   const [authRequired, setAuthRequired] = useState(false)
@@ -164,6 +183,8 @@ export default function App() {
   const [installLoaders, setInstallLoaders] = useState<CoreLoader[]>([])
   const [installLoader, setInstallLoader] = useState('')
   const [players, setPlayers] = useState<PlayerInfo[]>([])
+  const [playerHistory, setPlayerHistory] = useState<PlayerInfo[]>([])
+  const [panelEvents, setPanelEvents] = useState<PanelEvent[]>([])
   const [metricHistory, setMetricHistory] = useState<MetricSample[]>([])
   const [worlds, setWorlds] = useState<WorldInfo[]>([])
   const [plugins, setPlugins] = useState<
@@ -182,18 +203,23 @@ export default function App() {
     [instances, selectedId],
   )
 
-  const displayPlayers = useMemo(() => {
+  const displayPlayers = useMemo((): PlayerInfo[] => {
     if (players.length) return players
-    return (selected?.last_players ?? []).map((n) => ({ name: n }))
+    return (selected?.last_players ?? []).map((n) => ({
+      name: n,
+      online: true,
+    }))
   }, [players, selected?.last_players])
 
   const refresh = async () => {
-    const [list, summary] = await Promise.all([
+    const [list, summary, events] = await Promise.all([
       api.listInstances(),
       api.fleetSummary(),
+      api.listEvents().catch(() => [] as PanelEvent[]),
     ])
     setInstances(list)
     setFleet(summary)
+    setPanelEvents(events)
     setSelectedIds((prev) => prev.filter((id) => list.some((i) => i.id === id)))
     setSelectedId((prev) => {
       if (prev && list.some((i) => i.id === prev)) return prev
@@ -364,6 +390,11 @@ export default function App() {
     setSetCpu(selected.spec.cpu_limit ?? 1)
     setSetGroup(selected.spec.group || 'default')
     setSetTags((selected.spec.tags ?? []).join(','))
+    setSetBackupKeep(selected.spec.backup_keep ?? 7)
+    setSetBackupHour(
+      selected.spec.backup_hour == null ? '' : selected.spec.backup_hour,
+    )
+    setSetJavaMajor(selected.spec.java_major ?? 0)
     setSetCommand(selected.spec.command || 'java')
     setSetArgs(
       (selected.spec.args ?? []).length
@@ -435,12 +466,17 @@ export default function App() {
   }, [selectedId, tab])
 
   useEffect(() => {
-    // Cache only — never auto-send `list` (that spams the console).
     if (!selectedId || (tab !== 'players' && tab !== 'dashboard')) return
     api
       .listPlayers(selectedId)
       .then(setPlayers)
       .catch((e: Error) => setError(e.message))
+    if (tab === 'players') {
+      api
+        .listPlayerHistory(selectedId)
+        .then(setPlayerHistory)
+        .catch((e: Error) => setError(e.message))
+    }
   }, [selectedId, tab])
 
   useEffect(() => {
@@ -579,7 +615,9 @@ export default function App() {
       | 'audit'
       | 'nodes'
       | 'extensions'
-      | 'network' = 'overview',
+      | 'network'
+      | 'events'
+      | 'users' = 'overview',
   ) => {
     setSelectedId(null)
     setHomeTab(tab)
@@ -599,7 +637,15 @@ export default function App() {
   const memUsed = selected?.last_metrics?.memory_mib
   const memTotal = selected?.spec.memory_mib
   const tpsVal = selected?.last_metrics?.tps
+  const msptVal = selected?.last_metrics?.mspt
+  const cpuVal = selected?.last_metrics?.cpu_pct
   const playersCount = selected?.last_metrics?.players
+  const playersMax = selected?.last_metrics?.players_max
+  const entitiesVal = selected?.last_metrics?.entities
+  const chunksVal = selected?.last_metrics?.chunks
+  const gcVal = selected?.last_metrics?.gc_count
+  const heapUsed = selected?.last_metrics?.heap_used_mib
+  const heapMax = selected?.last_metrics?.heap_max_mib
   const netRx = selected?.last_metrics?.net_rx_bps
   const netTx = selected?.last_metrics?.net_tx_bps
   const netConns = selected?.last_metrics?.net_connections
@@ -883,6 +929,30 @@ export default function App() {
               <button
                 type="button"
                 className={
+                  !selected && homeTab === 'events'
+                    ? 'nav-item active'
+                    : 'nav-item'
+                }
+                onClick={() => goHome('events')}
+              >
+                <i className="fa fa-bell" />
+                事件中心
+              </button>
+              <button
+                type="button"
+                className={
+                  !selected && homeTab === 'users'
+                    ? 'nav-item active'
+                    : 'nav-item'
+                }
+                onClick={() => goHome('users')}
+              >
+                <i className="fa fa-id-badge" />
+                用户权限
+              </button>
+              <button
+                type="button"
+                className={
                   !selected && homeTab === 'settings'
                     ? 'nav-item active'
                     : 'nav-item'
@@ -914,7 +984,7 @@ export default function App() {
                 onClick={() => goHome('extensions')}
               >
                 <i className="fa fa-puzzle-piece" />
-                .NET 插件
+                扩展中心
               </button>
               <button
                 type="button"
@@ -1044,6 +1114,7 @@ export default function App() {
                   authRequired={authRequired}
                   busy={busy}
                   selectedIds={selectedIds}
+                  events={panelEvents}
                   onToggleSelect={(id, checked) =>
                     setSelectedIds((prev) =>
                       checked ? [...prev, id] : prev.filter((x) => x !== id),
@@ -1092,6 +1163,36 @@ export default function App() {
                   }
                   onOpenSettings={() => goHome('settings')}
                 />
+              ) : homeTab === 'events' ? (
+                <div className="page-flow">
+                  <div className="page-head">
+                    <div>
+                      <p className="page-eyebrow">控制面</p>
+                      <h2 className="page-title">事件中心</h2>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      onClick={() => goHome('overview')}
+                    >
+                      返回主界面
+                    </button>
+                  </div>
+                  <div className="card-panel">
+                    <EventFeed
+                      events={panelEvents}
+                      names={
+                        new Map(instances.map((i) => [i.id, i.spec.name]))
+                      }
+                      onOpenInstance={selectInstance}
+                    />
+                  </div>
+                </div>
+              ) : homeTab === 'users' ? (
+                <UsersPage
+                  onBack={() => goHome('overview')}
+                  onError={setError}
+                />
               ) : homeTab === 'network' ? (
                 <GlobalNetworkPage
                   onBack={() => goHome('overview')}
@@ -1116,7 +1217,7 @@ export default function App() {
                   onOpenInstance={selectInstance}
                   onError={setError}
                 />
-              ) : (
+              ) : homeTab === 'settings' ? (
                 <HomeSettings
                   health={health}
                   env={envInfo}
@@ -1127,10 +1228,11 @@ export default function App() {
                   onPanelName={setPanelName}
                   onAdminName={setAdminName}
                   onBack={() => goHome('overview')}
+                  busy={busy}
                   onBusy={setBusyState}
                   onError={setError}
                 />
-              )}
+              ) : null}
             </>
           )}
 
@@ -1161,6 +1263,24 @@ export default function App() {
                       {` · 节点 ${selected.node_id ?? selected.spec.node_id ?? 'local'}`}
                     </span>
                   </div>
+                  {selected.health_score != null && (
+                    <div className="card-panel health-score">
+                      <div className="health-score-head">
+                        <p className="label">健康度</p>
+                        <p className="value">{selected.health_score}%</p>
+                      </div>
+                      <div className="health-bar" aria-hidden>
+                        <span
+                          style={{
+                            width: `${Math.max(0, Math.min(100, selected.health_score))}%`,
+                          }}
+                        />
+                      </div>
+                      <p className="meta">
+                        {(selected.health_reasons ?? []).join(' · ') || '规则评分（非 AI）'}
+                      </p>
+                    </div>
+                  )}
                   <div className="stat-grid">
                     <div className="card-panel stat-card">
                       <div>
@@ -1178,9 +1298,20 @@ export default function App() {
                     </div>
                     <div className="card-panel stat-card">
                       <div>
+                        <p className="label">CPU</p>
+                        <p className="value">
+                          {cpuVal != null ? `${cpuVal.toFixed(1)}%` : '—'}
+                        </p>
+                      </div>
+                      <i className="fa fa-line-chart icon primary" />
+                    </div>
+                    <div className="card-panel stat-card">
+                      <div>
                         <p className="label">在线玩家</p>
                         <p className="value">
-                          {playersCount != null ? String(playersCount) : '—'}
+                          {playersCount != null
+                            ? `${playersCount}${playersMax != null ? `/${playersMax}` : ''}`
+                            : '—'}
                         </p>
                       </div>
                       <i className="fa fa-users icon primary" />
@@ -1209,6 +1340,15 @@ export default function App() {
                     </div>
                     <div className="card-panel stat-card">
                       <div>
+                        <p className="label">MSPT</p>
+                        <p className="value">
+                          {msptVal != null ? `${msptVal.toFixed(1)} ms` : '—'}
+                        </p>
+                      </div>
+                      <i className="fa fa-clock-o icon warning" />
+                    </div>
+                    <div className="card-panel stat-card">
+                      <div>
                         <p className="label">下行 / 上行</p>
                         <p className="value net-rate">
                           {statusOk ? `${formatBps(netRx)} ↓` : '—'}
@@ -1220,16 +1360,29 @@ export default function App() {
                     </div>
                     <div className="card-panel stat-card">
                       <div>
-                        <p className="label">端口连接</p>
+                        <p className="label">实体 / 区块</p>
                         <p className="value">
-                          {statusOk ? String(netConns ?? 0) : '—'}
+                          {entitiesVal ?? '—'}
+                          <span className="net-split">·</span>
+                          {chunksVal ?? '—'}
+                        </p>
+                      </div>
+                      <i className="fa fa-cubes icon primary" />
+                    </div>
+                    <div className="card-panel stat-card">
+                      <div>
+                        <p className="label">JVM 堆 / GC</p>
+                        <p className="value">
+                          {heapUsed != null
+                            ? `${heapUsed.toFixed(0)}${heapMax != null ? `/${heapMax.toFixed(0)}` : ''} MiB`
+                            : '—'}
                           <span className="net-sub">
                             {' '}
-                            :{selected.spec.port}
+                            GC {gcVal ?? '—'}
                           </span>
                         </p>
                       </div>
-                      <i className="fa fa-plug icon warning" />
+                      <i className="fa fa-database icon warning" />
                     </div>
                   </div>
 
@@ -1260,6 +1413,17 @@ export default function App() {
                         ? `${netConns ?? 0} 条 TCP · ${selected.last_metrics?.net_unique_ips ?? 0} IP · ↓ ${formatBps(netRx)} · ↑ ${formatBps(netTx)}`
                         : '启动后采集该端口的连接、流量与 status ping。'}
                     </p>
+                  </div>
+
+                  <div className="card-panel">
+                    <h3 className="card-title">最近事件</h3>
+                    <EventFeed
+                      events={panelEvents.filter(
+                        (e) => !e.instance_id || e.instance_id === selected.id,
+                      )}
+                      names={new Map([[selected.id, selected.spec.name]])}
+                      onOpenInstance={selectInstance}
+                    />
                   </div>
 
                   <div className="grid-2">
@@ -1671,7 +1835,7 @@ export default function App() {
                         {installCore === 'forge' ||
                         installCore === 'neoforge' ||
                         installCore === 'quilt'
-                          ? '将下载安装器并在本机用 Java 执行；请确保 PATH 中有 java。安装后自动写入启动参数（含 @unix_args.txt）。'
+                          ? '将下载安装器并用托管的 Adoptium Temurin 执行（本机无 Java 时自动补全）。安装后自动写入启动参数（Windows 为 @win_args.txt）。'
                           : installCore === 'arclight'
                             ? '可指定 NeoForge / Forge / Fabric 变体；未选则优先 NeoForge。'
                             : '下载官方构建为 server.jar，并自动配置 java -jar server.jar nogui。'}
@@ -1720,7 +1884,7 @@ export default function App() {
                   <div className="page-head">
                     <div>
                       <p className="page-eyebrow">{selected.spec.name}</p>
-                      <h2 className="page-title">在线玩家</h2>
+                      <h2 className="page-title">玩家中心</h2>
                     </div>
                   </div>
                   <div className="card-panel">
@@ -1736,19 +1900,26 @@ export default function App() {
                                 probe: true,
                               }),
                             )
+                            setPlayerHistory(
+                              await api.listPlayerHistory(selected.id),
+                            )
                           })
                         }
                       >
                         <i className="fa fa-refresh" /> 刷新 list
                       </button>
                     </div>
+                    <h3 className="card-title">实时玩家</h3>
                     {displayPlayers.length === 0 ? (
                       <p className="empty">暂无在线玩家（启动后点刷新）</p>
                     ) : (
                       <table className="data-table">
                         <thead>
                           <tr>
-                            <th>玩家名</th>
+                            <th>玩家</th>
+                            <th>延迟</th>
+                            <th>位置</th>
+                            <th>在线</th>
                             <th>操作</th>
                           </tr>
                         </thead>
@@ -1757,37 +1928,53 @@ export default function App() {
                             <tr key={p.name}>
                               <td>
                                 <strong>{p.name}</strong>
+                                <div className="meta">{p.uuid ?? '—'}</div>
                               </td>
                               <td>
-                                {(['kick', 'ban', 'op', 'deop'] as const).map(
-                                  (a) => (
-                                    <button
-                                      key={a}
-                                      type="button"
-                                      className={
-                                        a === 'ban'
-                                          ? 'link-btn danger'
-                                          : a === 'kick'
-                                            ? 'link-btn warn'
-                                            : 'link-btn'
-                                      }
-                                      disabled={
-                                        busy || selected.status !== 'running'
-                                      }
-                                      onClick={() =>
-                                        run(() =>
-                                          api.playerAction(
-                                            selected.id,
-                                            p.name,
-                                            a,
-                                          ),
-                                        )
-                                      }
-                                    >
-                                      {a}
-                                    </button>
-                                  ),
-                                )}
+                                {p.ping_ms != null
+                                  ? `${p.ping_ms.toFixed(0)}ms`
+                                  : '—'}
+                              </td>
+                              <td>{p.world ?? 'world'}</td>
+                              <td>{formatDuration(p.session_secs)}</td>
+                              <td className="actions">
+                                {(
+                                  [
+                                    ['kick', '踢出'],
+                                    ['ban', '封禁'],
+                                    ['pardon', '解封'],
+                                    ['whitelist', '白名单'],
+                                    ['unwhitelist', '移出白名单'],
+                                    ['op', 'OP'],
+                                    ['deop', '撤 OP'],
+                                  ] as const
+                                ).map(([a, label]) => (
+                                  <button
+                                    key={a}
+                                    type="button"
+                                    className={
+                                      a === 'ban'
+                                        ? 'link-btn danger'
+                                        : a === 'kick'
+                                          ? 'link-btn warn'
+                                          : 'link-btn'
+                                    }
+                                    disabled={
+                                      busy || selected.status !== 'running'
+                                    }
+                                    onClick={() =>
+                                      run(() =>
+                                        api.playerAction(
+                                          selected.id,
+                                          p.name,
+                                          a,
+                                        ),
+                                      )
+                                    }
+                                  >
+                                    {label}
+                                  </button>
+                                ))}
                               </td>
                             </tr>
                           ))}
@@ -1795,7 +1982,63 @@ export default function App() {
                       </table>
                     )}
                   </div>
+                  <div className="card-panel" style={{ marginTop: '1rem' }}>
+                    <h3 className="card-title">玩家历史</h3>
+                    {playerHistory.length === 0 ? (
+                      <p className="empty">加入过的玩家会出现在这里</p>
+                    ) : (
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>玩家</th>
+                            <th>UUID</th>
+                            <th>首次加入</th>
+                            <th>最后在线</th>
+                            <th>累计</th>
+                            <th>状态</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {playerHistory.map((p) => (
+                            <tr key={p.name}>
+                              <td>
+                                <strong>{p.name}</strong>
+                              </td>
+                              <td className="meta">{p.uuid ?? '—'}</td>
+                              <td className="meta">
+                                {p.first_seen
+                                  ? new Date(p.first_seen).toLocaleString(
+                                      'zh-CN',
+                                      { hour12: false },
+                                    )
+                                  : '—'}
+                              </td>
+                              <td className="meta">
+                                {p.last_seen
+                                  ? new Date(p.last_seen).toLocaleString(
+                                      'zh-CN',
+                                      { hour12: false },
+                                    )
+                                  : '—'}
+                              </td>
+                              <td>{formatDuration(p.total_secs)}</td>
+                              <td>{p.online ? '在线' : '离线'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
                 </>
+              )}
+
+              {tab === 'automations' && (
+                <AutomationsPage
+                  instance={selected}
+                  busy={busy}
+                  onBusy={setBusyState}
+                  onError={setError}
+                />
               )}
 
               {tab === 'worlds' && (
@@ -2314,10 +2557,14 @@ export default function App() {
                   <div className="page-head">
                     <div>
                       <p className="page-eyebrow">{selected.spec.name}</p>
-                      <h2 className="page-title">世界备份</h2>
+                      <h2 className="page-title">备份策略</h2>
                     </div>
                   </div>
                   <div className="card-panel">
+                    <p className="meta mb-1">
+                      整包工作目录备份（世界 + 配置 + 插件）。到点自动备份，并只保留最近 N
+                      份。对象存储上传尚未接入。
+                    </p>
                     <div className="files-toolbar">
                       <button
                         type="button"
@@ -2454,6 +2701,10 @@ export default function App() {
                               .split(',')
                               .map((t) => t.trim())
                               .filter(Boolean),
+                            backup_keep: setBackupKeep,
+                            backup_hour:
+                              setBackupHour === '' ? null : Number(setBackupHour),
+                            java_major: setJavaMajor,
                           }),
                         )
                       }}
@@ -2512,6 +2763,48 @@ export default function App() {
                         />
                       </label>
                       <label>
+                        Java 版本
+                        <select
+                          value={setJavaMajor}
+                          onChange={(e) => {
+                            const v = Number(e.target.value)
+                            setSetJavaMajor(v)
+                            const major =
+                              v ||
+                              recommendedJavaMajor(
+                                selected.spec.mc_version || undefined,
+                              )
+                            if (
+                              setRuntime === 'docker' &&
+                              (!setImage.trim() ||
+                                setImage.startsWith('eclipse-temurin:'))
+                            ) {
+                              setSetImage(`eclipse-temurin:${major}-jre`)
+                            }
+                          }}
+                        >
+                          <option value={0}>
+                            自动（推荐{' '}
+                            {recommendedJavaMajor(
+                              selected.spec.mc_version || undefined,
+                            )}
+                            {selected.spec.mc_version
+                              ? ` · ${selected.spec.mc_version}`
+                              : ''}
+                            ）
+                          </option>
+                          {JAVA_MAJORS.map((m) => (
+                            <option key={m} value={m}>
+                              Java {m}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <p className="meta">
+                        命令填写 java 时，启动会解析为 Adoptium 托管 JRE 或系统
+                        Java；缺失则自动下载。
+                      </p>
+                      <label>
                         启动参数（空格分隔；内存会自动注入 -Xmx/-Xms）
                         <input
                           value={setArgs}
@@ -2534,6 +2827,35 @@ export default function App() {
                         <input
                           value={setTags}
                           onChange={(e) => setSetTags(e.target.value)}
+                        />
+                      </label>
+                      <label>
+                        每日备份时刻（0–23，空则关闭）
+                        <input
+                          type="number"
+                          min={0}
+                          max={23}
+                          value={setBackupHour}
+                          onChange={(e) =>
+                            setSetBackupHour(
+                              e.target.value === ''
+                                ? ''
+                                : Number(e.target.value),
+                            )
+                          }
+                          placeholder="例如 3"
+                        />
+                      </label>
+                      <label>
+                        保留份数
+                        <input
+                          type="number"
+                          min={1}
+                          max={90}
+                          value={setBackupKeep}
+                          onChange={(e) =>
+                            setSetBackupKeep(Number(e.target.value))
+                          }
                         />
                       </label>
                       <label>

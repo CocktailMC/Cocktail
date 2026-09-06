@@ -2,11 +2,13 @@
 
 pub mod agent_runtime;
 mod api;
+mod automations;
 mod auth;
 mod cluster;
 mod db;
 mod hostnet;
 mod instance;
+mod java;
 mod netops;
 mod ops;
 mod platform;
@@ -15,6 +17,7 @@ mod proto;
 mod qqbot;
 mod state;
 mod util;
+mod wincompat;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -38,6 +41,7 @@ use crate::state::{AppState, SharedState};
 const MAX_BODY_BYTES: usize = 512 * 1024 * 1024;
 
 pub async fn run_plane() -> anyhow::Result<()> {
+    crate::wincompat::enable_utf8_console();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::new("cocktail_control=info,tower_http=info")

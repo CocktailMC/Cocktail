@@ -11,7 +11,7 @@ pub mod spiget;
 mod versions;
 mod worlds;
 
-pub use container::DockerStatus;
+pub use container::{DockerImage, DockerStatus};
 pub use hangar::{InstallRequest as InstallHangarRequest, VersionsQuery as HangarVersionsQuery};
 pub use model::*;
 pub use modrinth::{InstallModrinthRequest, SearchQuery, VersionsQuery as ModrinthVersionsQuery};

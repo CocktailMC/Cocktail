@@ -19,12 +19,12 @@ pub struct DockerStatus {
 }
 
 pub async fn docker_status() -> DockerStatus {
-    match Command::new("docker")
-        .args(["version", "--format", "{{.Server.Version}}"])
+    let mut cmd = Command::new("docker");
+    cmd.args(["version", "--format", "{{.Server.Version}}"])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
+        .stderr(Stdio::piped());
+    crate::wincompat::hide_console(&mut cmd);
+    match cmd.output().await
     {
         Ok(out) if out.status.success() => {
             let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -38,18 +38,29 @@ pub async fn docker_status() -> DockerStatus {
                 },
             }
         }
-        Ok(out) => DockerStatus {
-            available: false,
-            version: None,
-            message: format!(
-                "docker not ready: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-        },
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let hint = if cfg!(windows) {
+                "（请确认 Docker Desktop 已启动）"
+            } else if err.to_ascii_lowercase().contains("permission") {
+                "（把当前用户加入 docker 组，或用 root 运行控制面）"
+            } else {
+                ""
+            };
+            DockerStatus {
+                available: false,
+                version: None,
+                message: format!("Docker 引擎不可用: {err}{hint}"),
+            }
+        }
         Err(e) => DockerStatus {
             available: false,
             version: None,
-            message: format!("docker not found: {e}"),
+            message: if cfg!(windows) {
+                format!("未找到 docker.exe（{e}）。安装 Docker Desktop 后可选容器运行方式。")
+            } else {
+                format!("未找到 docker CLI（{e}）。安装 Docker Engine 后可选容器运行方式。")
+            },
         },
     }
 }
@@ -82,7 +93,7 @@ pub async fn spawn_docker_instance(
 
     let name = container_name(&instance_id);
     // Best-effort cleanup leftover container with same name.
-    let _ = Command::new("docker")
+    let _ = docker_cmd()
         .args(["rm", "-f", &name])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -126,7 +137,7 @@ pub async fn spawn_docker_instance(
 
     info!(%name, %image, %mount, bin = %bin, "starting docker container instance");
 
-    let out = Command::new("docker")
+    let out = docker_cmd()
         .args(&docker_args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -154,15 +165,71 @@ pub async fn spawn_docker_instance(
 }
 
 fn docker_mount_path(abs: &PathBuf) -> String {
-    let s = abs.to_string_lossy().to_string();
-    // Docker Desktop on Windows accepts either D:\path or /d/path.
+    let mut s = abs.to_string_lossy().to_string();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        s = rest.to_string();
+    } else if let Some(rest) = s.strip_prefix("//?/") {
+        s = rest.to_string();
+    }
+    // Docker Desktop on Windows: C:\foo -> /c/foo
     #[cfg(windows)]
     {
-        if s.len() >= 2 && s.as_bytes()[1] == b':' {
+        let b = s.as_bytes();
+        if b.len() >= 2 && b[1] == b':' {
             let drive = s.chars().next().unwrap().to_ascii_lowercase();
             let rest = s[2..].replace('\\', "/");
             return format!("/{drive}{rest}");
         }
     }
     s.replace('\\', "/")
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DockerImage {
+    pub repo_tag: String,
+    pub id: String,
+    pub size: String,
+}
+
+fn docker_cmd() -> Command {
+    let mut cmd = Command::new("docker");
+    crate::wincompat::hide_console(&mut cmd);
+    cmd
+}
+
+pub async fn list_images() -> anyhow::Result<Vec<DockerImage>> {
+    let status = docker_status().await;
+    if !status.available {
+        anyhow::bail!("{}", status.message);
+    }
+    let out = docker_cmd()
+        .args([
+            "images",
+            "--format",
+            "{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "docker images: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let mut images = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let mut parts = line.splitn(3, '\t');
+        let repo_tag = parts.next().unwrap_or("").to_string();
+        if repo_tag.is_empty() || repo_tag == "<none>:<none>" {
+            continue;
+        }
+        images.push(DockerImage {
+            repo_tag,
+            id: parts.next().unwrap_or("").to_string(),
+            size: parts.next().unwrap_or("").to_string(),
+        });
+    }
+    Ok(images)
 }

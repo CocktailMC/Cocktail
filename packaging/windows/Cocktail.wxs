@@ -48,6 +48,10 @@
           Source="$(var.StageDir)\cocktail-control.exe"
           KeyPath="yes"
           Checksum="yes" />
+        <File
+          Id="CocktailStartCmd"
+          Source="$(var.StageDir)\Start-Cocktail.cmd"
+          Name="Start-Cocktail.cmd" />
         <Environment
           Id="CocktailWebRoot"
           Name="COCKTAIL_WEB_ROOT"
@@ -63,18 +67,28 @@
           Action="set"
           System="yes" />
       </Component>
+      <Component Id="CocktailAgent" Guid="A9B8C7D6-E5F4-3210-BA98-76543210FEDC">
+        <File
+          Id="CocktailAgentExe"
+          Source="$(var.StageDir)\cocktail-agent.exe"
+          KeyPath="yes"
+          Checksum="yes" />
+      </Component>
+      <Component Id="DataFolder" Guid="F1E2D3C4-B5A6-9780-1234-567890ABCDEF" Directory="CocktailDataRoot">
+        <CreateFolder />
+        <RegistryValue
+          Root="HKLM"
+          Key="Software\Cocktail\Manager"
+          Name="data"
+          Type="string"
+          Value="[CocktailDataRoot]"
+          KeyPath="yes" />
+      </Component>
       <Component Id="EnvExample" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
         <File
           Id="CocktailEnv"
           Source="$(var.StageDir)\cocktail.env.example"
           Name="cocktail.env.example"
-          KeyPath="yes" />
-      </Component>
-      <Component Id="LogoFile" Guid="D4E5F6A7-B8C9-0123-DEF0-234567890123">
-        <File
-          Id="CocktailLogo"
-          Source="$(var.StageDir)\logo.png"
-          Name="logo.png"
           KeyPath="yes" />
       </Component>
     </ComponentGroup>
@@ -85,8 +99,8 @@
           Id="CocktailStartMenu"
           Name="Cocktail Manager"
           Description="Start Cocktail control plane"
-          Target="[INSTALLFOLDER]cocktail-control.exe"
-          WorkingDirectory="CocktailDataRoot" />
+          Target="[INSTALLFOLDER]Start-Cocktail.cmd"
+          WorkingDirectory="INSTALLFOLDER" />
         <RemoveFolder Id="CleanMenu" On="uninstall" />
         <RegistryValue
           Root="HKCU"

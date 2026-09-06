@@ -84,14 +84,26 @@ pub async fn status(state: &AppState) -> NetopsStatus {
         let conn = state.db.lock().await;
         crate::db::list_netops(&conn).unwrap_or_default()
     };
-    let backend = if nft {
+    let backend = if cfg!(windows) {
+        if privileged {
+            "netsh"
+        } else {
+            "none"
+        }
+    } else if nft {
         "nftables"
     } else if iptables {
         "iptables"
     } else {
         "none"
     };
-    let hint = if !privileged {
+    let hint = if cfg!(windows) {
+        if !privileged {
+            "未以管理员运行：防火墙规则会记下来但无法写入 Windows 防火墙；仍可使用游戏 ban-ip。".into()
+        } else {
+            "规则写入 Windows 高级防火墙分组 Cocktail，只拦截指定游戏端口。".into()
+        }
+    } else if !privileged {
         "控制面没有 NET_ADMIN/root，防火墙规则会记下来但无法写入内核；仍可踢连接（若有权限）和游戏 ban-ip。".into()
     } else if backend == "none" {
         "未找到 nft/iptables，只能做游戏 ban-ip 与 ss 踢连接。".into()
@@ -427,15 +439,74 @@ fn display_ip(ip: IpAddr) -> String {
 }
 
 fn apply_firewall(rules: &[(NetopsRule, Vec<u16>)]) -> anyhow::Result<()> {
-    if has_cmd("nft") {
-        apply_nft(rules)
-    } else if has_cmd("iptables") {
-        apply_iptables(rules)
-    } else if rules.is_empty() {
-        Ok(())
-    } else {
-        anyhow::bail!("系统没有 nftables/iptables")
+    #[cfg(windows)]
+    {
+        return apply_netsh(rules);
     }
+    #[cfg(not(windows))]
+    {
+        if has_cmd("nft") {
+            apply_nft(rules)
+        } else if has_cmd("iptables") {
+            apply_iptables(rules)
+        } else if rules.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!("系统没有 nftables/iptables")
+        }
+    }
+}
+
+#[cfg(windows)]
+fn apply_netsh(rules: &[(NetopsRule, Vec<u16>)]) -> anyhow::Result<()> {
+    let mut del = std::process::Command::new("netsh");
+    del.args(["advfirewall", "firewall", "delete", "rule", "group=Cocktail"]);
+    crate::wincompat::hide_console_std(&mut del);
+    let _ = del.output();
+    for (rule, ports) in rules {
+        let protos: &[&str] = match rule.proto.as_str() {
+            "tcp" => &["TCP"],
+            "udp" => &["UDP"],
+            _ => &["TCP", "UDP"],
+        };
+        let port_list: Vec<u16> = if ports.is_empty() {
+            vec![0]
+        } else {
+            ports.clone()
+        };
+        for proto in protos {
+            for port in &port_list {
+                let short = rule.id.chars().take(8).collect::<String>();
+                let name = format!("Cocktail {short} {proto} {port} {}", rule.cidr);
+                let mut args = vec![
+                    "advfirewall".into(),
+                    "firewall".into(),
+                    "add".into(),
+                    "rule".into(),
+                    format!("name={name}"),
+                    "group=Cocktail".into(),
+                    "dir=in".into(),
+                    "action=block".into(),
+                    format!("protocol={proto}"),
+                    format!("remoteip={}", rule.cidr),
+                ];
+                if *port > 0 {
+                    args.push(format!("localport={port}"));
+                }
+                let mut cmd = std::process::Command::new("netsh");
+                cmd.args(&args);
+                crate::wincompat::hide_console_std(&mut cmd);
+                let out = cmd.output()?;
+                if !out.status.success() {
+                    anyhow::bail!(
+                        "netsh 添加规则失败: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn apply_nft(rules: &[(NetopsRule, Vec<u16>)]) -> anyhow::Result<()> {
@@ -562,6 +633,10 @@ fn ensure_ipt_chain(tool: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn kick_conns(_cidr: &str, _ports: &[u16]) {}
+
+#[cfg(not(windows))]
 fn kick_conns(cidr: &str, ports: &[u16]) {
     let ip = cidr.split_once('/').map(|(a, _)| a).unwrap_or(cidr);
     if has_cmd("conntrack") {
@@ -585,20 +660,9 @@ fn kick_conns(cidr: &str, ports: &[u16]) {
 }
 
 fn has_cmd(name: &str) -> bool {
-    Command::new("sh")
-        .args(["-c", &format!("command -v {name} >/dev/null 2>&1")])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    crate::wincompat::command_exists(name)
 }
 
 fn is_privileged() -> bool {
-    #[cfg(unix)]
-    {
-        unsafe { libc::geteuid() == 0 }
-    }
-    #[cfg(not(unix))]
-    {
-        false
-    }
+    crate::wincompat::is_admin()
 }

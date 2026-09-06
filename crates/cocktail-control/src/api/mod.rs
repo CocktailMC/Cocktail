@@ -149,6 +149,10 @@ pub fn router() -> Router<SharedState> {
             get(handlers::list_players),
         )
         .route(
+            "/api/v1/instances/{id}/players/history",
+            get(handlers::player_history),
+        )
+        .route(
             "/api/v1/instances/{id}/players/{name}/{action}",
             post(handlers::player_action),
         )
@@ -180,8 +184,21 @@ pub fn router() -> Router<SharedState> {
         .route("/api/v1/netops/resync", post(handlers::resync_netops))
         .route("/api/v1/netops/{id}", delete(handlers::delete_netops))
         .route("/api/v1/qqbot/test", post(handlers::qq_test))
+        .route("/api/v1/events", get(handlers::list_panel_events))
+        .route(
+            "/api/v1/automations",
+            get(handlers::list_automations).post(handlers::create_automation),
+        )
+        .route("/api/v1/automations/{id}", delete(handlers::delete_automation))
+        .route("/api/v1/users", get(handlers::list_users).post(handlers::create_user))
+        .route("/api/v1/users/{id}", delete(handlers::delete_user))
         .route("/api/v1/fleet/bulk", post(handlers::fleet_bulk))
         .route("/api/v1/docker/status", get(handlers::docker_status))
+        .route("/api/v1/docker/images", get(handlers::docker_images))
+        .route("/api/v1/java", get(handlers::list_java))
+        .route("/api/v1/java/install", post(handlers::install_java))
+        .route("/api/v1/java/ensure", post(handlers::ensure_java))
+        .route("/api/v1/java/{id}", delete(handlers::delete_java))
         .route("/api/v1/events/ws", get(handlers::events_ws))
         .route("/api/v1/instances/{id}/logs/ws", get(handlers::logs_ws))
         .route("/api/v1/agent/ws", get(crate::cluster::agent_ws))

@@ -197,6 +197,43 @@ fn delta_rate(now: u64, prev: u64, dt: f32) -> f32 {
 }
 
 fn read_nics() -> Vec<RawNic> {
+    #[cfg(windows)]
+    {
+        return read_nics_sysinfo();
+    }
+    #[cfg(not(windows))]
+    {
+        read_nics_proc()
+    }
+}
+
+#[cfg(windows)]
+fn read_nics_sysinfo() -> Vec<RawNic> {
+    use sysinfo::Networks;
+    let networks = Networks::new_with_refreshed_list();
+    let mut out = Vec::new();
+    for (name, data) in &networks {
+        let lname = name.to_ascii_lowercase();
+        if lname.contains("loopback") || lname == "lo" {
+            continue;
+        }
+        out.push(RawNic {
+            name: name.to_string(),
+            rx: data.total_received(),
+            tx: data.total_transmitted(),
+            rx_pkts: data.total_packets_received(),
+            tx_pkts: data.total_packets_transmitted(),
+            drops: data.total_errors_on_received().saturating_add(data.total_errors_on_transmitted()),
+            errors: data.total_errors_on_received().saturating_add(data.total_errors_on_transmitted()),
+        });
+    }
+    out.sort_by(|a, b| b.rx.cmp(&a.rx));
+    out.truncate(12);
+    out
+}
+
+#[cfg(not(windows))]
+fn read_nics_proc() -> Vec<RawNic> {
     let path = Path::new("/proc/net/dev");
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
@@ -236,6 +273,42 @@ fn read_nics() -> Vec<RawNic> {
 }
 
 fn tcp_states() -> (u32, u32, u32) {
+    #[cfg(windows)]
+    {
+        return tcp_states_netstat();
+    }
+    #[cfg(not(windows))]
+    {
+        tcp_states_proc()
+    }
+}
+
+#[cfg(windows)]
+fn tcp_states_netstat() -> (u32, u32, u32) {
+    let mut cmd = std::process::Command::new("netstat");
+    cmd.args(["-ano", "-p", "tcp"]);
+    crate::wincompat::hide_console_std(&mut cmd);
+    let Ok(out) = cmd.output() else {
+        return (0, 0, 0);
+    };
+    let mut estab = 0u32;
+    let mut syn = 0u32;
+    let mut tw = 0u32;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let u = line.to_ascii_uppercase();
+        if u.contains("ESTAB") {
+            estab += 1;
+        } else if u.contains("SYN") {
+            syn += 1;
+        } else if u.contains("TIME_WAIT") || u.contains("TIME-WAIT") {
+            tw += 1;
+        }
+    }
+    (estab, syn, tw)
+}
+
+#[cfg(not(windows))]
+fn tcp_states_proc() -> (u32, u32, u32) {
     let mut estab = 0u32;
     let mut syn = 0u32;
     let mut tw = 0u32;

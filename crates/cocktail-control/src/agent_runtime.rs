@@ -22,6 +22,7 @@ struct Live {
 }
 
 pub async fn run_agent() -> anyhow::Result<()> {
+    crate::wincompat::enable_utf8_console();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -98,7 +99,7 @@ async fn serve_once(url: &str) -> anyhow::Result<()> {
     loop {
         tokio::select! {
             _ = beat.tick() => {
-                sink.send(Message::Text(serde_json::to_string(&AgentUp::Heartbeat)?.into()))
+                sink.send(Message::Text(serde_json::to_string(&sample_heartbeat())?.into()))
                     .await?;
             }
             ev = ev_rx.recv() => {
@@ -250,6 +251,26 @@ async fn spawn_live(
         RuntimeKind::Process => spec.port,
     };
     files::ensure_seed_files(&workdir, seed_port, spec.eula_accepted)?;
+    let docker_image = spec
+        .docker_image
+        .clone()
+        .unwrap_or_else(|| "eclipse-temurin:21-jre".into());
+    let docker_image = if docker_image.is_empty() || docker_image.starts_with("eclipse-temurin:") {
+        crate::java::docker_image_for(
+            spec.java_major
+                .unwrap_or_else(|| crate::java::recommended_java_major(spec.mc_version.as_deref())),
+        )
+    } else {
+        docker_image
+    };
+    let command = if spec.runtime == RuntimeKind::Process
+        && command.as_deref().is_some_and(util::is_java_command)
+    {
+        let bin = crate::java::ensure_for_spec(spec.java_major, spec.mc_version.as_deref()).await?;
+        crate::java::rewrite_java_command(command, &bin)
+    } else {
+        command
+    };
     match spec.runtime {
         RuntimeKind::Docker => {
             crate::instance::container::spawn_docker_instance(
@@ -260,9 +281,7 @@ async fn spawn_live(
                 spec.memory_mib,
                 spec.port,
                 spec.cpu_limit,
-                spec.docker_image
-                    .as_deref()
-                    .unwrap_or("eclipse-temurin:21-jre"),
+                &docker_image,
                 events,
             )
             .await
@@ -279,6 +298,18 @@ async fn spawn_live(
             )
             .await
         }
+    }
+}
+
+fn sample_heartbeat() -> AgentUp {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_cpu_all();
+    sys.refresh_memory();
+    AgentUp::Heartbeat {
+        cpu_pct: sys.global_cpu_usage(),
+        memory_mib: (sys.used_memory() as f32) / (1024.0 * 1024.0),
+        rx_bps: 0.0,
+        tx_bps: 0.0,
     }
 }
 

@@ -231,6 +231,20 @@ pub fn create_backup(instance_id: &str, workdir: &str) -> anyhow::Result<BackupI
     })
 }
 
+pub fn prune_backups(instance_id: &str, keep: u32) -> anyhow::Result<usize> {
+    let mut list = list_backups(instance_id)?;
+    if keep == 0 || list.len() <= keep as usize {
+        return Ok(0);
+    }
+    list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    let mut n = 0;
+    for bak in list.into_iter().skip(keep as usize) {
+        delete_backup(instance_id, &bak.id)?;
+        n += 1;
+    }
+    Ok(n)
+}
+
 pub fn list_backups(instance_id: &str) -> anyhow::Result<Vec<BackupInfo>> {
     let root = PathBuf::from("data").join("backups").join(instance_id);
     if !root.exists() {

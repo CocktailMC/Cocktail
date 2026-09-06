@@ -106,6 +106,58 @@
   background: var(--danger);
 }
 
+.health-score {
+  margin-bottom: 1rem;
+}
+
+.health-score-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.health-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.health-bar > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #3dd68c, #6ee7b7);
+}
+
+.event-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.event-item {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+
+.event-mark {
+  width: 1.4rem;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.event-item.event-warn .event-mark {
+  color: #f0c14b;
+}
+
+.event-item.event-ok .event-mark {
+  color: #3dd68c;
+}
+
 .topbar-right > span {
   display: inline-flex;
   align-items: center;
@@ -2698,4 +2750,38 @@ button.linkish:hover {
   font-size: 0.75rem;
   color: #4b5563;
   word-break: break-all;
+}
+
+.java-install-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+
+.java-install-row strong {
+  min-width: 5.5rem;
+}
+
+.java-runtime-table .meta,
+.java-table .meta {
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+}
+
+.java-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.85rem 0 0.5rem;
+}
+
+.java-sub {
+  margin: 1.1rem 0 0.4rem;
+  font-size: 0.95rem;
+}
+
+.java-install-grid {
+  margin-top: 0.25rem;
 }

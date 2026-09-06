@@ -175,8 +175,8 @@ export default function ExtensionsPage({ onBack, onError }: Props) {
     <div className="page-flow">
       <div className="page-head">
         <div>
-          <p className="page-eyebrow">GameOps</p>
-          <h2 className="page-title">.NET 插件</h2>
+          <p className="page-eyebrow">生态</p>
+          <h2 className="page-title">扩展中心</h2>
         </div>
         <div className="btn-row">
           <button type="button" className="btn btn-ghost" onClick={() => void reload()} disabled={busy}>
@@ -185,6 +185,31 @@ export default function ExtensionsPage({ onBack, onError }: Props) {
           <button type="button" className="btn btn-ghost" onClick={onBack}>
             返回主界面
           </button>
+        </div>
+      </div>
+
+      <div className="stat-grid" style={{ marginBottom: '1rem' }}>
+        <div className="card-panel">
+          <h3 className="card-title">官方插件</h3>
+          <p className="meta">PluginHost 内的 QQ 通知、看门狗、GameOps 等。</p>
+        </div>
+        <div className="card-panel">
+          <h3 className="card-title">第三方插件</h3>
+          <p className="meta">
+            放入 <code>dotnet/dist/plugins</code> 后重载。实例内 Bukkit/模组仍在「插件/模组」。
+          </p>
+        </div>
+        <div className="card-panel">
+          <h3 className="card-title">SDK</h3>
+          <p className="meta">
+            C# 扩展实现 <code>ICocktailPlugin</code>，通过宿主 HTTP 调控制面。
+          </p>
+        </div>
+        <div className="card-panel">
+          <h3 className="card-title">API 文档</h3>
+          <p className="meta">
+            控制面 REST：<code>/api/v1</code>；插件宿主默认 <code>:11012</code>。
+          </p>
         </div>
       </div>
 

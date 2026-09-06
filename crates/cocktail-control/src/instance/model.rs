@@ -75,10 +75,24 @@ pub struct InstanceSpec {
     pub node_id: String,
     #[serde(default)]
     pub desired_running: bool,
+    #[serde(default = "default_backup_keep")]
+    pub backup_keep: u32,
+    #[serde(default)]
+    pub backup_hour: Option<u8>,
+    /// Explicit Temurin/Java major (8/17/21/…). None = pick from mc_version or 21.
+    #[serde(default)]
+    pub java_major: Option<u32>,
+    /// Minecraft version last installed for this instance (used to pick Java).
+    #[serde(default)]
+    pub mc_version: Option<String>,
 }
 
 pub fn is_local_node(node_id: &str) -> bool {
     node_id.is_empty() || node_id == "local"
+}
+
+fn default_backup_keep() -> u32 {
+    7
 }
 
 fn default_node_id() -> String {
@@ -114,6 +128,20 @@ pub struct MetricSample {
     pub memory_mib: f32,
     pub tps: Option<f32>,
     pub players: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mspt: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub players_max: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entities: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks: Option<u32>,
+    #[serde(default)]
+    pub gc_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heap_used_mib: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heap_max_mib: Option<f32>,
     #[serde(default)]
     pub net_rx_bps: f32,
     #[serde(default)]
@@ -235,6 +263,20 @@ impl Instance {
     }
 
     pub fn public_view(&self) -> InstanceView {
+        let m = self.last_metrics.as_ref();
+        let status = match self.status {
+            InstanceStatus::Running => "running",
+            InstanceStatus::Crashed => "crashed",
+            _ => "other",
+        };
+        let report = crate::util::health_report(
+            status,
+            m.and_then(|x| x.tps),
+            m.and_then(|x| x.mspt),
+            m.map(|x| x.memory_mib).unwrap_or(0.0),
+            self.spec.memory_mib as f32,
+            m.map(|x| x.net_alerts.len()).unwrap_or(0),
+        );
         InstanceView {
             id: self.id.clone(),
             spec: self.spec.clone(),
@@ -260,6 +302,9 @@ impl Instance {
             },
             desired_running: self.spec.desired_running,
             generation: self.generation,
+            docker_container: self.docker_container.clone(),
+            health_score: report.0,
+            health_reasons: report.1,
         }
     }
 
@@ -301,6 +346,12 @@ pub struct InstanceView {
     pub desired_running: bool,
     #[serde(default)]
     pub generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_container: Option<String>,
+    #[serde(default)]
+    pub health_score: u8,
+    #[serde(default)]
+    pub health_reasons: Vec<String>,
 }
 
 fn default_view_node() -> String {
@@ -340,6 +391,12 @@ pub struct CreateInstanceRequest {
     pub group: Option<String>,
     #[serde(default)]
     pub node_id: Option<String>,
+    #[serde(default)]
+    pub backup_keep: Option<u32>,
+    #[serde(default)]
+    pub backup_hour: Option<u8>,
+    #[serde(default)]
+    pub java_major: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -376,6 +433,13 @@ pub struct UpdateInstanceRequest {
     pub node_id: Option<String>,
     #[serde(default)]
     pub desired_running: Option<bool>,
+    #[serde(default)]
+    pub backup_keep: Option<u32>,
+    #[serde(default)]
+    pub backup_hour: Option<u8>,
+    /// 0 clears to auto.
+    #[serde(default)]
+    pub java_major: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -475,6 +539,24 @@ pub struct PropertyEntry {
 #[derive(Debug, Serialize, Clone)]
 pub struct PlayerInfo {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
+    #[serde(default)]
+    pub online: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ping_ms: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub world: Option<String>,
+    #[serde(default)]
+    pub session_secs: u64,
+    #[serde(default)]
+    pub total_secs: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_seen: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

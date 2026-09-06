@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { api, type HealthInfo, type PanelSettings } from './api'
 import { BrandImg, BRAND } from './brandIcons'
 import EnvBrandBar from './EnvBrandBar'
+import JavaRuntimePanel from './JavaRuntimePanel'
 
 type Props = {
   health: string
@@ -14,6 +15,7 @@ type Props = {
   onPanelName: (name: string) => void
   onAdminName: (name: string) => void
   onBack: () => void
+  busy: boolean
   onBusy: (v: boolean, label?: string) => void
   onError: (msg: string | null) => void
 }
@@ -28,6 +30,7 @@ export default function HomeSettings({
   onPanelName,
   onAdminName,
   onBack,
+  busy,
   onBusy,
   onError,
 }: Props) {
@@ -425,6 +428,10 @@ export default function HomeSettings({
             </li>
           </ul>
         </div>
+      </div>
+
+      <div className="mt-6">
+        <JavaRuntimePanel busy={busy} onBusy={onBusy} onError={onError} />
       </div>
     </div>
   )

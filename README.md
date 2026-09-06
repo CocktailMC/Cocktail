@@ -107,7 +107,11 @@ sudo systemctl start cocktail-control
 .\scripts\package-windows.ps1
 ```
 
-会生成 `dist/cocktail-<ver>-windows-x64.zip`。若已安装 [WiX v3](https://wixtoolset.org/)（`candle` / `light` / `heat`），额外打出 MSI。
+会生成 `dist/cocktail-<ver>-windows-x64.zip`。双击 `Start-Cocktail.cmd` 启动控制面（控制台保留日志），浏览器打开 http://127.0.0.1:11011。便携包数据在 exe 旁的 `data\`；MSI 安装后数据在 `%ProgramData%\Cocktail`。
+
+防火墙拉黑需要**以管理员运行**控制面（写入 Windows 防火墙分组 Cocktail）。控制面重启后可认回仍在跑的 Java 进程，但控制台指令依赖启动时的 stdin 管道，认回后无法再向该进程写指令（可在游戏内或下次启动后操作）。踢连接依赖 Linux `ss`/`conntrack`，Windows 上靠防火墙规则与游戏 ban-ip。
+
+若已安装 [WiX v3](https://wixtoolset.org/)（`candle` / `light` / `heat`），额外打出 MSI。
 
 ```powershell
 winget install WiXToolset.WiXToolset

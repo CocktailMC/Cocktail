@@ -51,6 +51,26 @@ pub fn new_session_token() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
+pub fn permissions(role: &str) -> Vec<&'static str> {
+    match role {
+        "observer" => vec!["view"],
+        "support" => vec!["view", "start", "stop", "logs", "players", "backups"],
+        "developer" => vec!["view", "logs", "files", "plugins"],
+        "admin" => vec![
+            "view", "start", "stop", "logs", "files", "players", "backups", "settings",
+            "automations",
+        ],
+        _ => vec![
+            "view", "start", "stop", "logs", "files", "players", "backups", "settings",
+            "automations", "users",
+        ],
+    }
+}
+
+pub fn can(role: &str, perm: &str) -> bool {
+    permissions(role).iter().any(|p| *p == perm)
+}
+
 pub fn setup_required(conn: &Connection) -> anyhow::Result<bool> {
     Ok(db::superadmin(conn)?.is_none())
 }

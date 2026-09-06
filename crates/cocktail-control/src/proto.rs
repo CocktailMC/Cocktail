@@ -46,7 +46,16 @@ pub enum AgentUp {
         os: String,
         arch: String,
     },
-    Heartbeat,
+    Heartbeat {
+        #[serde(default)]
+        cpu_pct: f32,
+        #[serde(default)]
+        memory_mib: f32,
+        #[serde(default)]
+        rx_bps: f32,
+        #[serde(default)]
+        tx_bps: f32,
+    },
     Status {
         instance_id: String,
         status: InstanceStatus,

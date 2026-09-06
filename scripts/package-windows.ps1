@@ -16,7 +16,7 @@ if (-not $Version) {
 Write-Host "==> version=$Version"
 
 Write-Host "==> cargo build --release"
-cargo build -p cocktail-control --release
+cargo build -p cocktail-control --release --bins
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "==> admin npm build"
@@ -43,18 +43,25 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Stage "web") | Out-Null
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 Copy-Item "target\release\cocktail-control.exe" (Join-Path $Stage "cocktail-control.exe")
+if (Test-Path "target\release\cocktail-agent.exe") {
+  Copy-Item "target\release\cocktail-agent.exe" (Join-Path $Stage "cocktail-agent.exe")
+}
 Copy-Item -Recurse -Force "admin\dist\*" (Join-Path $Stage "web")
 Copy-Item "packaging\env\cocktail.env" (Join-Path $Stage "cocktail.env.example")
-Copy-Item "logo.png" (Join-Path $Stage "logo.png") -ErrorAction SilentlyContinue
+Copy-Item "packaging\windows\Start-Cocktail.cmd" (Join-Path $Stage "Start-Cocktail.cmd")
 
-@"
-Cocktail Manager $Version
-========================
-1. Set working directory to a data folder (or use Start Menu shortcut).
-2. Ensure COCKTAIL_WEB_ROOT points to the web\ folder next to the exe
-   (installer sets this system-wide).
-3. Run cocktail-control.exe 鈥?open http://127.0.0.1:11011
-"@ | Set-Content -Encoding UTF8 (Join-Path $Stage "README.txt")
+$readme = @"
+Cocktail Manager $Version (Windows)
+===================================
+1. Double-click Start-Cocktail.cmd (keeps the console for logs).
+2. Open http://127.0.0.1:11011
+3. Data is stored in the data\ folder next to the exe.
+
+COCKTAIL_WEB_ROOT is auto-set to the web\ folder beside the exe.
+Java/JRE is downloaded from Adoptium when missing (stored in data\java\).
+"@
+$utf8 = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText((Join-Path $Stage "README.txt"), $readme, $utf8)
 
 # Portable zip always
 $Zip = Join-Path $Out "cocktail-$Version-windows-x64.zip"

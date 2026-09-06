@@ -101,6 +101,7 @@ pub fn maybe_autostart(state: &std::sync::Arc<AppState>) {
             .env("COCKTAIL_PLUGIN_DIR", plugin_dir)
             .env("COCKTAIL_DATA", "data")
             .kill_on_drop(true);
+        crate::wincompat::hide_console(&mut cmd);
         if let Some(t) = api_token {
             cmd.env("COCKTAIL_API_TOKEN", t);
         }

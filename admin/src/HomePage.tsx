@@ -1,7 +1,8 @@
-import type { HealthInfo, Instance, InstanceStatus } from './api'
+import type { HealthInfo, Instance, InstanceStatus, PanelEvent } from './api'
 import { formatBps } from './api'
 import { BrandImg, BRAND } from './brandIcons'
 import EnvBrandBar from './EnvBrandBar'
+import EventFeed from './EventFeed'
 
 const STATUS_LABEL: Record<InstanceStatus, string> = {
   created: '已创建',
@@ -29,6 +30,7 @@ type Props = {
   authRequired: boolean
   busy: boolean
   selectedIds: string[]
+  events: PanelEvent[]
   onToggleSelect: (id: string, checked: boolean) => void
   onSelectAll: (checked: boolean) => void
   onOpenInstance: (id: string) => void
@@ -49,6 +51,7 @@ export default function HomePage(props: Props) {
     authRequired,
     busy,
     selectedIds,
+    events,
     onToggleSelect,
     onSelectAll,
     onOpenInstance,
@@ -76,6 +79,51 @@ export default function HomePage(props: Props) {
           <button type="button" className="btn btn-primary" onClick={onCreate}>
             <i className="fa fa-plus" /> 创建实例
           </button>
+        </div>
+      </div>
+
+      <div className="grid-2" style={{ marginBottom: '1rem' }}>
+        <div className="card-panel">
+          <h3 className="card-title">事件中心</h3>
+          <EventFeed
+            events={events}
+            names={new Map(instances.map((i) => [i.id, i.spec.name]))}
+            onOpenInstance={onOpenInstance}
+          />
+        </div>
+        <div className="card-panel">
+          <h3 className="card-title">健康一览</h3>
+          {instances.length === 0 ? (
+            <p className="empty">还没有实例</p>
+          ) : (
+            <ul className="event-feed">
+              {instances.slice(0, 8).map((inst) => (
+                <li key={inst.id} className="event-item">
+                  <div style={{ flex: 1 }}>
+                    <button
+                      type="button"
+                      className="link-btn"
+                      onClick={() => onOpenInstance(inst.id)}
+                    >
+                      <strong>{inst.spec.name}</strong>
+                    </button>
+                    <div className="health-bar" style={{ marginTop: 6 }}>
+                      <span
+                        style={{
+                          width: `${Math.max(0, Math.min(100, inst.health_score ?? 0))}%`,
+                        }}
+                      />
+                    </div>
+                    <p className="meta">
+                      {inst.health_score ?? '—'}% ·{' '}
+                      {(inst.health_reasons ?? []).slice(0, 2).join(' · ') ||
+                        STATUS_LABEL[inst.status]}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
 
