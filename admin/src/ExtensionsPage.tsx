@@ -41,6 +41,7 @@ export default function ExtensionsPage({ onBack, onError, focusId, onOpenPlugin 
   const [codeDraft, setCodeDraft] = useState('')
   const [formState, setFormState] = useState<Record<string, unknown>>({})
   const [hint, setHint] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const load = async () => {
     try {
@@ -80,12 +81,13 @@ export default function ExtensionsPage({ onBack, onError, focusId, onOpenPlugin 
     return [{ id: 'raw', type: 'json', path, title: '数据' }]
   }, [ext])
 
-  const loadViewData = async (pluginId: string, path: string) => {
-    const data = await api.extensionGet(pluginId, path)
+  const loadViewData = async (pluginId: string) => {
+    const dataPath = ext?.ui?.path || views.find((v) => v.type !== 'code' && v.type !== 'actions')?.path || '/summary'
+    setLoadError(null)
+    const data = await api.extensionGet(pluginId, dataPath)
     setPayload(data)
     if (typeof data === 'string') {
       setRawText(data)
-      setCodeDraft(data)
     } else {
       setRawText(JSON.stringify(data, null, 2))
     }
@@ -98,18 +100,29 @@ export default function ExtensionsPage({ onBack, onError, focusId, onOpenPlugin 
       }
     }
     setFormState((prev) => ({ ...nextForm, ...prev }))
+    const codeView = views.find((v) => v.type === 'code')
+    if (codeView?.path) {
+      try {
+        const text = await api.extensionText(pluginId, codeView.path)
+        setCodeDraft(text)
+      } catch (e) {
+        setCodeDraft(e instanceof Error ? e.message : String(e))
+      }
+    }
   }
 
   useEffect(() => {
     if (!active || !online) {
       setPayload(null)
       setRawText('')
+      setLoadError(null)
       return
     }
-    const path = ext?.ui?.path || views[0]?.path || '/summary'
-    loadViewData(active, path).catch((e) =>
-      setRawText(e instanceof Error ? e.message : String(e)),
-    )
+    loadViewData(active).catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e)
+      setRawText(msg)
+      setLoadError(msg)
+    })
   }, [active, online, ext?.id])
 
   const reload = async () => {
@@ -149,8 +162,7 @@ export default function ExtensionsPage({ onBack, onError, focusId, onOpenPlugin 
         const pw = (result as { panelPassword?: string }).panelPassword
         setHint(pw ? `${h ?? ''} 密码：${pw}` : (h ?? null))
       }
-      const refreshPath = ext?.ui?.path || '/summary'
-      await loadViewData(active, refreshPath)
+      await loadViewData(active)
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -255,7 +267,7 @@ export default function ExtensionsPage({ onBack, onError, focusId, onOpenPlugin 
         <div className="plugin-view" key={view.id || 'table'}>
           {view.title ? <h4 className="card-title">{view.title}</h4> : null}
           {list.length === 0 ? (
-            <p className="meta">没有数据。</p>
+            <p className="meta">{loadError ? loadError : '没有数据。'}</p>
           ) : (
             <div className="table-wrap">
               <table className="data-table">
@@ -434,6 +446,7 @@ export default function ExtensionsPage({ onBack, onError, focusId, onOpenPlugin 
           <h3 className="card-title">{ext?.name ?? active}</h3>
           {ext?.description ? <p className="meta">{ext.description}</p> : null}
           {hint ? <p className="meta">{hint}</p> : null}
+          {loadError ? <p className="error">{loadError}</p> : null}
           {views.map((v) => renderView(v))}
         </div>
       )}

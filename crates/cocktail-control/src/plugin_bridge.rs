@@ -162,6 +162,10 @@ pub fn maybe_autostart(state: &Arc<AppState>) {
     });
 }
 
+fn lock_plugins(state: &AppState) -> std::sync::MutexGuard<'_, PluginRegistry> {
+    state.plugins.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn spawn_ticks(state: Arc<AppState>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -169,7 +173,7 @@ fn spawn_ticks(state: Arc<AppState>) {
         loop {
             interval.tick().await;
             let ticks: Vec<(String, u64)> = {
-                let reg = state.plugins.lock().await;
+                let reg = lock_plugins(&state);
                 reg.slots
                     .values()
                     .filter(|s| s.running)
@@ -191,13 +195,12 @@ fn spawn_ticks(state: Arc<AppState>) {
 }
 
 pub async fn catalog(state: &AppState) -> anyhow::Result<Vec<Value>> {
-    let reg = state.plugins.lock().await;
-    Ok(reg.catalog_values())
+    Ok(lock_plugins(state).catalog_values())
 }
 
 pub async fn reload_arc(state: &Arc<AppState>) -> anyhow::Result<Value> {
     reload_inner(state).await?;
-    let n = state.plugins.lock().await.slots.len();
+    let n = lock_plugins(state).slots.len();
     Ok(json!({ "ok": true, "plugins": n, "runtime": HOST_LABEL }))
 }
 
@@ -207,7 +210,7 @@ pub async fn set_enabled(state: &Arc<AppState>, id: &str, enabled: bool) -> anyh
         saved.insert(id.to_string(), enabled);
         save_enabled_map(&saved);
     }
-    let mut reg = state.plugins.lock().await;
+    let mut reg = lock_plugins(state);
     let slot = reg
         .slots
         .get_mut(id)
@@ -222,8 +225,11 @@ pub async fn set_enabled(state: &Arc<AppState>, id: &str, enabled: bool) -> anyh
 }
 
 pub async fn health_snapshot(state: &AppState) -> (bool, usize) {
-    let reg = state.plugins.lock().await;
-    let running = reg.slots.values().filter(|s| s.running).count();
+    let running = lock_plugins(state)
+        .slots
+        .values()
+        .filter(|s| s.running)
+        .count();
     (true, running)
 }
 
@@ -292,7 +298,7 @@ pub async fn post_event(state: &AppState, event: &InstanceEvent) -> anyhow::Resu
 async fn dispatch_event(state: &Arc<AppState>, event: &InstanceEvent) -> anyhow::Result<()> {
     let payload = serde_json::to_string(event)?;
     let ids: Vec<String> = {
-        let reg = state.plugins.lock().await;
+        let reg = lock_plugins(state);
         reg.slots
             .values()
             .filter(|s| s.running && s.manifest.permissions.iter().any(|p| p == "events.subscribe"))
@@ -315,27 +321,24 @@ async fn call_export(
     let id = id.to_string();
     let export = export.to_string();
     let input = input.to_string();
-    let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
-        handle.block_on(async {
-            let mut reg = state.plugins.lock().await;
-            let slot = reg
-                .slots
-                .get_mut(&id)
-                .ok_or_else(|| anyhow::anyhow!("plugin {id} not found"))?;
-            if !slot.running {
-                anyhow::bail!("plugin {id} is not running");
-            }
-            let plugin = slot
-                .plugin
-                .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("plugin {id} wasm not loaded"))?;
-            if !plugin.function_exists(&export) {
-                anyhow::bail!("export {export} missing");
-            }
-            let out: String = plugin.call(&export, &input)?;
-            Ok(out)
-        })
+        let mut reg = lock_plugins(&state);
+        let slot = reg
+            .slots
+            .get_mut(&id)
+            .ok_or_else(|| anyhow::anyhow!("plugin {id} not found"))?;
+        if !slot.running {
+            anyhow::bail!("plugin {id} is not running");
+        }
+        let plugin = slot
+            .plugin
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("plugin {id} wasm not loaded"))?;
+        if !plugin.function_exists(&export) {
+            anyhow::bail!("export {export} missing");
+        }
+        let out: String = plugin.call(&export, &input)?;
+        Ok(out)
     })
     .await?
 }
@@ -368,8 +371,8 @@ async fn reload_inner(state: &Arc<AppState>) -> anyhow::Result<()> {
         }
         next.slots.insert(slot.manifest.id.clone(), slot);
     }
-    *state.plugins.lock().await = next;
-    let n = state.plugins.lock().await.slots.len();
+    let n = next.slots.len();
+    *lock_plugins(state) = next;
     tracing::info!(count = n, "wasm plugin host loaded");
     Ok(())
 }

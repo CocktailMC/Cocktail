@@ -10,7 +10,7 @@ const CONFIG_PATH: &str = "config/esplus-common.toml";
 const DEFAULT_USER: &str = "admin";
 const DEFAULT_PW: &str = "esplus";
 
-#[derive(Default, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct AdapterConfig {
     #[serde(default = "default_repo")]
@@ -18,6 +18,16 @@ struct AdapterConfig {
     jar_path: Option<String>,
     #[serde(default)]
     instances: std::collections::BTreeMap<String, InstanceSecrets>,
+}
+
+impl Default for AdapterConfig {
+    fn default() -> Self {
+        Self {
+            github_repo: default_repo(),
+            jar_path: None,
+            instances: Default::default(),
+        }
+    }
 }
 
 fn default_repo() -> String {
