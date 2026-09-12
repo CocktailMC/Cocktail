@@ -40,6 +40,7 @@ pub struct AppState {
     pub node_live: RwLock<HashMap<String, NodeLive>>,
     pub plugin_host: String,
     pub plugin_token: String,
+    pub plugins: Mutex<crate::plugin_bridge::PluginRegistry>,
     pub env_api_token: Option<String>,
     pub env_webhook_url: Option<String>,
     pub bind: String,
@@ -73,6 +74,7 @@ impl AppState {
             .filter(|s| !s.is_empty());
         let plugin_host = crate::plugin_bridge::default_host_url();
         let plugin_token = crate::plugin_bridge::resolve_token();
+        let plugins = Mutex::new(crate::plugin_bridge::PluginRegistry::default());
         let http = crate::http::builder()
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
@@ -91,6 +93,7 @@ impl AppState {
             node_live: RwLock::new(HashMap::new()),
             plugin_host,
             plugin_token,
+            plugins,
             env_api_token,
             env_webhook_url,
             bind,

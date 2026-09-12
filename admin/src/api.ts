@@ -615,17 +615,52 @@ export type HealthInfo = {
   plugins?: number
 }
 
+export type PluginUiField = {
+  name: string
+  type?: string
+  label?: string
+  from?: string
+}
+
+export type PluginUiView = {
+  id?: string
+  type?: string
+  title?: string
+  path?: string
+  method?: string
+  language?: string
+  rows?: string
+  columns?: { key: string; label: string }[]
+  fields?: PluginUiField[]
+  actions?: { label: string; path: string; method?: string }[]
+  rowActions?: {
+    label: string
+    path: string
+    method?: string
+    bodyKey?: string
+    primary?: boolean
+  }[]
+  submit?: { path: string; method?: string; bodyKey?: string; label?: string }
+}
+
 export type ExtensionInfo = {
   id: string
   name: string
   version: string
   description?: string
   permissions?: string[]
-  ui?: { label?: string; icon?: string; path?: string } | null
+  ui?: {
+    label?: string
+    icon?: string
+    path?: string
+    nav?: boolean
+    views?: PluginUiView[]
+  } | null
   enabled: boolean
   running: boolean
   error?: string | null
   directory?: string
+  runtime?: string
 }
 
 export type ExtensionsList = {

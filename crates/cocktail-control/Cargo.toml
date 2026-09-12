@@ -35,6 +35,7 @@ zip.workspace = true
 libc.workspace = true
 serde_yaml.workspace = true
 tokio-tungstenite.workspace = true
+extism = "1.10"
 
 [target.'cfg(windows)'.dependencies]
 reqwest = { workspace = true, features = ["native-tls"] }

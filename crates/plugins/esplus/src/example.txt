@@ -1,0 +1,4 @@
+# ESPlus is a NeoForge 1.21.1 server+client mod (LGPL-3.0). Cocktail does not vendor the repo.
+# 1) Create a NeoForge instance, then POST /install on this plugin.
+# 2) POST /ensure-config so panelPassword is not the default "esplus".
+# 3) Restart the instance; panel listens on the assigned port (default base 8088).

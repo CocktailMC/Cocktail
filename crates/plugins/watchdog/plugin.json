@@ -1,0 +1,50 @@
+{
+  "id": "watchdog",
+  "name": "崩溃看门狗",
+  "version": "0.1.0",
+  "description": "记录实例崩溃事件，可按策略请求控制面再次启动。",
+  "tick_ms": 600000,
+  "permissions": [
+    "http.expose",
+    "events.subscribe",
+    "scheduler",
+    "controlplane.instances.read",
+    "controlplane.instances.write",
+    "ui.contribute"
+  ],
+  "ui": {
+    "label": "看门狗",
+    "icon": "fa-heartbeat",
+    "nav": true,
+    "path": "/summary",
+    "views": [
+      {
+        "id": "config",
+        "type": "form",
+        "title": "策略",
+        "path": "/config",
+        "method": "POST",
+        "fields": [
+          {
+            "name": "autoStartOnCrash",
+            "type": "boolean",
+            "label": "崩溃后请求控制面再次启动",
+            "from": "autoStartOnCrash"
+          }
+        ]
+      },
+      {
+        "id": "incidents",
+        "type": "table",
+        "title": "崩溃记录",
+        "path": "/summary",
+        "rows": "incidents",
+        "columns": [
+          { "key": "instanceId", "label": "实例" },
+          { "key": "at", "label": "时间" },
+          { "key": "note", "label": "说明" }
+        ]
+      }
+    ]
+  }
+}

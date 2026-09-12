@@ -5,10 +5,13 @@
   --primary: #0f4c81;
   --primary-hover: #0c3d68;
   --primary-soft: #e8f1fb;
-  --sidebar-bg: #1a222c;
-  --sidebar-hover: #243040;
+  --accent: #6cc054;
+  --cream: #fcf0d8;
+  --ice: #b4d8f0;
+  --sidebar-bg: #15202b;
+  --sidebar-hover: #1e2c3a;
   --sidebar-line: #2a3441;
-  --content-bg: #f4f7fa;
+  --content-bg: #f3f6f4;
   --success: #22c55e;
   --danger: #ef4444;
   --warning: #f59e0b;
@@ -37,8 +40,9 @@ body,
 body {
   min-height: 100vh;
   background:
-    radial-gradient(ellipse 80% 50% at 100% -10%, rgba(15, 76, 129, 0.06), transparent),
-    radial-gradient(ellipse 60% 40% at -5% 30%, rgba(15, 76, 129, 0.04), transparent),
+    radial-gradient(ellipse 80% 50% at 100% -10%, rgba(180, 216, 240, 0.45), transparent),
+    radial-gradient(ellipse 50% 40% at -8% 8%, rgba(252, 240, 216, 0.7), transparent),
+    radial-gradient(ellipse 40% 30% at 20% 100%, rgba(108, 192, 84, 0.08), transparent),
     var(--content-bg);
   color: var(--text);
   font-family: var(--font-body);

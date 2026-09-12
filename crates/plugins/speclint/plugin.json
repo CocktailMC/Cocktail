@@ -1,0 +1,32 @@
+{
+  "id": "speclint",
+  "name": "Spec 巡检",
+  "version": "0.1.0",
+  "description": "对声明式实例 spec 做 GameOps 巡检：EULA、期望状态、节点、端口。",
+  "permissions": [
+    "http.expose",
+    "controlplane.instances.read",
+    "ui.contribute"
+  ],
+  "ui": {
+    "label": "Spec 巡检",
+    "icon": "fa-check-square",
+    "nav": true,
+    "path": "/report",
+    "views": [
+      {
+        "id": "findings",
+        "type": "table",
+        "title": "巡检结果",
+        "path": "/report",
+        "rows": "findings",
+        "columns": [
+          { "key": "name", "label": "实例" },
+          { "key": "severity", "label": "级别" },
+          { "key": "code", "label": "代码" },
+          { "key": "message", "label": "说明" }
+        ]
+      }
+    ]
+  }
+}

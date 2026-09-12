@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["crates/cocktail-control"]
+members = [
+    "crates/cocktail-control",
+    "crates/cocktail-plugin-sdk",
+    "crates/plugins/watchdog",
+    "crates/plugins/speclint",
+    "crates/plugins/gameops",
+    "crates/plugins/esplus",
+]
+default-members = ["crates/cocktail-control"]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,7 +26,7 @@ chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 regex = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream", "socks"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream", "socks", "multipart"] }
 flate2 = "1"
 tar = "0.4"
 serde = { version = "1", features = ["derive"] }

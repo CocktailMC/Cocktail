@@ -1599,8 +1599,8 @@ pub async fn list_extensions(State(state): State<SharedState>) -> impl IntoRespo
 
 pub async fn reload_extensions(
     State(state): State<SharedState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
-    crate::plugin_bridge::reload(&state)
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorBody>)> {
+    crate::plugin_bridge::reload_arc(&state)
         .await
         .map(Json)
         .map_err(|e| bad_request(e.to_string()))

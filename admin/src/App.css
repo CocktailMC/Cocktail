@@ -2814,3 +2814,20 @@ button.linkish:hover {
 .java-install-grid {
   margin-top: 0.25rem;
 }
+
+.plugin-view {
+  margin: 0.85rem 0 1.1rem;
+}
+
+.plugin-view .card-title {
+  margin-bottom: 0.65rem;
+}
+
+.nav-item .fa-heartbeat,
+.nav-item .fa-cubes,
+.nav-item .fa-shield,
+.nav-item .fa-check-square {
+  color: var(--accent);
+}
+
+

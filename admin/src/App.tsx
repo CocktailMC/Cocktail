@@ -36,6 +36,7 @@ import NetworkPage from './NetworkPage'
 import GlobalNetworkPage from './GlobalNetworkPage'
 import NodesPage from './NodesPage'
 import ExtensionsPage from './ExtensionsPage'
+import { parseHash, writeHash, type HomeTab } from './hashRoute'
 import AutomationsPage from './AutomationsPage'
 import EventFeed from './EventFeed'
 import UsersPage from './UsersPage'
@@ -121,16 +122,11 @@ export default function App() {
   const [logs, setLogs] = useState<LogLine[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [view, setView] = useState<'manager' | 'create' | 'eula'>('manager')
-  const [homeTab, setHomeTab] = useState<
-    | 'overview'
-    | 'settings'
-    | 'audit'
-    | 'nodes'
-    | 'extensions'
-    | 'network'
-    | 'events'
-    | 'users'
-  >('overview')
+  const [homeTab, setHomeTab] = useState<HomeTab>('overview')
+  const [pluginFocus, setPluginFocus] = useState<string | null>(null)
+  const [wasmPlugins, setWasmPlugins] = useState<
+    { id: string; label: string; icon: string }[]
+  >([])
   const [mkdirName, setMkdirName] = useState('')
   const [setCommand, setSetCommand] = useState('java')
   const [setArgs, setSetArgs] = useState('-jar server.jar nogui')
@@ -381,6 +377,55 @@ export default function App() {
   }, [gate])
 
   useEffect(() => {
+    if (gate !== 'app') return
+    const apply = () => {
+      const loc = parseHash()
+      if (loc.kind === 'home') {
+        setSelectedId(null)
+        setPluginFocus(null)
+        setHomeTab(loc.tab)
+        setView('manager')
+      } else if (loc.kind === 'plugin') {
+        setSelectedId(null)
+        setPluginFocus(loc.id)
+        setHomeTab('extensions')
+        setView('manager')
+      } else if (loc.kind === 'instance') {
+        setPluginFocus(null)
+        setSelectedId(loc.id)
+        setTab(loc.tab as Tab)
+        setView('manager')
+      } else if (loc.kind === 'create') {
+        setView('create')
+      } else if (loc.kind === 'eula') {
+        setSelectedId(loc.id)
+        setView('eula')
+      }
+    }
+    apply()
+    window.addEventListener('hashchange', apply)
+    return () => window.removeEventListener('hashchange', apply)
+  }, [gate])
+
+  useEffect(() => {
+    if (gate !== 'app') return
+    api
+      .listExtensions()
+      .then((list) => {
+        setWasmPlugins(
+          (list.items ?? [])
+            .filter((p) => p.ui?.nav !== false && p.enabled)
+            .map((p) => ({
+              id: p.id,
+              label: p.ui?.label || p.name,
+              icon: p.ui?.icon || 'fa-puzzle-piece',
+            })),
+        )
+      })
+      .catch(() => setWasmPlugins([]))
+  }, [gate, homeTab])
+
+  useEffect(() => {
     if (!selectedId) {
       setLogs([])
       return
@@ -628,24 +673,26 @@ export default function App() {
     setFilePath('')
     setEditPath(null)
     setView('manager')
+    setPluginFocus(null)
     setError(null)
+    writeHash({ kind: 'instance', id, tab: 'dashboard' })
   }
 
-  const goHome = (
-    tab:
-      | 'overview'
-      | 'settings'
-      | 'audit'
-      | 'nodes'
-      | 'extensions'
-      | 'network'
-      | 'events'
-      | 'users' = 'overview',
-  ) => {
+  const goHome = (tab: HomeTab = 'overview') => {
     setSelectedId(null)
     setHomeTab(tab)
     setView('manager')
+    setPluginFocus(null)
     setError(null)
+    writeHash({ kind: 'home', tab })
+  }
+
+  const openPlugin = (id: string) => {
+    setSelectedId(null)
+    setHomeTab('extensions')
+    setPluginFocus(id)
+    setView('manager')
+    writeHash({ kind: 'plugin', id })
   }
 
   const ensureEulaOrStart = (inst: Instance) => {
@@ -807,6 +854,7 @@ export default function App() {
               onClick={() => {
                 setError(null)
                 setView('create')
+                writeHash({ kind: 'create' })
               }}
             >
               <i className="fa fa-plus" /> 创建实例
@@ -1002,7 +1050,7 @@ export default function App() {
               <button
                 type="button"
                 className={
-                  !selected && homeTab === 'extensions'
+                  !selected && homeTab === 'extensions' && !pluginFocus
                     ? 'nav-item active'
                     : 'nav-item'
                 }
@@ -1011,6 +1059,19 @@ export default function App() {
                 <i className="fa fa-puzzle-piece" />
                 扩展中心
               </button>
+              {wasmPlugins.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={
+                    !selected && pluginFocus === p.id ? 'nav-item active' : 'nav-item'
+                  }
+                  onClick={() => openPlugin(p.id)}
+                >
+                  <i className={`fa ${p.icon}`} />
+                  {p.label}
+                </button>
+              ))}
               <button
                 type="button"
                 className={
@@ -1055,7 +1116,16 @@ export default function App() {
                         className={
                           tab === item.id ? 'subnav-item active' : 'subnav-item'
                         }
-                        onClick={() => setTab(item.id)}
+                        onClick={() => {
+                          setTab(item.id)
+                          if (selectedId) {
+                            writeHash({
+                              kind: 'instance',
+                              id: selectedId,
+                              tab: item.id,
+                            })
+                          }
+                        }}
                       >
                         <i className={`fa ${item.icon}`} />
                         {item.label}
@@ -1091,6 +1161,7 @@ export default function App() {
                 setSelectedId(inst.id)
                 setTab(next)
                 setView('manager')
+                writeHash({ kind: 'instance', id: inst.id, tab: next })
                 refresh().catch(() => undefined)
               }}
             />
@@ -1109,6 +1180,7 @@ export default function App() {
                 )
                 setView('manager')
                 setTab('control')
+                writeHash({ kind: 'instance', id: inst.id, tab: 'control' })
                 refresh().catch(() => undefined)
               }}
             />
@@ -1234,6 +1306,8 @@ export default function App() {
                 <ExtensionsPage
                   onBack={() => goHome('overview')}
                   onError={setError}
+                  focusId={pluginFocus}
+                  onOpenPlugin={openPlugin}
                 />
               ) : homeTab === 'audit' ? (
                 <AuditPage
