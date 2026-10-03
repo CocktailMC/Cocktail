@@ -1,4 +1,4 @@
-//! Bundled 7-Zip CLI (`7za` / `7zzs`) for archive extraction.
+
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ const EMBEDDED: Option<(&[u8], &str)> = Some((
 )))]
 const EMBEDDED: Option<(&[u8], &str)> = None;
 
-/// Ensure the bundled (or PATH) 7-Zip binary exists and return its path.
+
 pub fn ensure_bin() -> anyhow::Result<PathBuf> {
     if let Some((bytes, name)) = EMBEDDED {
         let dir = PathBuf::from(RUNTIME_DIR);
@@ -75,7 +75,7 @@ fn which_system() -> Option<PathBuf> {
     None
 }
 
-/// Extract `archive` into `dest` with the bundled 7-Zip CLI.
+
 pub fn extract(archive: &Path, dest: &Path) -> anyhow::Result<()> {
     let bin = ensure_bin()?;
     fs::create_dir_all(dest)?;

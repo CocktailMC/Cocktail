@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { api, setToken, type AuthSession } from './api'
+import { api, setSession, type AuthSession } from './api'
 
 type Props = {
   busy: boolean
@@ -42,7 +42,7 @@ export default function SetupPage({ busy, onBusy, onDone }: Props) {
         password,
         panel_name: panelName.trim(),
       })
-      setToken(session.token)
+      setSession(session)
       onDone(session)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

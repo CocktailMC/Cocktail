@@ -1,4 +1,4 @@
-//! In-process WASM plugin host (Extism). Replaces the .NET PluginHost process.
+
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

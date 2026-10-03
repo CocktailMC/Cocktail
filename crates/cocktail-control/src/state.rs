@@ -41,11 +41,11 @@ pub struct AppState {
     pub node_live: RwLock<HashMap<String, NodeLive>>,
     pub plugin_host: String,
     pub plugin_token: String,
-    /// Std mutex: WASM calls run on `spawn_blocking`; host functions must not
-    /// `block_on` the same runtime (nested runtime / worker deadlock).
+    
+    
     pub plugins: std::sync::Mutex<crate::plugin_bridge::PluginRegistry>,
-    /// In-process clone of the API router so plugins never HTTP-loopback
-    /// through the system proxy.
+    
+    
     pub plane: OnceLock<Router>,
     pub env_api_token: Option<String>,
     pub env_webhook_url: Option<String>,
@@ -141,10 +141,35 @@ impl AppState {
             return true;
         }
         let conn = self.db.lock().await;
-        db::session_admin(&conn, token)
+        db::session_lookup(&conn, token)
             .ok()
             .flatten()
             .is_some()
+    }
+
+    pub async fn token_role(&self, token: &str) -> Option<(String, String)> {
+        if self
+            .env_api_token
+            .as_ref()
+            .is_some_and(|expected| expected == token)
+            || (!self.plugin_token.is_empty() && self.plugin_token == token)
+        {
+            let conn = self.db.lock().await;
+            return db::superadmin(&conn)
+                .ok()
+                .flatten()
+                .map(|a| (a.role, String::new()));
+        }
+        let conn = self.db.lock().await;
+        db::session_lookup(&conn, token)
+            .ok()
+            .flatten()
+            .map(|s| (s.admin.role, s.csrf_token))
+    }
+
+    pub async fn purge_sessions(&self) {
+        let conn = self.db.lock().await;
+        let _ = db::purge_expired_sessions(&conn);
     }
 
     pub fn publish(&self, event: InstanceEvent) {

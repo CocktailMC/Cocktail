@@ -1,4 +1,4 @@
-//! Per-instance network snapshot: sockets on the game port, rates, status ping, alerts.
+
 
 use std::collections::HashMap;
 use std::io::{Read, Write};

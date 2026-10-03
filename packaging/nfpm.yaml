@@ -10,7 +10,7 @@ description: |
   Cocktail Manager — Minecraft server control plane (Rust) with embedded admin UI.
 vendor: Cocktail
 homepage: https://github.com/cocktail-manager/cocktail
-license: MIT
+license: Apache-2.0
 contents:
   - src: dist/stage/usr/bin/cocktail-control
     dst: /usr/bin/cocktail-control

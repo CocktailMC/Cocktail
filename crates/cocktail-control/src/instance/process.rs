@@ -31,7 +31,7 @@ pub struct ProcessHandle {
     pub reattached: bool,
     stop_tx: mpsc::Sender<StopMode>,
     cmd_tx: mpsc::Sender<String>,
-    /// Optional docker container name for cleanup.
+    
     pub(crate) container_name: Option<String>,
 }
 
@@ -39,7 +39,7 @@ impl ProcessHandle {
     pub async fn stop(self, mode: StopMode) {
         let _ = tokio::time::timeout(Duration::from_secs(5), self.stop_tx.send(mode)).await;
         if let Some(name) = self.container_name {
-            // Ensure container is removed even if docker run hung.
+            
             if let Some(rt) = super::runtime::runtime() {
                 rt.remove(&name).await;
             }
@@ -78,7 +78,7 @@ pub async fn spawn_instance(
     attach_child(instance_id, child, events, None, Some(workdir), false, port).await
 }
 
-/// Spawn an arbitrary external command (used by Docker runtime).
+
 pub async fn spawn_external_command(
     instance_id: String,
     bin: String,
@@ -540,7 +540,7 @@ async fn supervise(
     }
 }
 
-/// Reattach to a process that survived a control-plane restart.
+
 pub async fn adopt_running(
     instance_id: String,
     pid: u32,
@@ -916,7 +916,7 @@ async fn follow_docker_logs(
                         break;
                     }
                 };
-                // bollard logs may carry multiple lines per frame.
+                
                 let text = String::from_utf8_lossy(&line);
                 for part in text.split_inclusive('\n') {
                     let trimmed = part.trim_end_matches(['\n', '\r']);

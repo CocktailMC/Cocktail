@@ -1,5 +1,5 @@
-//! Game-port firewall and IP controls. Rules live in an isolated nft/iptables
-//! chain named `cocktail` so the rest of the host firewall is left alone.
+
+
 
 use std::net::IpAddr;
 use std::process::{Command, Stdio};

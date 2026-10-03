@@ -1,5 +1,5 @@
-//! Windows IP Helper: locale-independent sockets, TCP kick, and byte counters.
-//! Linux/macOS callers never hit these functions.
+
+
 
 #![allow(dead_code)]
 
@@ -146,7 +146,7 @@ fn tcp_v4(port: Option<u16>) -> Vec<(WinSock, ffi::MibTcpRow)> {
         return Vec::new();
     }
     let n = u32::from_le_bytes(buf[0..4].try_into().unwrap_or([0; 4])) as usize;
-    let row_size = 24; // 5*u32 state/addrs/ports + pid
+    let row_size = 24; 
     let mut out = Vec::new();
     for i in 0..n {
         let off = 4 + i * row_size;
@@ -196,7 +196,7 @@ fn tcp_v6(port: Option<u16>) -> Vec<WinSock> {
         return Vec::new();
     }
     let n = u32::from_le_bytes(buf[0..4].try_into().unwrap_or([0; 4])) as usize;
-    // ucLocalAddr[16] + scope + port + ucRemoteAddr[16] + scope + port + state + pid
+    
     let row_size = 16 + 4 + 4 + 16 + 4 + 4 + 4 + 4;
     let mut out = Vec::new();
     for i in 0..n {
@@ -241,7 +241,7 @@ fn udp_v4(port: u16) -> Vec<WinSock> {
         return Vec::new();
     }
     let n = u32::from_le_bytes(buf[0..4].try_into().unwrap_or([0; 4])) as usize;
-    let row_size = 12; // addr + port + pid
+    let row_size = 12; 
     let mut out = Vec::new();
     for i in 0..n {
         let off = 4 + i * row_size;
@@ -336,8 +336,8 @@ fn ip_in_cidr(ip: IpAddr, cidr: &str) -> bool {
     }
 }
 
-/// Tear down established IPv4 TCP sessions matching CIDR and optional local ports.
-/// IPv6 has no public SetTcpEntry equivalent; firewall rules still apply.
+
+
 #[cfg(windows)]
 pub fn kick_conns(cidr: &str, ports: &[u16]) -> u32 {
     let mut killed = 0u32;

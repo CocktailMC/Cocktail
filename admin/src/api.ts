@@ -396,41 +396,138 @@ export type WorldInfo = {
   size_bytes: number
 }
 
+export type PreflightReport = {
+  instance_id: string
+  warnings: string[]
+  free_bytes?: number | null
+  used_bytes: number
+  port_busy: boolean
+}
+
+export type VersionCompare = {
+  current?: string | null
+  latest?: string | null
+  behind: boolean
+  note: string
+}
+
+export type RestorePreview = {
+  backup_id: string
+  size_bytes: number
+  created_at: string
+  entries: number
+  world_size_bytes: number
+  plugin_count: number
+  has_server_properties: boolean
+  has_level_dat: boolean
+  warnings: string[]
+}
+
 const TOKEN_KEY = 'cocktail_api_token'
+const CSRF_KEY = 'cocktail_csrf_token'
+const PERM_KEY = 'cocktail_permissions'
+const EXPIRES_KEY = 'cocktail_session_expires'
 
 export function getToken(): string {
   return localStorage.getItem(TOKEN_KEY) ?? ''
 }
 
-export function setToken(token: string) {
-  if (token) localStorage.setItem(TOKEN_KEY, token)
-  else localStorage.removeItem(TOKEN_KEY)
+export function getCsrf(): string {
+  return localStorage.getItem(CSRF_KEY) ?? ''
 }
 
-function authHeaders(extra?: HeadersInit): HeadersInit {
+export function setSession(session: AuthSession) {
+  localStorage.setItem(TOKEN_KEY, session.token)
+  if (session.csrf_token) localStorage.setItem(CSRF_KEY, session.csrf_token)
+  if (session.permissions) {
+    localStorage.setItem(PERM_KEY, JSON.stringify(session.permissions))
+  }
+  if (session.expires_at) localStorage.setItem(EXPIRES_KEY, session.expires_at)
+  const maxAge = 12 * 24 * 3600
+  document.cookie = `cocktail_token=${encodeURIComponent(session.token)}; Path=/; Max-Age=${maxAge}; SameSite=Lax`
+}
+
+export function setToken(token: string) {
+  if (token) localStorage.setItem(TOKEN_KEY, token)
+  else clearSession()
+}
+
+export function clearSession() {
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(CSRF_KEY)
+  localStorage.removeItem(PERM_KEY)
+  localStorage.removeItem(EXPIRES_KEY)
+  document.cookie = 'cocktail_token=; Path=/; Max-Age=0; SameSite=Lax'
+}
+
+export function getPermissions(): string[] {
+  try {
+    const raw = localStorage.getItem(PERM_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as string[]) : []
+  } catch {
+    return []
+  }
+}
+
+export function can(perm: string): boolean {
+  return getPermissions().includes(perm)
+}
+
+export function sessionExpiresAt(): string {
+  return localStorage.getItem(EXPIRES_KEY) ?? ''
+}
+
+export function sessionExpired(): boolean {
+  const at = sessionExpiresAt()
+  if (!at) return false
+  const t = Date.parse(at)
+  if (!Number.isFinite(t)) return false
+  return t <= Date.now()
+}
+
+let onUnauthorized: (() => void) | null = null
+
+export function setUnauthorizedHandler(fn: (() => void) | null) {
+  onUnauthorized = fn
+}
+
+function authHeaders(method: string | undefined, extra?: HeadersInit): HeadersInit {
   const token = getToken()
   const headers: Record<string, string> = {
     ...(extra as Record<string, string>),
   }
   if (token) headers.Authorization = `Bearer ${token}`
+  const m = (method ?? 'GET').toUpperCase()
+  if (m !== 'GET' && m !== 'HEAD' && m !== 'OPTIONS') {
+    const csrf = getCsrf()
+    if (csrf) headers['X-Cocktail-CSRF'] = csrf
+  }
   return headers
+}
+
+async function handleFailure(res: Response): Promise<never> {
+  let message = res.statusText
+  try {
+    const body = (await res.json()) as { error?: string }
+    if (body.error) message = body.error
+  } catch {
+    if (res.status === 401) message = '未授权：请登录'
+  }
+  if (res.status === 401) {
+    clearSession()
+    if (onUnauthorized) onUnauthorized()
+  }
+  throw new Error(message)
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
-    headers: authHeaders(init?.headers),
+    headers: authHeaders(init?.method, init?.headers),
   })
-  if (!res.ok) {
-    let message = res.statusText
-    try {
-      const body = (await res.json()) as { error?: string }
-      if (body.error) message = body.error
-    } catch {
-      if (res.status === 401) message = '未授权：请登录'
-    }
-    throw new Error(message)
-  }
+  if (!res.ok) await handleFailure(res)
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
 }
@@ -438,26 +535,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 async function requestText(path: string, init?: RequestInit): Promise<string> {
   const res = await fetch(path, {
     ...init,
-    headers: authHeaders(init?.headers),
+    headers: authHeaders(init?.method, init?.headers),
   })
-  if (!res.ok) {
-    let message = res.statusText
-    try {
-      const body = (await res.json()) as { error?: string }
-      if (body.error) message = body.error
-    } catch {
-      if (res.status === 401) message = '未授权：请登录'
-    }
-    throw new Error(message)
-  }
+  if (!res.ok) await handleFailure(res)
   return res.text()
 }
 
 export type AuthSession = {
   token: string
+  csrf_token: string
   username: string
   panel_name: string
   role: string
+  permissions: string[]
+  expires_at: string
 }
 
 export type MeInfo = {
@@ -751,7 +842,7 @@ export const api = {
       body: JSON.stringify({ message: message || undefined }),
     }),
   changePassword: (body: { current_password: string; new_password: string }) =>
-    request<void>('/api/v1/auth/password', {
+    request<AuthSession | void>('/api/v1/auth/password', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -874,9 +965,9 @@ export const api = {
     fd.append('file', file)
     const res = await fetch(
       `/api/v1/instances/${id}/files/upload?path=${encodeURIComponent(path)}`,
-      { method: 'POST', headers: authHeaders(), body: fd },
+      { method: 'POST', headers: authHeaders('POST'), body: fd },
     )
-    if (!res.ok) throw new Error(await res.text())
+    if (!res.ok) await handleFailure(res)
     return res.json() as Promise<FileEntry>
   },
   mkdir: (id: string, path: string) =>
@@ -902,10 +993,10 @@ export const api = {
     })
     const res = await fetch(`/api/v1/instances/${id}/install-jar?${qs}`, {
       method: 'POST',
-      headers: authHeaders(),
+      headers: authHeaders('POST'),
       body: fd,
     })
-    if (!res.ok) throw new Error(await res.text())
+    if (!res.ok) await handleFailure(res)
     return res.json() as Promise<Instance>
   },
   importArchive: async (
@@ -929,10 +1020,10 @@ export const api = {
     if (opts?.args?.trim()) qs.set('args', opts.args.trim())
     const res = await fetch(`/api/v1/instances/${id}/import-archive?${qs}`, {
       method: 'POST',
-      headers: authHeaders(),
+      headers: authHeaders('POST'),
       body: fd,
     })
-    if (!res.ok) throw new Error(await res.text())
+    if (!res.ok) await handleFailure(res)
     return res.json() as Promise<ImportArchiveResult>
   },
   setStartupJar: (id: string, path: string) =>
@@ -956,6 +1047,33 @@ export const api = {
     }),
   restoreBackup: (id: string, backupId: string) =>
     request<void>(`/api/v1/instances/${id}/backups/${backupId}/restore`, {
+      method: 'POST',
+    }),
+  previewBackup: (id: string, backupId: string) =>
+    request<RestorePreview>(
+      `/api/v1/instances/${id}/backups/${backupId}/preview`,
+    ),
+  cloneInstance: (
+    id: string,
+    body?: {
+      name?: string
+      port?: number
+      copy_data?: boolean
+      skip_logs?: boolean
+      node_id?: string
+    },
+  ) =>
+    request<Instance>(`/api/v1/instances/${id}/clone`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    }),
+  preflight: (id: string) =>
+    request<PreflightReport>(`/api/v1/instances/${id}/preflight`),
+  versionCompare: (id: string) =>
+    request<VersionCompare>(`/api/v1/instances/${id}/version-compare`),
+  rescanVersion: (id: string) =>
+    request<string | null>(`/api/v1/instances/${id}/version-rescan`, {
       method: 'POST',
     }),
   getProperties: (id: string) =>
@@ -1100,9 +1218,32 @@ export const api = {
     fd.append('file', file)
     const res = await fetch(
       `/api/v1/instances/${id}/worlds/${encodeURIComponent(world)}/import`,
-      { method: 'POST', headers: authHeaders(), body: fd },
+      { method: 'POST', headers: authHeaders('POST'), body: fd },
     )
-    if (!res.ok) throw new Error(await res.text())
+    if (!res.ok) await handleFailure(res)
+  },
+  worldDownloadUrl: (id: string, world: string) => {
+    const token = getToken()
+    const q = token ? `?token=${encodeURIComponent(token)}` : ''
+    return `/api/v1/instances/${id}/worlds/${encodeURIComponent(world)}/download${q}`
+  },
+  worldDownload: async (id: string, world: string) => {
+    const res = await fetch(
+      `/api/v1/instances/${id}/worlds/${encodeURIComponent(world)}/download`,
+      { headers: authHeaders('GET') },
+    )
+    if (!res.ok) await handleFailure(res)
+    return res.blob()
+  },
+  worldUpload: async (id: string, world: string, file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch(
+      `/api/v1/instances/${id}/worlds/${encodeURIComponent(world)}/upload`,
+      { method: 'POST', headers: authHeaders('POST'), body: fd },
+    )
+    if (!res.ok) await handleFailure(res)
+    return res.json() as Promise<{ ok: boolean; files: number }>
   },
   modrinthSearch: (params: {
     query?: string
@@ -1259,6 +1400,12 @@ export const api = {
     }),
   deleteUser: (id: number) =>
     request<void>(`/api/v1/users/${id}`, { method: 'DELETE' }),
+  updateUser: (id: number, body: { role?: string; password?: string }) =>
+    request<void>(`/api/v1/users/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
 }
 
 export function eventsWsUrl(): string {

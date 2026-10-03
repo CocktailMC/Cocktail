@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { api, setToken, type AuthSession } from './api'
+import { api, setSession, type AuthSession } from './api'
 
 type Props = {
   hintUsername?: string | null
@@ -34,7 +34,7 @@ export default function LoginPage({
         username: username.trim(),
         password,
       })
-      setToken(session.token)
+      setSession(session)
       onDone(session)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

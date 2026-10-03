@@ -666,6 +666,6 @@ fn attach_world(inst: &Value, world: &StoredObject) {
 }
 
 fn now_stamp() -> String {
-    // Guest has no chrono; host tick is frequent enough that a coarse stamp is fine.
+    
     format!("{}", (core::time::Duration::from_millis(1).as_millis()))
 }

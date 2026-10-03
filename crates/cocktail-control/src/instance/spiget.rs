@@ -1,5 +1,5 @@
-//! Spiget API client — https://spiget.org / SpigotMC resources mirror.
-//! OpenAPI: https://raw.githubusercontent.com/SpiGetOrg/Documentation/master/swagger.yml
+
+
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -138,7 +138,7 @@ pub async fn search(q: &SearchQuery) -> anyhow::Result<SearchResponse> {
 }
 
 fn resolve_icon(icon: Option<&Value>, resource_id: i64) -> Option<String> {
-    // Prefer embedded base64 (works offline / no hotlink issues).
+    
     if let Some(data) = icon
         .and_then(|i| i.get("data"))
         .and_then(|s| s.as_str())
@@ -153,8 +153,8 @@ fn resolve_icon(icon: Option<&Value>, resource_id: i64) -> Option<String> {
         };
         return Some(format!("data:{mime};base64,{data}"));
     }
-    // Relative SpigotMC path — browsers often block hotlinking; use our proxy instead.
-    // Absolute http(s) still proxied for consistency.
+    
+    
     let _rel = icon
         .and_then(|i| i.get("url"))
         .and_then(|s| s.as_str())
@@ -162,9 +162,9 @@ fn resolve_icon(icon: Option<&Value>, resource_id: i64) -> Option<String> {
     Some(format!("/api/v1/spiget/resources/{resource_id}/icon"))
 }
 
-/// Fetch resource icon bytes (proxies Spiget / SpigotMC).
+
 pub async fn fetch_icon(resource_id: i64) -> anyhow::Result<(String, Vec<u8>)> {
-    // 1) Try Spiget API icon endpoint
+    
     let api_url = format!("{API}/resources/{resource_id}/icon");
     if let Ok(resp) = client().get(&api_url).send().await {
         if resp.status().is_success() {
@@ -181,7 +181,7 @@ pub async fn fetch_icon(resource_id: i64) -> anyhow::Result<(String, Vec<u8>)> {
         }
     }
 
-    // 2) Fall back to resource meta relative URL on spigotmc.org
+    
     let meta = resource_meta(resource_id).await?;
     if let Some(path) = meta
         .pointer("/icon/url")
@@ -206,7 +206,7 @@ pub async fn fetch_icon(resource_id: i64) -> anyhow::Result<(String, Vec<u8>)> {
         }
     }
 
-    // 3) Embedded base64 in meta
+    
     if let Some(data) = meta
         .pointer("/icon/data")
         .and_then(|s| s.as_str())
@@ -230,7 +230,7 @@ pub async fn fetch_icon(resource_id: i64) -> anyhow::Result<(String, Vec<u8>)> {
 }
 
 fn urlencoding_path(s: &str) -> String {
-    // Spiget expects path-encoded query segment
+    
     s.chars()
         .map(|c| match c {
             'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
@@ -272,7 +272,7 @@ pub async fn resource_meta(resource_id: i64) -> anyhow::Result<Value> {
     Ok(client().get(url).send().await?.error_for_status()?.json().await?)
 }
 
-/// Resolve download URL / bytes for a Spiget resource.
+
 pub async fn download_resource(
     req: &InstallRequest,
 ) -> anyhow::Result<(Vec<u8>, String, Option<i64>, String)> {
@@ -302,7 +302,7 @@ pub async fn download_resource(
         .and_then(|s| s.as_str())
         .unwrap_or(".jar");
 
-    // Prefer direct external jar URL when present
+    
     if external {
         if let Some(ext) = meta
             .pointer("/file/externalUrl")
@@ -361,7 +361,7 @@ async fn download_url(url: &str, label: &str) -> anyhow::Result<Vec<u8>> {
     if bytes.len() < 64 {
         anyhow::bail!("Spiget download empty (may be HTML / rate-limited)");
     }
-    // Heuristic: jar files start with PK (zip)
+    
     if !bytes.starts_with(b"PK") {
         if bytes.starts_with(b"<!") || bytes.starts_with(b"<html") {
             anyhow::bail!(

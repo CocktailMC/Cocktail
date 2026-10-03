@@ -20,7 +20,7 @@ function guessOsFromBrowser(): string {
   return 'unknown'
 }
 
-/** Project logo + distro/OS logo + environment chips. */
+
 export default function EnvBrandBar({ env, offline }: Props) {
   const os = env?.os || guessOsFromBrowser()
   const distroId = env?.distro_id || os

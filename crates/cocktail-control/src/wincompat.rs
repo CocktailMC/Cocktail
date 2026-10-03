@@ -1,4 +1,4 @@
-//! Windows process / console / path helpers (no-ops on other platforms).
+
 
 use std::path::Path;
 
@@ -11,7 +11,7 @@ mod ffi {
     }
 }
 
-/// Hide the extra console window that Windows allocates for child processes.
+
 pub fn hide_console(cmd: &mut tokio::process::Command) {
     #[cfg(windows)]
     {

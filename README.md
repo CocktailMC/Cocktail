@@ -37,6 +37,8 @@
 | `server.properties` 表单 | 玩家 kick / ban / op | 审计日志 |
 | 端口冲突检测、EULA | 文件浏览与 512 MiB 上传 | 机群批量操作 |
 | 本机进程或 Docker | | 重启后认回 PID / 容器 |
+| 实例克隆（自动选端口） | 启动前预检（端口/磁盘/EULA） | 备份恢复预览（条目/世界/插件/level.dat） |
+| 世界 zip 下载与上传 | MC 版本自动识别与比对 | 审计日志落 SQLite，可检索、按操作者过滤 |
 
 Docker 运行时可设 `--memory` / `--cpus`。本机进程硬限、多节点 Agent 尚未提供。
 
@@ -56,6 +58,18 @@ cd admin && npm install && npm run dev
 
 首次打开管理端会进入最高管理员引导。之后用该账号登录。
 
+角色分五档，写操作按路由鉴权，不再是「登录即可全权」：
+
+| 角色 | 能力 |
+|:---|:---|
+| Owner | 全部，含用户与 Owner 管理 |
+| 管理员 | 启停、控制台、文件、插件、玩家、备份、网络、节点；无用户管理 |
+| 客服 | 启停、控制台、玩家、备份、网络 |
+| 开发 | 控制台、文件、插件、启停 |
+| 观察员 | 只读，所有写操作返回 403 |
+
+会话 12 天过期，写请求需带 `X-Cocktail-CSRF`；同一用户名连续 5 次登录失败锁定 15 分钟。
+
 可选环境变量：
 
 | 变量 | 说明 |
@@ -64,6 +78,7 @@ cd admin && npm install && npm run dev
 | `COCKTAIL_API_TOKEN` | 机器 Token，供脚本调用（与登录并存） |
 | `COCKTAIL_WEBHOOK_URL` | 全局崩溃 Webhook；也可在面板里覆盖 |
 | `COCKTAIL_WEB_ROOT` | 生产环境 Admin 静态目录 |
+| `COCKTAIL_CORS_ORIGINS` | 额外允许的跨域来源，逗号分隔；默认仅本机 5173/11011 |
 | `COCKTAIL_PROXY` | 强制 HTTP 代理，例如 `http://127.0.0.1:7890` |
 | `HTTPS_PROXY` | 标准代理变量；未设置时 Windows 会读取系统代理（Clash / IE） |
 

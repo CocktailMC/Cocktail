@@ -96,11 +96,13 @@ pub struct LoginRequest {
 #[derive(Serialize)]
 pub struct SessionResponse {
     pub token: String,
+    pub csrf_token: String,
     pub username: String,
     pub panel_name: String,
     pub role: String,
+    pub permissions: Vec<String>,
+    pub expires_at: String,
 }
-
 #[derive(Serialize)]
 pub struct MeResponse {
     pub username: String,
@@ -161,6 +163,33 @@ fn bearer_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(str::to_string)
 }
 
+fn session_payload(
+    token: String,
+    csrf: String,
+    expires_at: String,
+    admin: &crate::db::AdminRow,
+    panel_name: String,
+) -> SessionResponse {
+    SessionResponse {
+        token,
+        csrf_token: csrf,
+        username: admin.username.clone(),
+        panel_name,
+        role: admin.role.clone(),
+        permissions: crate::auth::permissions(&admin.role)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        expires_at,
+    }
+}
+
+fn panel_name_of(conn: &rusqlite::Connection) -> String {
+    crate::db::panel(conn)
+        .map(|p| p.panel_name)
+        .unwrap_or_else(|_| "Cocktail Manager".into())
+}
+
 pub async fn setup(
     State(state): State<SharedState>,
     Json(body): Json<SetupRequest>,
@@ -203,34 +232,41 @@ pub async fn setup(
         Ok(a) => a,
         Err(e) => return bad_request(e.to_string()).into_response(),
     };
-    let token = match crate::auth::create_session(&conn, &admin) {
+    let (token, csrf) = match crate::auth::create_session(&conn, &admin) {
         Ok(t) => t,
         Err(e) => return bad_request(e.to_string()).into_response(),
     };
-    let panel_name = crate::db::panel(&conn)
-        .map(|p| p.panel_name)
-        .unwrap_or_else(|_| "Cocktail Manager".into());
+    let expires_at = (chrono::Utc::now() + chrono::Duration::hours(crate::auth::SESSION_TTL_HOURS))
+        .to_rfc3339();
+    let panel_name = panel_name_of(&conn);
     crate::util::audit(
         "auth.setup",
         None,
         serde_json::json!({ "username": admin.username }),
         "setup",
     );
-    Json(SessionResponse {
-        token,
-        username: admin.username,
-        panel_name,
-        role: admin.role,
-    })
+    Json(session_payload(
+        token, csrf, expires_at, &admin, panel_name,
+    ))
     .into_response()
 }
 
 pub async fn login(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    let username = body.username.trim().to_string();
+    let peer = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "local".into());
+    let rate_key = format!("{peer}|{}", username.to_ascii_lowercase());
+
     let conn = state.db.lock().await;
-    let Some(admin) = crate::db::superadmin(&conn).ok().flatten() else {
+    if crate::auth::setup_required(&conn).unwrap_or(true) {
         return (
             StatusCode::FORBIDDEN,
             Json(ErrorBody {
@@ -238,10 +274,37 @@ pub async fn login(
             }),
         )
             .into_response();
-    };
-    if !admin.username.eq_ignore_ascii_case(body.username.trim())
-        || !crate::auth::verify_password(&body.password, &admin.password_hash)
+    }
+    if !crate::auth::login_allowed(&rate_key)
+        || crate::db::login_locked(&conn, &username).unwrap_or(false)
     {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ErrorBody {
+                error: "登录失败次数过多，请稍后再试".into(),
+            }),
+        )
+            .into_response();
+    }
+    let found = crate::db::admin_by_username(&conn, &username).ok().flatten();
+    let ok = found
+        .as_ref()
+        .map(|a| crate::auth::verify_password(&body.password, &a.password_hash))
+        .unwrap_or(false);
+    if !ok {
+        crate::auth::login_failed(&rate_key);
+        let _ = crate::db::record_login_failure(
+            &conn,
+            &username,
+            crate::auth::LOGIN_WINDOW.as_secs() as i64,
+            crate::auth::LOGIN_LOCK.as_secs() as i64,
+        );
+        crate::util::audit(
+            "auth.login_failed",
+            None,
+            serde_json::json!({ "username": username, "peer": peer }),
+            "login",
+        );
         return (
             StatusCode::UNAUTHORIZED,
             Json(ErrorBody {
@@ -250,25 +313,25 @@ pub async fn login(
         )
             .into_response();
     }
-    let token = match crate::auth::create_session(&conn, &admin) {
+    let admin = found.expect("checked");
+    let _ = crate::db::clear_login_failures(&conn, &admin.username);
+    crate::auth::login_succeeded(&rate_key);
+    let (token, csrf) = match crate::auth::create_session(&conn, &admin) {
         Ok(t) => t,
         Err(e) => return bad_request(e.to_string()).into_response(),
     };
-    let panel_name = crate::db::panel(&conn)
-        .map(|p| p.panel_name)
-        .unwrap_or_else(|_| "Cocktail Manager".into());
+    let expires_at = (chrono::Utc::now() + chrono::Duration::hours(crate::auth::SESSION_TTL_HOURS))
+        .to_rfc3339();
+    let panel_name = panel_name_of(&conn);
     crate::util::audit(
         "auth.login",
         None,
-        serde_json::json!({ "username": admin.username }),
-        "login",
+        serde_json::json!({ "username": admin.username, "role": admin.role }),
+        &admin.username,
     );
-    Json(SessionResponse {
-        token,
-        username: admin.username,
-        panel_name,
-        role: admin.role,
-    })
+    Json(session_payload(
+        token, csrf, expires_at, &admin, panel_name,
+    ))
     .into_response()
 }
 
@@ -280,38 +343,13 @@ pub async fn logout(State(state): State<SharedState>, headers: HeaderMap) -> imp
     StatusCode::NO_CONTENT
 }
 
-pub async fn me(State(state): State<SharedState>, headers: HeaderMap) -> impl IntoResponse {
-    let Some(token) = bearer_from_headers(&headers) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorBody {
-                error: "未登录".into(),
-            }),
-        )
-            .into_response();
+pub async fn me(State(state): State<SharedState>, headers: HeaderMap) -> Response {
+    let admin = match current_admin(&state, &headers).await {
+        Ok(a) => a,
+        Err(resp) => return resp.into_response(),
     };
     let conn = state.db.lock().await;
-    let admin = if state
-        .env_api_token
-        .as_ref()
-        .is_some_and(|t| t == &token)
-    {
-        crate::db::superadmin(&conn).ok().flatten()
-    } else {
-        crate::db::session_admin(&conn, &token).ok().flatten()
-    };
-    let Some(admin) = admin else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorBody {
-                error: "未登录".into(),
-            }),
-        )
-            .into_response();
-    };
-    let panel_name = crate::db::panel(&conn)
-        .map(|p| p.panel_name)
-        .unwrap_or_else(|_| "Cocktail Manager".into());
+    let panel_name = panel_name_of(&conn);
     Json(MeResponse {
         username: admin.username.clone(),
         role: admin.role.clone(),
@@ -325,13 +363,17 @@ pub async fn me(State(state): State<SharedState>, headers: HeaderMap) -> impl In
     .into_response()
 }
 
-pub async fn get_settings(State(state): State<SharedState>) -> impl IntoResponse {
+pub async fn get_settings(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Response {
+    let admin = match current_admin(&state, &headers).await {
+        Ok(a) => a,
+        Err(resp) => return resp.into_response(),
+    };
     let conn = state.db.lock().await;
     let Ok(panel) = crate::db::panel(&conn) else {
         return bad_request("无法读取面板设置").into_response();
-    };
-    let Some(admin) = crate::db::superadmin(&conn).ok().flatten() else {
-        return bad_request("尚未初始化最高管理员").into_response();
     };
     Json(SettingsResponse {
         panel_name: panel.panel_name,
@@ -364,8 +406,13 @@ pub async fn get_settings(State(state): State<SharedState>) -> impl IntoResponse
 
 pub async fn update_settings(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(body): Json<UpdateSettingsRequest>,
-) -> impl IntoResponse {
+) -> Response {
+    let admin = match current_admin(&state, &headers).await {
+        Ok(a) => a,
+        Err(resp) => return resp.into_response(),
+    };
     let conn = state.db.lock().await;
     let patch = crate::db::PanelPatch {
         panel_name: body.panel_name.clone(),
@@ -391,10 +438,8 @@ pub async fn update_settings(
     if let Some(new_name) = body.username.as_deref() {
         match crate::auth::validate_username(new_name) {
             Ok(name) => {
-                if let Some(admin) = crate::db::superadmin(&conn).ok().flatten() {
-                    if let Err(e) = crate::db::update_admin(&conn, admin.id, Some(&name), None) {
-                        return bad_request(e.to_string()).into_response();
-                    }
+                if let Err(e) = crate::db::update_admin(&conn, admin.id, Some(&name), None) {
+                    return bad_request(e.to_string()).into_response();
                 }
             }
             Err(e) => return bad_request(e.to_string()).into_response(),
@@ -403,24 +448,26 @@ pub async fn update_settings(
     crate::util::audit(
         "settings.update",
         None,
-        serde_json::json!({}),
-        "api",
+        serde_json::json!({ "by": admin.username }),
+        &admin.username,
     );
     drop(conn);
-    get_settings(State(state)).await.into_response()
+    get_settings(State(state), headers).await
 }
 
 pub async fn change_password(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(body): Json<ChangePasswordRequest>,
-) -> impl IntoResponse {
+) -> Response {
     if let Err(e) = crate::auth::validate_password(&body.new_password) {
         return bad_request(e.to_string()).into_response();
     }
-    let conn = state.db.lock().await;
-    let Some(admin) = crate::db::superadmin(&conn).ok().flatten() else {
-        return bad_request("尚未初始化最高管理员").into_response();
+    let admin = match current_admin(&state, &headers).await {
+        Ok(a) => a,
+        Err(resp) => return resp.into_response(),
     };
+    let conn = state.db.lock().await;
     if !crate::auth::verify_password(&body.current_password, &admin.password_hash) {
         return (
             StatusCode::UNAUTHORIZED,
@@ -437,7 +484,23 @@ pub async fn change_password(
     if let Err(e) = crate::db::update_admin(&conn, admin.id, None, Some(&hash)) {
         return bad_request(e.to_string()).into_response();
     }
-    crate::util::audit("auth.password", None, serde_json::json!({}), "api");
+    let _ = crate::db::delete_sessions_for_admin(&conn, admin.id);
+    if let Ok((token, csrf)) = crate::auth::create_session(&conn, &admin) {
+        let expires_at =
+            (chrono::Utc::now() + chrono::Duration::hours(crate::auth::SESSION_TTL_HOURS))
+                .to_rfc3339();
+        let panel_name = panel_name_of(&conn);
+        crate::util::audit(
+            "auth.password",
+            None,
+            serde_json::json!({ "username": admin.username }),
+            &admin.username,
+        );
+        return Json(session_payload(
+            token, csrf, expires_at, &admin, panel_name,
+        ))
+        .into_response();
+    }
     StatusCode::NO_CONTENT.into_response()
 }
 
@@ -1176,7 +1239,7 @@ pub async fn spiget_install(
 
 #[derive(Deserialize)]
 pub struct PlayersQuery {
-    /// If true, send `list` to the running server (appears in console).
+    
     #[serde(default)]
     pub probe: bool,
 }
@@ -1285,7 +1348,95 @@ pub async fn fleet_summary(State(state): State<SharedState>) -> impl IntoRespons
     Json(instance::fleet_summary(&state).await)
 }
 
-pub async fn fleet_bulk(
+pub async fn clone_instance(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Json(req): Json<instance::CloneInstanceRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    instance::clone_instance(&state, &id, req)
+        .await
+        .map(|v| (StatusCode::CREATED, Json(v)))
+        .map_err(|e| bad_request(e.to_string()))
+}
+
+pub async fn preflight(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    map_result(instance::preflight_report(&state, &id).await)
+}
+
+pub async fn version_compare(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    map_result(instance::version_compare(&state, &id).await)
+}
+
+pub async fn rescan_version(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    map_result(instance::rescan_version(&state, &id).await)
+}
+
+pub async fn backup_preview(
+    State(state): State<SharedState>,
+    Path((id, backup_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    map_result(instance::backup_preview(&state, &id, &backup_id).await)
+}
+
+pub async fn world_download(
+    State(state): State<SharedState>,
+    Path((id, world)): Path<(String, String)>,
+) -> Result<Response, (StatusCode, Json<ErrorBody>)> {
+    let (filename, path) = instance::world_download(&state, &id, &world)
+        .await
+        .map_err(|e| bad_request(e.to_string()))?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|e| bad_request(e.to_string()))?;
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .body(Body::from(bytes))
+        .unwrap())
+}
+
+pub async fn world_upload(
+    State(state): State<SharedState>,
+    Path((id, world)): Path<(String, String)>,
+    mut multipart: Multipart,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let mut bytes = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| bad_request(e.to_string()))?
+    {
+        if field.name() == Some("file") || bytes.is_none() {
+            bytes = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|e| bad_request(e.to_string()))?
+                    .to_vec(),
+            );
+        }
+    }
+    let bytes = bytes.ok_or_else(|| bad_request("missing file field"))?;
+    match instance::world_upload(&state, &id, &world, &bytes).await {
+        Ok(files) => Ok(Json(serde_json::json!({ "ok": true, "files": files }))),
+        Err(e) => Err(bad_request(e.to_string())),
+    }
+}
+
+pub async fn bulk_action(
     State(state): State<SharedState>,
     Json(req): Json<BulkActionRequest>,
 ) -> impl IntoResponse {
@@ -1423,6 +1574,22 @@ async fn session_admin(
     state: &SharedState,
     headers: &HeaderMap,
 ) -> Result<crate::db::AdminRow, (StatusCode, Json<ErrorBody>)> {
+    let admin = current_admin(state, headers).await?;
+    if !crate::auth::can(&admin.role, "view") {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ErrorBody {
+                error: "权限不足".into(),
+            }),
+        ));
+    }
+    Ok(admin)
+}
+
+pub async fn current_admin(
+    state: &SharedState,
+    headers: &HeaderMap,
+) -> Result<crate::db::AdminRow, (StatusCode, Json<ErrorBody>)> {
     let token = bearer_from_headers(headers).ok_or_else(|| {
         (
             StatusCode::UNAUTHORIZED,
@@ -1445,17 +1612,32 @@ async fn session_admin(
                 )
             });
     }
-    crate::db::session_admin(&conn, &token)
-        .ok()
-        .flatten()
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorBody {
-                    error: "未登录".into(),
-                }),
-            )
-        })
+    let session = crate::db::session_lookup(&conn, &token).ok().flatten();
+    drop(conn);
+    let Some(session) = session else {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "登录已过期，请重新登录".into(),
+            }),
+        ));
+    };
+    Ok(session.admin)
+}
+
+fn require_perm(
+    admin: &crate::db::AdminRow,
+    perm: &str,
+) -> Result<(), (StatusCode, Json<ErrorBody>)> {
+    if crate::auth::can(&admin.role, perm) {
+        return Ok(());
+    }
+    Err((
+        StatusCode::FORBIDDEN,
+        Json(ErrorBody {
+            error: format!("权限不足：需要 {perm} 权限（当前角色 {}）", admin.role),
+        }),
+    ))
 }
 
 pub async fn list_users(
@@ -1463,14 +1645,7 @@ pub async fn list_users(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
     let admin = session_admin(&state, &headers).await?;
-    if !crate::auth::can(&admin.role, "users") {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorBody {
-                error: "无权管理用户".into(),
-            }),
-        ));
-    }
+    require_perm(&admin, "users")?;
     let conn = state.db.lock().await;
     let rows = crate::db::list_admins(&conn).map_err(|e| bad_request(e.to_string()))?;
     Ok(Json(
@@ -1491,14 +1666,7 @@ pub async fn create_user(
     Json(body): Json<CreateUserBody>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
     let admin = session_admin(&state, &headers).await?;
-    if !crate::auth::can(&admin.role, "users") {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorBody {
-                error: "无权管理用户".into(),
-            }),
-        ));
-    }
+    require_perm(&admin, "users")?;
     let username = crate::auth::validate_username(&body.username).map_err(|e| bad_request(e.to_string()))?;
     crate::auth::validate_password(&body.password).map_err(|e| bad_request(e.to_string()))?;
     let role = normalize_role(&body.role).map_err(|e| bad_request(e.to_string()))?;
@@ -1519,20 +1687,64 @@ pub async fn create_user(
     Ok(StatusCode::CREATED)
 }
 
+#[derive(Deserialize)]
+pub struct UpdateUserBody {
+    pub role: Option<String>,
+    pub password: Option<String>,
+}
+
+pub async fn update_user(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateUserBody>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let admin = session_admin(&state, &headers).await?;
+    require_perm(&admin, "users")?;
+    let conn = state.db.lock().await;
+    let target = crate::db::admin_by_id(&conn, id)
+        .map_err(|e| bad_request(e.to_string()))?
+        .ok_or_else(|| not_found("用户不存在"))?;
+    let mut changed: Vec<String> = Vec::new();
+    if let Some(role_raw) = body.role.as_deref() {
+        let role = normalize_role(role_raw).map_err(|e| bad_request(e.to_string()))?;
+        if role == "superadmin" && admin.role != "superadmin" {
+            return Err(bad_request("只有 Owner 可以授予 Owner"));
+        }
+        if admin.id == id && role != admin.role {
+            return Err(bad_request("不能修改自己的角色"));
+        }
+        crate::db::update_admin_role(&conn, id, &role).map_err(|e| bad_request(e.to_string()))?;
+        let _ = crate::db::delete_sessions_for_admin(&conn, id);
+        changed.push(format!("role={role}"));
+    }
+    if let Some(pw) = body.password.as_deref().filter(|s| !s.is_empty()) {
+        if admin.role != "superadmin" && admin.id != id {
+            return Err(bad_request("只有 Owner 可以重置他人密码"));
+        }
+        crate::auth::validate_password(pw).map_err(|e| bad_request(e.to_string()))?;
+        let hash = crate::auth::hash_password(pw).map_err(|e| bad_request(e.to_string()))?;
+        crate::db::update_admin(&conn, id, None, Some(&hash))
+            .map_err(|e| bad_request(e.to_string()))?;
+        let _ = crate::db::delete_sessions_for_admin(&conn, id);
+        changed.push("password".into());
+    }
+    crate::util::audit(
+        "user.update",
+        None,
+        serde_json::json!({ "id": id, "target": target.username, "changed": changed }),
+        &admin.username,
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn delete_user(
     State(state): State<SharedState>,
     headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
     let admin = session_admin(&state, &headers).await?;
-    if !crate::auth::can(&admin.role, "users") {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorBody {
-                error: "无权管理用户".into(),
-            }),
-        ));
-    }
+    require_perm(&admin, "users")?;
     if admin.id == id {
         return Err(bad_request("不能删除当前登录账号"));
     }

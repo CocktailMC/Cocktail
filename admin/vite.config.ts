@@ -10,7 +10,7 @@ export default defineConfig({
         target: 'http://127.0.0.1:11011',
         changeOrigin: true,
         ws: true,
-        // Large jar / world uploads can take a while.
+        
         timeout: 600_000,
         proxyTimeout: 600_000,
       },

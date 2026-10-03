@@ -1,4 +1,4 @@
-//! Cocktail node agent — connects to the control plane and runs assigned instances.
+
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

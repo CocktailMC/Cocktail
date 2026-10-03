@@ -1,5 +1,5 @@
-//! QQ Bot OpenAPI v2: access token + proactive text messages.
-//! Docs: https://bot.q.qq.com/wiki/develop/api-v2/
+
+
 
 use std::time::{Duration, Instant};
 
