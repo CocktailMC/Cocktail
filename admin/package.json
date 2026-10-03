@@ -1,7 +1,7 @@
 {
   "name": "cocktail-admin",
   "private": true,
-  "version": "0.1.0",
+  "version": "26.4.11-DP",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {

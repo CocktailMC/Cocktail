@@ -57,8 +57,8 @@ pub async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
     let (plugin_host_ok, plugins) = crate::plugin_bridge::health_snapshot(&state).await;
     Json(HealthResponse {
         name: "cocktail-control",
-        version: env!("CARGO_PKG_VERSION"),
-        release: "26Q3",
+        version: "26Q4.11.DP",
+        release: "26Q4",
         status: "ok",
         auth_required: !setup_required || state.env_api_token.is_some(),
         setup_required,
