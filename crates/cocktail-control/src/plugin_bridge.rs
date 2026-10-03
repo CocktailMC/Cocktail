@@ -6,11 +6,12 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
-use axum::http::{HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use extism::{host_fn, Manifest, Plugin, PluginBuilder, UserData, Wasm, PTR};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tower::ServiceExt;
 
 use crate::instance::InstanceEvent;
 use crate::state::AppState;
@@ -49,7 +50,7 @@ struct PluginSlot {
     enabled: bool,
     running: bool,
     error: Option<String>,
-    plugin: Option<Plugin>,
+    instance: Arc<std::sync::Mutex<Option<Plugin>>>,
 }
 
 #[derive(Clone)]
@@ -166,6 +167,81 @@ fn lock_plugins(state: &AppState) -> std::sync::MutexGuard<'_, PluginRegistry> {
     state.plugins.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+fn lock_instance(mutex: &std::sync::Mutex<Option<Plugin>>) -> std::sync::MutexGuard<'_, Option<Plugin>> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn join_host<T>(
+    rt: &tokio::runtime::Handle,
+    timeout: Duration,
+    fut: impl std::future::Future<Output = anyhow::Result<T>> + Send + 'static,
+) -> anyhow::Result<T>
+where
+    T: Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    rt.spawn(async move {
+        let _ = tx.send(fut.await);
+    });
+    rx.recv_timeout(timeout)
+        .map_err(|_| anyhow::anyhow!("plugin host call timed out"))?
+}
+
+fn multipart_body(filename: &str, bytes: &[u8]) -> (String, Vec<u8>) {
+    let boundary = "----CocktailPluginBoundary";
+    let safe: String = filename
+        .chars()
+        .map(|c| if matches!(c, '"' | '\r' | '\n' | '\\') { '_' } else { c })
+        .collect();
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"file\"; filename=\"{safe}\"\r\n").as_bytes(),
+    );
+    body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+fn invoke_plane(
+    rt: &tokio::runtime::Handle,
+    state: &AppState,
+    method: &str,
+    path: &str,
+    content_type: &str,
+    body: Vec<u8>,
+) -> anyhow::Result<(u16, String)> {
+    let router = state
+        .plane
+        .get()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("control plane router not attached"))?;
+    let token = state.plugin_token.clone();
+    let method = Method::from_bytes(method.as_bytes()).unwrap_or(Method::GET);
+    let uri = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    let mut builder = Request::builder()
+        .method(method.clone())
+        .uri(&uri)
+        .header("Authorization", format!("Bearer {token}"));
+    if !body.is_empty() || method != Method::GET {
+        builder = builder.header("Content-Type", content_type);
+    }
+    let req = builder.body(Body::from(body))?;
+    join_host(rt, Duration::from_secs(60), async move {
+        let res = router.oneshot(req).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let status = res.status().as_u16();
+        let bytes = axum::body::to_bytes(res.into_body(), 32 * 1024 * 1024)
+            .await
+            .unwrap_or_default();
+        Ok((status, String::from_utf8_lossy(&bytes).into_owned()))
+    })
+}
+
 fn spawn_ticks(state: Arc<AppState>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -210,18 +286,23 @@ pub async fn set_enabled(state: &Arc<AppState>, id: &str, enabled: bool) -> anyh
         saved.insert(id.to_string(), enabled);
         save_enabled_map(&saved);
     }
-    let mut reg = lock_plugins(state);
-    let slot = reg
-        .slots
-        .get_mut(id)
-        .ok_or_else(|| anyhow::anyhow!("plugin not found"))?;
-    slot.enabled = enabled;
-    if enabled {
-        start_slot(state, slot)?;
-    } else {
-        stop_slot(slot);
-    }
-    Ok(json!({ "ok": true, "id": id, "enabled": enabled }))
+    let state = Arc::clone(state);
+    let id = id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let mut reg = lock_plugins(&state);
+        let slot = reg
+            .slots
+            .get_mut(&id)
+            .ok_or_else(|| anyhow::anyhow!("plugin not found"))?;
+        slot.enabled = enabled;
+        if enabled {
+            start_slot(&state, slot)?;
+        } else {
+            stop_slot(slot);
+        }
+        Ok(json!({ "ok": true, "id": id, "enabled": enabled }))
+    })
+    .await?
 }
 
 pub async fn health_snapshot(state: &AppState) -> (bool, usize) {
@@ -322,23 +403,41 @@ async fn call_export(
     let export = export.to_string();
     let input = input.to_string();
     tokio::task::spawn_blocking(move || {
-        let mut reg = lock_plugins(&state);
-        let slot = reg
-            .slots
-            .get_mut(&id)
-            .ok_or_else(|| anyhow::anyhow!("plugin {id} not found"))?;
-        if !slot.running {
-            anyhow::bail!("plugin {id} is not running");
-        }
-        let plugin = slot
-            .plugin
+        let instance = {
+            let reg = lock_plugins(&state);
+            let slot = reg
+                .slots
+                .get(&id)
+                .ok_or_else(|| anyhow::anyhow!("plugin {id} not found"))?;
+            if !slot.running {
+                anyhow::bail!("plugin {id} is not running");
+            }
+            Arc::clone(&slot.instance)
+        };
+        let mut guard = lock_instance(&instance);
+        let plugin = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("plugin {id} wasm not loaded"))?;
         if !plugin.function_exists(&export) {
             anyhow::bail!("export {export} missing");
         }
-        let out: String = plugin.call(&export, &input)?;
-        Ok(out)
+        let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            plugin.call::<&str, String>(&export, &input)
+        }));
+        match called {
+            Ok(Ok(out)) => Ok(out),
+            Ok(Err(e)) => Err(e.into()),
+            Err(_) => {
+                *guard = None;
+                drop(guard);
+                let mut reg = lock_plugins(&state);
+                if let Some(slot) = reg.slots.get_mut(&id) {
+                    slot.running = false;
+                    slot.error = Some(format!("wasm panic in {export}"));
+                }
+                anyhow::bail!("plugin {id} panicked in {export}");
+            }
+        }
     })
     .await?
 }
@@ -361,13 +460,18 @@ async fn reload_inner(state: &Arc<AppState>) -> anyhow::Result<()> {
             enabled,
             running: false,
             error: None,
-            plugin: None,
+            instance: Arc::new(std::sync::Mutex::new(None)),
         };
         if enabled {
-            if let Err(e) = start_slot(state, &mut slot) {
-                slot.error = Some(e.to_string());
-                tracing::warn!(plugin = %slot.manifest.id, error = %e, "plugin start failed");
-            }
+            let st = Arc::clone(state);
+            slot = tokio::task::spawn_blocking(move || {
+                if let Err(e) = start_slot(&st, &mut slot) {
+                    slot.error = Some(e.to_string());
+                    tracing::warn!(plugin = %slot.manifest.id, error = %e, "plugin start failed");
+                }
+                slot
+            })
+            .await?;
         }
         next.slots.insert(slot.manifest.id.clone(), slot);
     }
@@ -428,9 +532,16 @@ fn start_slot(state: &Arc<AppState>, slot: &mut PluginSlot) -> anyhow::Result<()
         .with_function("cocktail_fs", [PTR], [PTR], user.clone(), cocktail_fs)
         .build()?;
     if plugin.function_exists("start") {
-        let _: String = plugin.call("start", "")?;
+        let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            plugin.call::<&str, String>("start", "")
+        }));
+        match called {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => anyhow::bail!("plugin {} panicked in start", slot.manifest.id),
+        }
     }
-    slot.plugin = Some(plugin);
+    *lock_instance(&slot.instance) = Some(plugin);
     slot.running = true;
     slot.error = None;
     tracing::info!(id = %slot.manifest.id, wasm = %wasm_path.display(), "wasm plugin started");
@@ -438,11 +549,13 @@ fn start_slot(state: &Arc<AppState>, slot: &mut PluginSlot) -> anyhow::Result<()
 }
 
 fn stop_slot(slot: &mut PluginSlot) {
-    if let Some(mut plugin) = slot.plugin.take() {
+    let mut guard = lock_instance(&slot.instance);
+    if let Some(mut plugin) = guard.take() {
         if plugin.function_exists("stop") {
             let _ = plugin.call::<&str, String>("stop", "");
         }
     }
+    drop(guard);
     slot.running = false;
 }
 
@@ -589,42 +702,26 @@ host_fn!(cocktail_control(user_data: HostCtx; req: String) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or("upload.bin")
         .to_string();
-    let content_type = parsed
+    let mut content_type = parsed
         .get("content_type")
         .and_then(|v| v.as_str())
         .unwrap_or("application/json")
         .to_string();
-    let plane = plane_url(&state.bind);
-    let token = state.plugin_token.clone();
     let method = method.to_string();
     let path = path.to_string();
     let rt = ctx.rt.clone();
     drop(ctx);
-    rt.block_on(async move {
-        let url = format!("{}{}", plane.trim_end_matches('/'), path);
-        let mut builder = state.http.request(
-            reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET),
-            &url,
-        );
-        builder = builder
-            .header("Authorization", format!("Bearer {token}"))
-            .timeout(Duration::from_secs(60));
-        if let Some(b64) = body_b64 {
-            use base64::Engine;
-            let bytes = base64::engine::general_purpose::STANDARD.decode(b64)?;
-            let form = reqwest::multipart::Form::new().part(
-                "file",
-                reqwest::multipart::Part::bytes(bytes).file_name(filename),
-            );
-            builder = builder.multipart(form);
-        } else if let Some(body) = body {
-            builder = builder.header("Content-Type", content_type).body(body);
-        }
-        let res = builder.send().await?;
-        let status = res.status().as_u16();
-        let text = res.text().await.unwrap_or_default();
-        Ok(json!({ "status": status, "ok": status < 400, "body": text }).to_string())
-    })
+    let bytes = if let Some(b64) = body_b64 {
+        use base64::Engine;
+        let raw = base64::engine::general_purpose::STANDARD.decode(b64)?;
+        let (ct, encoded) = multipart_body(&filename, &raw);
+        content_type = ct;
+        encoded
+    } else {
+        body.unwrap_or_default().into_bytes()
+    };
+    let (status, text) = invoke_plane(&rt, &state, &method, &path, &content_type, bytes)?;
+    Ok(json!({ "status": status, "ok": status < 400, "body": text }).to_string())
 });
 
 host_fn!(cocktail_http(user_data: HostCtx; req: String) -> String {
@@ -670,7 +767,7 @@ host_fn!(cocktail_http(user_data: HostCtx; req: String) -> String {
     }
     let rt = ctx.rt.clone();
     drop(ctx);
-    rt.block_on(async move {
+    join_host(&rt, Duration::from_secs(120), async move {
         let res = builder.timeout(Duration::from_secs(120)).send().await?;
         let status = res.status().as_u16();
         let headers: Vec<(String, String)> = res
@@ -846,16 +943,6 @@ fn dir_size(path: &Path) -> u64 {
     n
 }
 
-fn plane_url(bind: &str) -> String {
-    if let Ok(v) = std::env::var("COCKTAIL_PLANE") {
-        if !v.is_empty() {
-            return v;
-        }
-    }
-    let port = bind.rsplit(':').next().unwrap_or("11011");
-    format!("http://127.0.0.1:{port}")
-}
-
 fn deny_url(url: &str) -> anyhow::Result<()> {
     let lower = url.to_ascii_lowercase();
     if lower.starts_with("https://api.github.com/")
@@ -902,5 +989,73 @@ fn require_any(perms: &[String], need: &[&str]) -> anyhow::Result<()> {
         Ok(())
     } else {
         anyhow::bail!("missing permission {}", need[0])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_instances_allowed() {
+        deny_control(
+            &["controlplane.instances.read".into()],
+            "GET",
+            "/api/v1/instances",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn read_instances_denied_without_perm() {
+        assert!(deny_control(&[], "GET", "/api/v1/instances").is_err());
+    }
+
+    #[test]
+    fn files_query_uses_files_read() {
+        deny_control(
+            &["controlplane.files.read".into()],
+            "GET",
+            "/api/v1/instances/abc/files?path=mods",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn cannot_call_extension_proxy() {
+        assert!(deny_control(
+            &["controlplane.instances.read".into()],
+            "GET",
+            "/api/v1/ext/watchdog/summary"
+        )
+        .is_err());
+        assert!(deny_control(
+            &["controlplane.instances.read".into()],
+            "GET",
+            "/api/v1/extensions"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn start_instance_needs_write() {
+        assert!(deny_control(
+            &["controlplane.instances.read".into()],
+            "POST",
+            "/api/v1/instances/abc/start"
+        )
+        .is_err());
+        deny_control(
+            &["controlplane.instances.write".into()],
+            "POST",
+            "/api/v1/instances/abc/start",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn github_url_allowed() {
+        deny_url("https://api.github.com/repos/FORGE24/ESPlus/releases").unwrap();
+        assert!(deny_url("https://evil.example/").is_err());
     }
 }

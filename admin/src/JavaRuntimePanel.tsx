@@ -14,12 +14,6 @@ type Props = {
   onError: (msg: string | null) => void
 }
 
-function sourceLabel(src: string) {
-  if (src === 'system') return '系统 Java'
-  if (src === 'managed') return '已安装的 Temurin'
-  return 'Adoptium 下载'
-}
-
 export default function JavaRuntimePanel({ busy, onBusy, onError }: Props) {
   const [inv, setInv] = useState<JavaInventory | null>(null)
 
@@ -54,8 +48,9 @@ export default function JavaRuntimePanel({ busy, onBusy, onError }: Props) {
         Temurin）
       </h3>
       <p className="meta">
-        进程模式启动或安装 Forge/NeoForge/Quilt 时，若本机 Java 缺失或版本不够，会自动下载对应
-        JRE。也可在此预先安装 JDK/JRE。
+        进程模式启动时，每个杯子会从这里的模板缓存复制一份 JRE 到自己的{' '}
+        <code>runtime/jre</code>
+        ，独占文件根，不用系统 Java。也可在此预先下载 JDK/JRE 模板。
         {inv
           ? ` 当前平台 ${inv.adoptium_os}/${inv.adoptium_arch}。`
           : ''}
@@ -194,8 +189,8 @@ export default function JavaRuntimePanel({ busy, onBusy, onError }: Props) {
         ))}
       </div>
       <p className="meta">
-        下载来源：Eclipse Adoptium。安装器与开服优先用 JRE；需要完整 JDK 时再装 JDK。
-        {inv ? ` 补全会优先使用${sourceLabel('system')}，不够再下载。` : ''}
+        下载来源：Eclipse Adoptium。这里装的是模板；开服时再复制进杯子的{' '}
+        <code>runtime/jre</code>。需要完整 JDK 时再装 JDK。
       </p>
     </div>
   )

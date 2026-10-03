@@ -248,7 +248,7 @@ async fn spawn_live(
         }
     }
     let seed_port = match spec.runtime {
-        RuntimeKind::Docker => 25565,
+        RuntimeKind::Docker | RuntimeKind::Podman => 25565,
         RuntimeKind::Process => spec.port,
     };
     files::ensure_seed_files(&workdir, seed_port, spec.eula_accepted)?;
@@ -267,13 +267,13 @@ async fn spawn_live(
     let command = if spec.runtime == RuntimeKind::Process
         && command.as_deref().is_some_and(util::is_java_command)
     {
-        let bin = crate::java::ensure_for_spec(spec.java_major, spec.mc_version.as_deref()).await?;
+        let bin = crate::java::ensure_for_spec(&workdir, spec.java_major, spec.mc_version.as_deref()).await?;
         crate::java::rewrite_java_command(command, &bin)
     } else {
         command
     };
     match spec.runtime {
-        RuntimeKind::Docker => {
+        RuntimeKind::Docker | RuntimeKind::Podman => {
             crate::instance::container::spawn_docker_instance(
                 id.to_string(),
                 workdir,

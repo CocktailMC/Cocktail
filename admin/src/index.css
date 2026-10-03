@@ -6,24 +6,30 @@
   --primary-hover: #0c3d68;
   --primary-soft: #e8f1fb;
   --accent: #6cc054;
+  --lime: #6cc054;
+  --lime-ink: #24780c;
   --cream: #fcf0d8;
+  --cream-deep: #f0e4c0;
   --ice: #b4d8f0;
-  --sidebar-bg: #15202b;
-  --sidebar-hover: #1e2c3a;
-  --sidebar-line: #2a3441;
-  --content-bg: #f3f6f4;
-  --success: #22c55e;
+  --void: #0a0a0a;
+  --paper: #f6efe0;
+  --sidebar-bg: #fcf0d8;
+  --sidebar-hover: #f0e4c0;
+  --sidebar-line: #e2d3b0;
+  --content-bg: #f6efe0;
+  --success: #24780c;
   --danger: #ef4444;
-  --warning: #f59e0b;
-  --text: #1f2937;
-  --muted: #6b7280;
-  --line: #e5e7eb;
-  --card: #ffffff;
-  --radius: 8px;
-  --shadow-sm: 0 1px 2px rgba(15, 35, 55, 0.04);
-  --shadow: 0 1px 3px rgba(15, 35, 55, 0.06), 0 4px 12px rgba(15, 35, 55, 0.04);
+  --warning: #b45309;
+  --text: #1a222c;
+  --muted: #3f4852;
+  --line: #e2d3b0;
+  --card: #fcf0d8;
+  --radius: 2px;
+  --shadow-sm: none;
+  --shadow: none;
   --font-body: 'IBM Plex Sans', 'Noto Sans SC', sans-serif;
   --font-mono: 'IBM Plex Mono', Consolas, Monaco, 'Courier New', monospace;
+  --rail-w: 260px;
 }
 
 * {
@@ -39,16 +45,13 @@ body,
 
 body {
   min-height: 100vh;
-  background:
-    radial-gradient(ellipse 80% 50% at 100% -10%, rgba(180, 216, 240, 0.45), transparent),
-    radial-gradient(ellipse 50% 40% at -8% 8%, rgba(252, 240, 216, 0.7), transparent),
-    radial-gradient(ellipse 40% 30% at 20% 100%, rgba(108, 192, 84, 0.08), transparent),
-    var(--content-bg);
+  background: var(--paper);
   color: var(--text);
   font-family: var(--font-body);
   font-synthesis: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-wrap: pretty;
 }
 
 button,

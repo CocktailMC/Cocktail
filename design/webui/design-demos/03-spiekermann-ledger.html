@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>Cocktail Manager · 酒单</title>
+<!--
+  Assumptions
+  - 对象是现有 admin/ 控制面的高保真原型，不接后端；四杯示意机群为 brief 固定数据，非生产。
+  - 登录 / 创建实例用同一套酒单语法点到即可，不展开 20 个次级页。
+  - 通道 edge-26.10 · 日期 2026-09-13 · 本机 127.0.0.1:11011。
+  form 来自吧台杯子：酒单上的一行 = 一杯；点行 = 翻开这杯的规格书；崩溃 = 墨水洒在这一行，不是徽章。
+  Spiekermann: 酒单即界面。Type and rules do the work; decoration is noise.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #F7F4EC;
+    --liquid: #FCF0D8;
+    --ink: #0A0A0A;
+    --mute: #3F3B35;
+    --ice: #B4D8F0;
+    --lime: #6CC054;
+    --lime-ink: #24780C;
+    --navy: #0F4C81;
+    --danger: #EF4444;
+    --serif: "Newsreader", "Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, Georgia, serif;
+    --sans: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --mono: "IBM Plex Mono", "Noto Sans Mono", ui-monospace, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.45;
+    text-wrap: pretty;
+  }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  a { color: var(--navy); text-underline-offset: 3px; }
+
+  .sheet {
+    position: relative;
+    width: 1440px;
+    height: 900px;
+    margin: 0 auto;
+    padding: 16px 48px 0;
+    display: grid;
+    grid-template-rows: 84px 28px auto minmax(0, 1fr) 32px;
+    overflow: hidden;
+  }
+
+  /* 12-column ice hairlines — imposition, not chrome */
+  .cols {
+    position: absolute;
+    inset: 0 48px;
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .cols i {
+    border-left: 1px solid var(--ice);
+    opacity: 0.2;
+  }
+  .cols i:last-child { border-right: 1px solid var(--ice); }
+  .col-index {
+    position: absolute;
+    top: 4px;
+    left: 48px;
+    right: 48px;
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    color: var(--navy);
+    opacity: 0.45;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .letterhead, .events, .ledger-wrap, .spec, .colophon {
+    position: relative;
+    z-index: 2;
+  }
+
+  /* —— Letterhead —— */
+  .letterhead {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: end;
+    padding-top: 10px;
+    border-bottom: 2px solid var(--ink);
+  }
+  .letterhead::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: -5px;
+    height: 0;
+    border-bottom: 1px solid var(--ink);
+  }
+  .id {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .id img {
+    width: 44px;
+    height: 44px;
+    display: block;
+    flex: 0 0 44px;
+  }
+  .id h1 {
+    margin: 0;
+    font-family: var(--serif);
+    font-size: 22px;
+    font-weight: 500;
+    line-height: 1.15;
+    font-optical-sizing: auto;
+  }
+  .id .sub {
+    margin: 2px 0 0;
+    font-size: 12px;
+    color: var(--mute);
+    letter-spacing: 0.04em;
+  }
+  .id .acts {
+    margin-top: 3px;
+    font-size: 13px;
+  }
+  .id .acts button,
+  .mast button,
+  .spec-ops button,
+  .tabs button,
+  .txt-btn {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--navy);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    border-radius: 0;
+  }
+  .id .acts button.is-on,
+  .mast button.is-on {
+    color: var(--ink);
+    text-decoration-thickness: 2px;
+  }
+  .id .acts .sep { color: var(--ice); margin: 0 8px; }
+
+  .mast {
+    text-align: center;
+    padding-bottom: 6px;
+  }
+  .mast .chan {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+  }
+  .mast .chan em {
+    font-style: italic;
+    font-family: var(--serif);
+    font-size: 15px;
+    font-weight: 400;
+    margin-right: 8px;
+  }
+  .end {
+    text-align: right;
+    font-size: 12px;
+    line-height: 1.55;
+    padding-bottom: 4px;
+    color: var(--mute);
+    font-variant-numeric: tabular-nums;
+  }
+  .end .host {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink);
+  }
+  .end .live {
+    color: var(--lime-ink);
+  }
+  .end .live i {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: var(--lime);
+    margin-right: 6px;
+    vertical-align: 1px;
+  }
+
+  /* —— Events running line —— */
+  .events {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--ice);
+    color: var(--mute);
+  }
+  .events .k {
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    color: var(--navy);
+    flex: 0 0 auto;
+  }
+  .events .crash { color: var(--ink); font-weight: 500; }
+  .events .date {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* —— Ledger —— */
+  .ledger-wrap {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding-top: 8px;
+  }
+  .ledger-label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+  .ledger-label b {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 500;
+    font-size: 16px;
+  }
+  .ledger-label span {
+    font-size: 12px;
+    color: var(--mute);
+    letter-spacing: 0.04em;
+  }
+  table.ledger {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    flex: 1;
+  }
+  .ledger th {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--navy);
+    text-align: left;
+    padding: 0 8px 8px;
+    border-bottom: 1px solid var(--ink);
+    vertical-align: bottom;
+  }
+  .ledger th.r, .ledger td.r { text-align: right; }
+  .ledger td {
+    padding: 8px 8px;
+    border-bottom: 1px solid var(--ice);
+    vertical-align: top;
+    font-variant-numeric: tabular-nums;
+  }
+  .ledger tbody tr {
+    cursor: pointer;
+  }
+  .ledger tbody tr:hover td {
+    background: #F0E4C0;
+  }
+  .ledger tr.selected td {
+    background: #F0E4C0;
+    border-bottom-color: var(--navy);
+  }
+  .ledger tr.selected td:first-child {
+    border-left: 2px solid var(--navy);
+    padding-left: 6px;
+  }
+  .ledger tr.crash td {
+    background: var(--ink);
+    color: var(--liquid);
+    border-bottom-color: var(--ink);
+  }
+  .ledger tr.crash:hover td,
+  .ledger tr.crash.selected td {
+    background: var(--ink);
+  }
+  .ledger tr.crash.selected td:first-child {
+    border-left: 2px solid var(--liquid);
+    padding-left: 6px;
+  }
+  .ledger tr.crash .kern,
+  .ledger tr.crash .mute { color: #D9D0BC; }
+  .bin {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--navy);
+  }
+  .ledger tr.crash .bin { color: var(--ice); }
+  .cup {
+    font-family: var(--serif);
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 1.15;
+    font-optical-sizing: auto;
+  }
+  .ledger tr.crash .cup { font-style: italic; }
+  .kern {
+    font-size: 13px;
+    color: var(--mute);
+    margin-top: 2px;
+  }
+  .st {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 14px;
+  }
+  .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: var(--lime);
+    margin-right: 7px;
+    vertical-align: 1px;
+  }
+  .run { color: var(--lime-ink); font-weight: 500; }
+  .stop { color: var(--mute); }
+  .crash-word {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 18px;
+    color: var(--liquid);
+    letter-spacing: 0.02em;
+  }
+  .takeover {
+    font-size: 12px;
+    color: var(--navy);
+    letter-spacing: 0.08em;
+    border-bottom: 1px solid var(--navy);
+    align-self: flex-start;
+    line-height: 1.2;
+  }
+  .ledger tr.crash .takeover { display: none; }
+  .num {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+  .living-num { animation: breath 3.2s ease-in-out infinite; }
+  @keyframes breath {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  .mute { color: var(--mute); }
+  .ledger tr.crash .mute { color: #D9D0BC; }
+
+  /* —— Spec sheet —— */
+  .spec {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    margin-top: 2px;
+    padding-top: 10px;
+    border-top: 1px solid var(--ink);
+    background: var(--liquid);
+    margin-left: -48px;
+    margin-right: -48px;
+    padding-left: 48px;
+    padding-right: 48px;
+  }
+  .spec-head {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: end;
+    gap: 16px;
+    margin-bottom: 6px;
+  }
+  .spec-head .who {
+    font-family: var(--serif);
+    font-size: 28px;
+    font-weight: 500;
+    line-height: 1;
+    font-optical-sizing: auto;
+  }
+  .spec-head .who em {
+    font-style: italic;
+    font-weight: 400;
+  }
+  .spec-head .meta {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--mute);
+  }
+  .spec-head .meta b {
+    font-weight: 500;
+    color: var(--navy);
+  }
+  .spec-ops {
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    padding-bottom: 4px;
+  }
+  .spec-ops button[disabled] {
+    color: #9A9488;
+    text-decoration: none;
+    cursor: default;
+  }
+  .spec-ops .slash { color: var(--ice); margin: 0 10px; }
+
+  .tabs {
+    display: flex;
+    gap: 28px;
+    border-bottom: 1px solid var(--ice);
+    margin-bottom: 10px;
+    font-size: 14px;
+  }
+  .tabs button {
+    padding: 0 0 7px;
+    text-decoration: none;
+    color: var(--navy);
+    border-bottom: 1px solid transparent;
+    margin-bottom: -1px;
+    border-radius: 0;
+  }
+  .tabs button.is-on {
+    color: var(--ink);
+    border-bottom-color: var(--ink);
+    text-decoration: none;
+  }
+
+  .pane {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+  .pane[hidden] { display: none; }
+
+  .sheet-dl {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    column-gap: 24px;
+  }
+  .sheet-dl > div {
+    padding: 8px 0 10px;
+    border-top: 1px solid var(--ice);
+  }
+  .sheet-dl dt {
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    color: var(--navy);
+    margin: 0 0 4px;
+  }
+  .sheet-dl dd {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .sheet-dl dd .run { font-family: var(--sans); }
+  .note {
+    margin: 10px 0 0;
+    font-size: 12px;
+    color: var(--mute);
+  }
+
+  /* Console as galley proof */
+  .galley {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--ink);
+    white-space: pre;
+    margin: 0;
+  }
+  .galley .ln { color: var(--navy); margin-right: 12px; }
+  .galley .err { color: var(--danger); }
+  .cmd {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--ice);
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .cmd span { color: var(--navy); }
+  .cmd input {
+    flex: 1;
+    border: 0;
+    border-bottom: 1px solid var(--ink);
+    background: transparent;
+    padding: 3px 0;
+    border-radius: 0;
+    outline: none;
+  }
+  .cmd input:focus { border-bottom-width: 2px; padding-bottom: 2px; }
+  .cmd .ghost { font-size: 12px; color: var(--mute); }
+
+  /* Network */
+  .net-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+  }
+  .net-table th {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    color: var(--navy);
+    text-align: left;
+    padding: 0 8px 6px 0;
+    border-bottom: 1px solid var(--ink);
+  }
+  .net-table td {
+    padding: 8px 8px 8px 0;
+    border-bottom: 1px solid var(--ice);
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .net-table td:last-child,
+  .net-table th:last-child { text-align: right; }
+  .kick {
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--navy);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    font-family: var(--sans);
+    font-size: 13px;
+    border-radius: 0;
+  }
+  .kicked { color: var(--mute); text-decoration: line-through; }
+
+  /* Paper forms */
+  .form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 48px;
+    row-gap: 14px;
+    max-width: 920px;
+  }
+  .form label {
+    display: block;
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    color: var(--navy);
+    margin-bottom: 4px;
+  }
+  .form input[type="text"],
+  .form input[type="password"],
+  .form select {
+    width: 100%;
+    border: 0;
+    border-bottom: 1px solid var(--ink);
+    background: transparent;
+    padding: 4px 0;
+    border-radius: 0;
+    outline: none;
+    font-size: 15px;
+  }
+  .form select { border-radius: 0; }
+  .form .full { grid-column: 1 / -1; }
+  .form .eula {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--mute);
+  }
+  .form .eula input { accent-color: var(--navy); }
+  .form .go {
+    grid-column: 2;
+    justify-self: end;
+    align-self: end;
+    background: none;
+    border: 0;
+    border-bottom: 1px solid var(--navy);
+    color: var(--navy);
+    padding: 0 0 2px;
+    font-size: 15px;
+    letter-spacing: 0.08em;
+    border-radius: 0;
+  }
+  .form-msg {
+    grid-column: 1 / -1;
+    font-size: 14px;
+    color: var(--lime-ink);
+    min-height: 1.2em;
+  }
+
+  /* —— Colophon —— */
+  .colophon {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--mute);
+    border-top: 1px solid var(--ink);
+    letter-spacing: 0.02em;
+  }
+  .colophon .src { color: var(--navy); }
+</style>
+</head>
+<body>
+<div class="sheet" id="app">
+  <div class="cols" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  <div class="col-index" aria-hidden="true"><span>01</span><span>02</span><span>03</span><span>04</span><span>05</span><span>06</span><span>07</span><span>08</span><span>09</span><span>10</span><span>11</span><span>12</span></div>
+
+  <header class="letterhead">
+    <div class="id">
+      <img alt="Cocktail" src="data:image/png;base64,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vrcjfM0wBBAgNwQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0ggvksRvuZLEb4mwL4EEojoytWVU0mSXI70tV+O8XUB9iKQQFxfT5JkPuLXBsiFSpqmsR8DlNKVqytfS5Lk9yI/jG8mSfLK5YvzNyM/DqDkBBIYsCtXVy61Vye+nJNv/rXweC5fnP9G7AcClJdAAn105epKOB8SAsiF9uu8Hyb9XpIkbyZJ8nZ4+OHPVk+AQRBIoAeuXF0JgSO8dAaQFwvyzV1ph5QrWVi5fHE+vAboGYEEjrflcmlXAIl1MDWmb7dXUt5sr6SEwAJwLAIJdL+Se2nXS1FWPfp5HqUVUDqCSggtAF0JJHB/yyULHWHVI7x93jenp1s+nSHFlg+wg0BC6QzhQdOicoAW2CaQUIYtlyIeNC3yls/2DR8HaKE8BBIKwUHTUhygza4jO0ALBSSQMOwHTcOqhy2Xcuo8QHulfR3ZAVoYUgIJw3LQNHtx0JRuHKCFISWQkKeDpp0BxKoHveQALeScQMJAOWhKjg/Q6kyBiAQSBrHt8rWSN5oynAdo39A+C4MjkNA3V66uvJ4kyW/7FjPk4eRlAwah/6oD+BqUkDBCQYSzTGb0wAAIJPRrm8bKCEXx4pWrK1+P/SCg6AQS+uEV31YKJpyDAvpIIKEfwuFVKBL9N9BnAgkAEJ1AAgBEJ5DQD2/4tlIw34r9AKDoBBL64RvtmSJQpP+ngT4SSOi5domUmzYUxTcvX5y36gd9JpDQF5cvzoffKH/VSglD7ncvX5x35RcGQHU8fXfl6srLrgIzZN5uz7IJq33AAAgkAEB0tmwAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQASGL731iwlpGZP8N3AAAAAElFTkSuQmCC">
+      <div>
+        <h1>Cocktail Manager</h1>
+        <p class="sub">调酒控制面 · v0.1 · 鉴权已启用</p>
+        <div class="acts">
+          <button type="button" id="btn-create">创建实例</button>
+          <span class="sep">/</span>
+          <button type="button" id="btn-login">登录</button>
+        </div>
+      </div>
+    </div>
+    <div class="mast">
+      <div class="chan"><em>酒单</em>edge-26.10</div>
+    </div>
+    <div class="end">
+      <div class="host">本机 127.0.0.1:11011</div>
+      <div><span class="live"><i></i>在线</span> · Docker 就绪</div>
+    </div>
+  </header>
+
+  <p class="events">
+    <span class="k">最近</span>
+    <span><span class="crash">测试 崩溃</span> · 主生存 热接管成功 · 大厅 玩家 Steve 进入 · 空岛 定时备份完成</span>
+    <span class="date">2026-09-13</span>
+  </p>
+
+  <div class="ledger-wrap">
+    <div class="ledger-label">
+      <b>机群酒单</b>
+      <span>四杯 · 点行翻开酒谱 · 崩溃以墨水标出</span>
+    </div>
+    <table class="ledger">
+      <colgroup>
+        <col style="width:5%">
+        <col style="width:13%">
+        <col style="width:17%">
+        <col style="width:8%">
+        <col style="width:16%">
+        <col style="width:10%">
+        <col style="width:10%">
+        <col style="width:11%">
+        <col style="width:10%">
+      </colgroup>
+      <thead>
+        <tr>
+          <th>№</th>
+          <th>杯</th>
+          <th>核</th>
+          <th class="r">端口</th>
+          <th>态</th>
+          <th class="r">TPS</th>
+          <th class="r">人</th>
+          <th class="r">内存</th>
+          <th>节点</th>
+        </tr>
+      </thead>
+      <tbody id="ledger-body"></tbody>
+    </table>
+  </div>
+
+  <section class="spec" aria-live="polite">
+    <div class="spec-head">
+      <div>
+        <div class="who" id="spec-who"></div>
+        <div class="meta" id="spec-meta"></div>
+      </div>
+      <div class="spec-ops" id="spec-ops"></div>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button type="button" data-tab="dash" class="is-on">酒谱</button>
+      <button type="button" data-tab="console">现场（控制台）</button>
+      <button type="button" data-tab="net">门厅（网络）</button>
+    </nav>
+    <div class="pane" id="pane-dash"></div>
+    <div class="pane" id="pane-console" hidden></div>
+    <div class="pane" id="pane-net" hidden></div>
+    <div class="pane" id="pane-form" hidden></div>
+  </section>
+
+  <footer class="colophon">
+    <span>Apache-2.0 · 示意数据 · Docker 就绪 · 本机 127.0.0.1:11011</span>
+    <span class="src">插件源 Modrinth · Hangar · Spiget</span>
+    <span>CocktailMC · 印张 01</span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  var instances = [
+    {
+      id: "main",
+      bin: "01",
+      name: "主生存",
+      core: "Paper 1.21.4",
+      port: "25565",
+      runtime: "process",
+      mem: "4096",
+      memUsed: "2816",
+      status: "running",
+      takeover: true,
+      pid: "18420",
+      node: "本机",
+      health: "92%",
+      tps: "19.84",
+      players: "12/40",
+      cpu: "14.2%",
+      mspt: "18.1 ms",
+      down: "1.2 Mbps",
+      up: "340 Kbps",
+      entities: "1842",
+      chunks: "612",
+      heap: "1400 / 1800",
+      gc: "12",
+      tcp: "27",
+      ping: "18 ms",
+      listen: "0.0.0.0:25565",
+      sockets: { pub: 4, lan: 8, local: 15 },
+      peer: "198.51.100.23:55102",
+      logs: [
+        "[12:04:01] [Server thread/INFO]: This server is running Paper version 1.21.4",
+        "[12:04:02] [Server thread/INFO]: Done (4.821s)! For help, type \"help\"",
+        "[12:08:14] [User Authenticator #3/INFO]: UUID of player Steve is 853c80ef-3c37-49fd-aa49-938b674adae6",
+        "[12:08:14] [Server thread/INFO]: Steve[/192.168.1.14:51220] logged in with entity id 1842 at ([world]8.5, 72.0, -21.3)",
+        "[12:11:02] [Server thread/INFO]: [Cocktail] hot-handoff accepted pid 18420",
+        "[14:22:01] [Server thread/WARN]: Can't keep up! Is the server overloaded? Running 2184ms behind"
+      ]
+    },
+    {
+      id: "sky",
+      bin: "02",
+      name: "空岛",
+      core: "Paper 1.21.4",
+      port: "25566",
+      runtime: "docker",
+      mem: "2048",
+      status: "stopped",
+      takeover: false,
+      node: "—",
+      tps: "—",
+      players: "—",
+      listen: "—",
+      sockets: { pub: 0, lan: 0, local: 0 },
+      logs: [
+        "[昨日 23:00:00] [Server thread/INFO]: Stopping the server",
+        "[昨日 23:00:02] [Server thread/INFO]: Saving players",
+        "[昨日 23:00:03] [Server thread/INFO]: Saving worlds",
+        "[昨日 23:00:04] Process stopped"
+      ]
+    },
+    {
+      id: "hub",
+      bin: "03",
+      name: "大厅",
+      core: "Velocity 3.4",
+      port: "25577",
+      runtime: "process",
+      mem: "512",
+      status: "running",
+      takeover: false,
+      node: "本机",
+      backends: "3",
+      tps: "—",
+      players: "—",
+      listen: "0.0.0.0:25577",
+      sockets: { pub: 1, lan: 2, local: 4 },
+      peer: "203.0.113.40:44881",
+      logs: [
+        "[12:00:01] [main/INFO]: Booting up Velocity 3.4...",
+        "[12:00:02] [main/INFO]: Listening on /0.0.0.0:25577",
+        "[12:00:03] [main/INFO]: Registered 3 backends",
+        "[12:08:14] [conn/INFO]: [connected] Steve -> 主生存"
+      ]
+    },
+    {
+      id: "test",
+      bin: "04",
+      name: "测试",
+      core: "Vanilla 1.21.4",
+      port: "25570",
+      runtime: "process",
+      mem: "1024",
+      status: "crashed",
+      takeover: false,
+      node: "本机",
+      health: "12%",
+      exit: "1",
+      tps: "—",
+      players: "—",
+      listen: "已关闭",
+      sockets: { pub: 0, lan: 0, local: 0 },
+      logs: [
+        "[03:11:06] [Server thread/INFO]: Loading Vanilla 1.21.4",
+        "[03:11:08] [Server thread/ERROR]: Encountered an unexpected exception",
+        "java.lang.OutOfMemoryError: Java heap space",
+        "[03:11:08] [Server thread/INFO]: Stopping server",
+        "[03:11:09] Process exited with code 1"
+      ]
+    }
+  ];
+
+  var selected = "main";
+  var tab = "dash";
+  var formMode = null;
+  var kicked = {};
+
+  function $(id) { return document.getElementById(id); }
+  function find(id) {
+    for (var i = 0; i < instances.length; i++) if (instances[i].id === id) return instances[i];
+    return instances[0];
+  }
+
+  function statusCell(inst) {
+    if (inst.status === "running") {
+      var t = '<span class="st"><span class="run"><i class="dot"></i>运行中</span>';
+      if (inst.takeover) t += '<span class="takeover">已接管</span>';
+      if (inst.backends) t += '<span class="mute">' + inst.backends + ' 个后端</span>';
+      return t + "</span>";
+    }
+    if (inst.status === "stopped") return '<span class="st"><span class="stop">已停止</span></span>';
+    return '<span class="st"><span class="crash-word">崩溃</span><span class="mute">退出码 ' + (inst.exit || "1") + '</span></span>';
+  }
+
+  function renderLedger() {
+    var html = "";
+    for (var i = 0; i < instances.length; i++) {
+      var x = instances[i];
+      var cls = [];
+      if (x.id === selected) cls.push("selected");
+      if (x.status === "crashed") cls.push("crash");
+      var tps = x.tps;
+      var tpsCls = "num r" + (x.status === "running" && x.tps !== "—" ? " living-num" : "");
+      html += '<tr class="' + cls.join(" ") + '" data-id="' + x.id + '">' +
+        '<td class="bin">' + x.bin + "</td>" +
+        '<td><div class="cup">' + x.name + '</div></td>' +
+        '<td><div>' + x.core + '</div><div class="kern">' + x.runtime + "</div></td>" +
+        '<td class="num r">' + x.port + "</td>" +
+        "<td>" + statusCell(x) + "</td>" +
+        '<td class="' + tpsCls + '">' + tps + "</td>" +
+        '<td class="num r">' + x.players + "</td>" +
+        '<td class="num r">' + x.mem + "</td>" +
+        "<td>" + x.node + "</td>" +
+        "</tr>";
+    }
+    $("ledger-body").innerHTML = html;
+  }
+
+  function pair(k, v) {
+    return "<div><dt>" + k + "</dt><dd>" + v + "</dd></div>";
+  }
+
+  function dashHTML(x) {
+    var items = [];
+    if (x.status === "running") {
+      items.push(pair("状态", x.takeover
+        ? '<span class="run" style="font-family:IBM Plex Sans,Noto Sans SC,sans-serif">运行中 · 已接管</span>'
+        : '<span class="run" style="font-family:IBM Plex Sans,Noto Sans SC,sans-serif">运行中</span>'));
+    } else if (x.status === "stopped") {
+      items.push(pair("状态", "已停止"));
+    } else {
+      items.push(pair("状态", "崩溃"));
+    }
+    if (x.pid && x.status === "running") items.push(pair("pid", x.pid));
+    items.push(pair("节点", x.node));
+    if (x.health) items.push(pair("健康", x.health));
+    if (x.exit && x.status === "crashed") items.push(pair("退出码", x.exit));
+    items.push(pair("核", x.core));
+    items.push(pair("端口", x.port));
+    items.push(pair("运行时", x.runtime));
+    items.push(pair("内存", (x.memUsed ? x.memUsed + " / " : "") + x.mem + " MiB"));
+    if (x.cpu && x.status === "running") {
+      items.push(pair("CPU", x.cpu));
+      items.push(pair("TPS", '<span class="living-num">' + x.tps + "</span>"));
+      items.push(pair("MSPT", x.mspt));
+      items.push(pair("人", x.players));
+      items.push(pair("下行", x.down));
+      items.push(pair("上行", x.up));
+      items.push(pair("实体", x.entities));
+      items.push(pair("区块", x.chunks));
+      items.push(pair("堆", x.heap));
+      items.push(pair("GC", x.gc));
+      items.push(pair("TCP", x.tcp));
+      items.push(pair("ping", x.ping));
+    }
+    if (x.backends) items.push(pair("后端", x.backends + " 个"));
+    if (x.status !== "running") {
+      items.push(pair("TPS", "—"));
+      items.push(pair("人", "—"));
+    }
+    return '<dl class="sheet-dl">' + items.join("") + "</dl>" +
+      (x.id === "main" && x.takeover
+        ? '<p class="note">热接管：控制面重启后同一进程仍在跑，酒没倒掉，只换了调酒师。</p>'
+        : "");
+  }
+
+  function consoleHTML(x) {
+    var lines = x.logs || [];
+    var body = "";
+    for (var i = 0; i < lines.length; i++) {
+      var n = String(i + 1).padStart(2, "0");
+      var cls = /ERROR|OutOfMemory|exited with code/.test(lines[i]) ? ' class="err"' : "";
+      body += '<span class="ln">' + n + "</span><span" + cls + ">" + lines[i] + "</span>\n";
+    }
+    return '<pre class="galley">' + body + "</pre>" +
+      '<form class="cmd" id="cmd-form" autocomplete="off">' +
+      "<span>></span>" +
+      '<input name="cmd" placeholder="say / stop  ·  示意，不真执行" spellcheck="false">' +
+      '<span class="ghost">回车下发</span>' +
+      "</form>";
+  }
+
+  function netHTML(x) {
+    var s = x.sockets || { pub: 0, lan: 0, local: 0 };
+    var top = '<dl class="sheet-dl">' +
+      pair("监听", x.listen) +
+      pair("防火墙分组", "Cocktail") +
+      pair("公网", String(s.pub)) +
+      pair("内网", String(s.lan)) +
+      pair("本机", String(s.local)) +
+      pair("端口", x.port) +
+      "</dl>";
+    if (!x.peer || x.status !== "running") {
+      return top + '<p class="note">无活动公网套接字。</p>';
+    }
+    var dead = kicked[x.id];
+    var row = dead
+      ? '<span class="kicked">' + x.peer + "</span>"
+      : x.peer;
+    var act = dead
+      ? '<span class="mute">已踢出</span>'
+      : '<button type="button" class="kick" id="kick-btn">踢连接</button>';
+    return top +
+      '<table class="net-table" style="margin-top:14px">' +
+      "<thead><tr><th>址</th><th>向</th><th>态</th><th></th></tr></thead>" +
+      "<tbody><tr><td>" + row + "</td><td>公网</td><td>" + (dead ? "已断开" : "已建立") + "</td><td>" + act + "</td></tr></tbody>" +
+      "</table>";
+  }
+
+  function createFormHTML() {
+    return '<form class="form" id="create-form">' +
+      '<div><label>杯名</label><input type="text" name="name" placeholder="如 下界" required></div>' +
+      '<div><label>核</label><select name="core"><option>Paper 1.21.4</option><option>Velocity 3.4</option><option>Vanilla 1.21.4</option></select></div>' +
+      '<div><label>端口</label><input type="text" name="port" placeholder="25568" required></div>' +
+      '<div><label>内存 MiB</label><input type="text" name="mem" placeholder="2048" required></div>' +
+      '<div><label>运行时</label><select name="rt"><option>process</option><option>docker</option></select></div>' +
+      '<div class="eula"><input type="checkbox" id="eula" required><label for="eula" style="letter-spacing:0;color:#3F3B35">我已阅读 Minecraft EULA</label></div>' +
+      '<p class="form-msg" id="form-msg"></p>' +
+      '<button type="submit" class="go">开封</button>' +
+      "</form>";
+  }
+
+  function loginFormHTML() {
+    return '<form class="form" id="login-form">' +
+      '<div><label>用户</label><input type="text" name="user" required></div>' +
+      '<div><label>口令</label><input type="password" name="pass" required></div>' +
+      '<p class="form-msg" id="form-msg"></p>' +
+      '<button type="submit" class="go">进入</button>' +
+      "</form>";
+  }
+
+  function renderOps(x) {
+    var running = x.status === "running";
+    $("spec-ops").innerHTML =
+      '<button type="button" data-act="start"' + (running ? " disabled" : "") + ">启动</button>" +
+      '<span class="slash">/</span>' +
+      '<button type="button" data-act="stop"' + (running ? "" : " disabled") + ">停止</button>" +
+      '<span class="slash">/</span>' +
+      '<button type="button" data-act="restart"' + (running ? "" : " disabled") + ">重启</button>";
+  }
+
+  function showPanes() {
+    var isForm = formMode === "create" || formMode === "login";
+    $("pane-dash").hidden = isForm || tab !== "dash";
+    $("pane-console").hidden = isForm || tab !== "console";
+    $("pane-net").hidden = isForm || tab !== "net";
+    $("pane-form").hidden = !isForm;
+    $("tabs").hidden = isForm;
+    $("btn-create").className = formMode === "create" ? "is-on" : "";
+    $("btn-login").className = formMode === "login" ? "is-on" : "";
+    var tabs = $("tabs").querySelectorAll("button");
+    for (var i = 0; i < tabs.length; i++) {
+      tabs[i].className = tabs[i].getAttribute("data-tab") === tab ? "is-on" : "";
+    }
+  }
+
+  function renderSheet() {
+    var x = find(selected);
+    if (formMode === "create") {
+      $("spec-who").innerHTML = "<em>开封</em> 新杯";
+      $("spec-meta").innerHTML = "写入本机酒单 · 示意，不落库";
+      $("spec-ops").innerHTML = '<button type="button" id="form-cancel">取消</button>';
+      $("pane-form").innerHTML = createFormHTML();
+      showPanes();
+      return;
+    }
+    if (formMode === "login") {
+      $("spec-who").innerHTML = "<em>门匙</em> 登录";
+      $("spec-meta").innerHTML = "鉴权已启用 · 本机 127.0.0.1:11011";
+      $("spec-ops").innerHTML = '<button type="button" id="form-cancel">取消</button>';
+      $("pane-form").innerHTML = loginFormHTML();
+      showPanes();
+      return;
+    }
+    $("spec-who").innerHTML = x.bin + "  <em>" + x.name + "</em>";
+    $("spec-meta").innerHTML = x.core + " · " + x.runtime + " · 端口 <b>" + x.port + "</b>" +
+      (x.takeover && x.status === "running" ? " · <b>已接管</b>" : "") +
+      (x.status === "crashed" ? " · 健康 " + x.health : "");
+    renderOps(x);
+    $("pane-dash").innerHTML = dashHTML(x);
+    $("pane-console").innerHTML = consoleHTML(x);
+    $("pane-net").innerHTML = netHTML(x);
+    showPanes();
+  }
+
+  function render() {
+    renderLedger();
+    renderSheet();
+  }
+
+  $("ledger-body").addEventListener("click", function (e) {
+    var tr = e.target.closest("tr");
+    if (!tr) return;
+    selected = tr.getAttribute("data-id");
+    formMode = null;
+    render();
+  });
+
+  $("tabs").addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (!b) return;
+    tab = b.getAttribute("data-tab");
+    formMode = null;
+    render();
+  });
+
+  $("btn-create").addEventListener("click", function () {
+    formMode = formMode === "create" ? null : "create";
+    render();
+  });
+  $("btn-login").addEventListener("click", function () {
+    formMode = formMode === "login" ? null : "login";
+    render();
+  });
+
+  $("app").addEventListener("click", function (e) {
+    if (e.target.id === "form-cancel") {
+      formMode = null;
+      render();
+    }
+    if (e.target.id === "kick-btn") {
+      kicked[selected] = true;
+      render();
+    }
+    var act = e.target.getAttribute && e.target.getAttribute("data-act");
+    if (!act) return;
+    var x = find(selected);
+    if (act === "start" && x.status !== "running") {
+      x.status = "running";
+      if (x.id === "test") { x.health = "64%"; x.exit = null; }
+      if (x.id === "sky") x.node = "本机";
+    }
+    if (act === "stop" && x.status === "running") {
+      x.status = "stopped";
+      x.takeover = false;
+      x.tps = "—";
+      x.players = "—";
+      x.node = x.id === "sky" ? "—" : x.node;
+    }
+    if (act === "restart" && x.status === "running") {
+      x.takeover = false;
+    }
+    render();
+  });
+
+  $("app").addEventListener("submit", function (e) {
+    if (e.target.id === "cmd-form") {
+      e.preventDefault();
+      var input = e.target.querySelector("input");
+      var x = find(selected);
+      if (input.value) {
+        x.logs = x.logs.concat(['> ' + input.value, "（示意，未下发）"]);
+        input.value = "";
+        render();
+      }
+    }
+    if (e.target.id === "create-form") {
+      e.preventDefault();
+      $("form-msg").textContent = "已开封（示意，未写入酒单）。";
+    }
+    if (e.target.id === "login-form") {
+      e.preventDefault();
+      $("form-msg").textContent = "已进入（示意）。";
+    }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

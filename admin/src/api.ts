@@ -128,6 +128,15 @@ export type LogLine = {
   line: string
 }
 
+export type ImportArchiveResult = {
+  instance: Instance
+  archive: string
+  flattened: boolean
+  startup: string
+  command_preview: string
+  extracted_files: number
+}
+
 export type CreateInstanceBody = {
   name: string
   core?: string
@@ -898,6 +907,33 @@ export const api = {
     })
     if (!res.ok) throw new Error(await res.text())
     return res.json() as Promise<Instance>
+  },
+  importArchive: async (
+    id: string,
+    file: File,
+    opts?: {
+      core?: string
+      accept_eula?: boolean
+      command?: string
+      args?: string
+    },
+  ) => {
+    const fd = new FormData()
+    fd.append('file', file, file.name)
+    const qs = new URLSearchParams({
+      filename: file.name,
+      core: opts?.core ?? 'custom',
+      accept_eula: String(opts?.accept_eula ?? true),
+    })
+    if (opts?.command?.trim()) qs.set('command', opts.command.trim())
+    if (opts?.args?.trim()) qs.set('args', opts.args.trim())
+    const res = await fetch(`/api/v1/instances/${id}/import-archive?${qs}`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    })
+    if (!res.ok) throw new Error(await res.text())
+    return res.json() as Promise<ImportArchiveResult>
   },
   setStartupJar: (id: string, path: string) =>
     request<Instance>(`/api/v1/instances/${id}/startup-jar`, {

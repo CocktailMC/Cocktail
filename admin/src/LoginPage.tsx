@@ -64,9 +64,7 @@ export default function LoginPage({
 
           {offline && (
             <div className="error-banner" role="alert">
-              <span>
-                <i className="fa fa-plug" /> 控制面离线，请确认 cocktail-control 已启动。
-              </span>
+              <span>控制面离线，请确认 cocktail-control 已启动。</span>
               {onRetryHealth && (
                 <button type="button" className="link-btn" onClick={onRetryHealth}>
                   重试
@@ -100,9 +98,7 @@ export default function LoginPage({
 
           {error && (
             <div className="error-banner" role="alert">
-              <span>
-                <i className="fa fa-exclamation-circle" /> {error}
-              </span>
+              <span>{error}</span>
             </div>
           )}
 

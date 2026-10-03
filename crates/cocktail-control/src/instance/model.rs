@@ -36,6 +36,7 @@ pub enum RuntimeKind {
     #[default]
     Process,
     Docker,
+    Podman,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,10 +253,10 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub fn new(spec: InstanceSpec) -> Self {
+    pub fn with_id(id: String, spec: InstanceSpec) -> Self {
         let now = Utc::now();
         Self {
-            id: Uuid::new_v4().to_string(),
+            id,
             spec,
             status: InstanceStatus::Created,
             created_at: now,
@@ -268,6 +269,10 @@ impl Instance {
             generation: 1,
             process: None,
         }
+    }
+
+    pub fn new(spec: InstanceSpec) -> Self {
+        Self::with_id(Uuid::new_v4().to_string(), spec)
     }
 
     pub fn public_view(&self) -> InstanceView {

@@ -57,21 +57,50 @@ export default function NetworkPage({
   const peers = live?.net_peers ?? []
   const alerts = live?.net_alerts ?? []
   const publicPeers = peers.filter((p) => p.scope === 'public').length
+  const listen = live?.net_listen || `0.0.0.0:${instance.spec.port}`
+
+  if (!running) {
+    return (
+      <>
+        {instance.status === 'crashed' ? (
+          <div className="spilled">
+            <h2>端口已松开</h2>
+            <p>
+              :{instance.spec.port} 随进程一起倒下。没有可踢的公网连接。防火墙分组 Cocktail
+              仍在。
+            </p>
+          </div>
+        ) : (
+          <div className="empty-cup">
+            <h2>没有套接字</h2>
+            <p>
+              :{instance.spec.port} 未监听。防火墙分组 Cocktail 仍在，只是这只杯子没开口。
+            </p>
+          </div>
+        )}
+        <NetOpsPanel
+          instanceId={instance.id}
+          defaultPort={instance.spec.port}
+          peerIps={[]}
+          onError={onError}
+          onBusy={onBusy}
+        />
+      </>
+    )
+  }
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <p className="page-eyebrow">{instance.spec.name}</p>
-          <h2 className="page-title">网络分析</h2>
-          <p className="meta">
-            端口 :{instance.spec.port}
-            {live?.net_listen ? ` · 监听 ${live.net_listen}` : ''}
-            {live?.net_source === 'container' ? ' · 容器网卡流量' : ' · 按游戏端口套接字统计'}
-            {live?.net_ping_version ? ` · ${live.net_ping_version}` : ''}
-          </p>
-        </div>
-      </div>
+      <p className="net-lead">
+        监听 <strong className="mono">{listen}</strong>
+        {' · '}
+        公网 {publicPeers} / 内网{' '}
+        {peers.filter((p) => p.scope === 'private').length} / 本机{' '}
+        {peers.filter((p) => p.scope === 'loopback').length}
+        {' · '}
+        防火墙分组 <span className="fw-chip">Cocktail</span>
+        {live?.net_source === 'container' ? ' · 容器网卡' : ' · 按游戏端口套接字'}
+      </p>
 
       {alerts.length > 0 && (
         <div className="net-alerts">
@@ -127,12 +156,12 @@ export default function NetworkPage({
       <div className="grid-2">
         <div className="card-panel">
           <h3 className="card-title">流量</h3>
-          <Sparkline values={rx} color="#2563eb" />
+          <Sparkline values={rx} color="#0f4c81" />
           <p className="net-legend">
             <span className="dot rx" /> 下行 {formatBps(live?.net_rx_bps)}
             <span className="dot tx" /> 上行 {formatBps(live?.net_tx_bps)}
           </p>
-          <Sparkline values={tx} color="#059669" />
+          <Sparkline values={tx} color="#24780c" />
           <dl className="net-dl">
             <div>
               <dt>本次接管累计 ↓</dt>
@@ -158,7 +187,7 @@ export default function NetworkPage({
         </div>
         <div className="card-panel">
           <h3 className="card-title">连接状态</h3>
-          <Sparkline values={conns} color="#d97706" />
+          <Sparkline values={conns} color="#0f4c81" />
           <div className="net-states">
             <span>
               ESTAB <strong>{live?.net_connections ?? 0}</strong>

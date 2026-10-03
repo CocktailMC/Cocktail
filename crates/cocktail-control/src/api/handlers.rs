@@ -830,6 +830,125 @@ pub async fn install_jar(
 }
 
 #[derive(Deserialize)]
+pub struct ImportArchiveQuery {
+    #[serde(default)]
+    pub filename: Option<String>,
+    #[serde(default = "default_custom_core")]
+    pub core: String,
+    #[serde(default = "default_true_bool")]
+    pub accept_eula: bool,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Option<String>,
+}
+
+pub async fn import_archive(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Query(q): Query<ImportArchiveQuery>,
+    mut multipart: Multipart,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let tmp_root = std::path::PathBuf::from("data")
+        .join("tmp")
+        .join("imports");
+    tokio::fs::create_dir_all(&tmp_root)
+        .await
+        .map_err(|e| bad_request(e.to_string()))?;
+    let staging = tmp_root.join(format!("{}-{}", id, uuid::Uuid::new_v4()));
+    tokio::fs::create_dir_all(&staging)
+        .await
+        .map_err(|e| bad_request(e.to_string()))?;
+
+    let saved = save_multipart_archive(&mut multipart, &staging, q.filename.as_deref()).await;
+    let saved = match saved {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&staging).await;
+            return Err(bad_request(e.to_string()));
+        }
+    };
+
+    let args = q
+        .args
+        .as_deref()
+        .map(|s| {
+            s.split_whitespace()
+                .filter(|p| !p.is_empty())
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let opts = instance::ImportArchiveOpts {
+        filename: saved.filename,
+        accept_eula: q.accept_eula,
+        core: Some(q.core),
+        command: q.command.filter(|s| !s.trim().is_empty()),
+        args,
+    };
+    let result: crate::instance::archive::ImportArchiveResult =
+        match instance::import_archive(&state, &id, &saved.path, opts).await {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(&staging).await;
+                return map_result(Err(e));
+            }
+        };
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    map_result(Ok(result))
+}
+
+struct SavedArchive {
+    path: std::path::PathBuf,
+    filename: String,
+}
+
+async fn save_multipart_archive(
+    multipart: &mut Multipart,
+    staging: &std::path::Path,
+    hint: Option<&str>,
+) -> anyhow::Result<SavedArchive> {
+    let mut saved: Option<SavedArchive> = None;
+    while let Some(mut field) = multipart.next_field().await? {
+        let orig = field
+            .file_name()
+            .map(|s| s.to_string())
+            .or_else(|| hint.map(|s| s.to_string()))
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "pack.bin".into());
+        let safe = orig
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or("pack.bin")
+            .chars()
+            .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+            .collect::<String>();
+        if !crate::sevenz::is_supported_name(&safe) {
+            anyhow::bail!("不支持的压缩格式：{safe}（支持 7z / zip / tar.gz / tar.xz）");
+        }
+        let dest = staging.join(&safe);
+        let mut file = tokio::fs::File::create(&dest).await?;
+        let mut written: u64 = 0;
+        while let Some(chunk) = field.chunk().await? {
+            written += chunk.len() as u64;
+            if written > instance::MAX_ARCHIVE_BYTES {
+                anyhow::bail!("压缩包超过 2GiB 上限");
+            }
+            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await?;
+        }
+        drop(file);
+        if written == 0 {
+            anyhow::bail!("上传文件为空");
+        }
+        saved = Some(SavedArchive {
+            path: dest,
+            filename: safe,
+        });
+    }
+    saved.ok_or_else(|| anyhow::anyhow!("missing file field"))
+}
+
+#[derive(Deserialize)]
 pub struct StartupJarBody {
     pub path: String,
 }
@@ -1181,6 +1300,20 @@ pub async fn docker_images() -> Result<impl IntoResponse, (StatusCode, Json<Erro
     instance::docker_list_images()
         .await
         .map(Json)
+        .map_err(|e| bad_request(e.to_string()))
+}
+
+#[derive(serde::Deserialize)]
+pub struct PullImageBody {
+    pub image: String,
+}
+
+pub async fn docker_pull(
+    Json(body): Json<PullImageBody>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    instance::docker_pull_image(&body.image)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
         .map_err(|e| bad_request(e.to_string()))
 }
 

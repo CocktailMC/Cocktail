@@ -1,8 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use axum::Router;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
@@ -40,9 +41,12 @@ pub struct AppState {
     pub node_live: RwLock<HashMap<String, NodeLive>>,
     pub plugin_host: String,
     pub plugin_token: String,
-    /// Std mutex: WASM calls run on `spawn_blocking` and host functions
-    /// `block_on` HTTP back into this process. A tokio mutex would nest runtimes.
+    /// Std mutex: WASM calls run on `spawn_blocking`; host functions must not
+    /// `block_on` the same runtime (nested runtime / worker deadlock).
     pub plugins: std::sync::Mutex<crate::plugin_bridge::PluginRegistry>,
+    /// In-process clone of the API router so plugins never HTTP-loopback
+    /// through the system proxy.
+    pub plane: OnceLock<Router>,
     pub env_api_token: Option<String>,
     pub env_webhook_url: Option<String>,
     pub bind: String,
@@ -96,6 +100,7 @@ impl AppState {
             plugin_host,
             plugin_token,
             plugins,
+            plane: OnceLock::new(),
             env_api_token,
             env_webhook_url,
             bind,

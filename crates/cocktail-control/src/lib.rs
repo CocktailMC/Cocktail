@@ -16,6 +16,7 @@ mod platform;
 mod plugin_bridge;
 mod proto;
 mod qqbot;
+mod sevenz;
 mod state;
 mod stdin_bridge;
 mod util;
@@ -43,7 +44,55 @@ use tracing_subscriber::EnvFilter;
 
 use crate::state::{AppState, SharedState};
 
-const MAX_BODY_BYTES: usize = 512 * 1024 * 1024;
+const MAX_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// CLI 子命令:重置 super-admin 密码
+///
+/// 用法:`cocktail-control reset-password`
+///
+/// 适用于忘记密码、无法登录控制面的恢复场景。
+/// 直接读写 SQLite,不需要控制面进程运行,不需要当前密码。
+/// 注意:密码在终端会明文回显(单机本地场景风险可控)。
+pub fn run_reset_password() -> anyhow::Result<()> {
+    use std::io::{self, Write};
+
+    let conn = db::open()?;
+    let admin = db::superadmin(&conn)?
+        .ok_or_else(|| anyhow::anyhow!("尚未初始化,请先启动控制面完成 setup"))?;
+
+    println!("正在重置 super-admin [{}] 的密码", admin.username);
+    println!("提示:密码在终端会明文显示,请确保周围无人窥屏。");
+
+    let password = read_password_line("新密码(至少 8 位):")?;
+    auth::validate_password(&password).map_err(|e| anyhow::anyhow!("密码不符合要求: {e}"))?;
+
+    let confirm = read_password_line("再次输入新密码:")?;
+    if password != confirm {
+        anyhow::bail!("两次输入不一致,已取消");
+    }
+
+    let hash = auth::hash_password(&password)?;
+    db::update_admin(&conn, admin.id, None, Some(&hash))?;
+
+    util::audit(
+        "auth.reset_password",
+        None,
+        json!({ "username": admin.username }),
+        "cli",
+    );
+
+    println!("\n✓ 用户 [{}] 的密码已重置,可使用新密码登录控制面", admin.username);
+    Ok(())
+}
+
+fn read_password_line(prompt: &str) -> anyhow::Result<String> {
+    use std::io::{self, Write};
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut buf = String::new();
+    io::stdin().read_line(&mut buf)?;
+    Ok(buf.trim().to_string())
+}
 
 pub async fn run_plane() -> anyhow::Result<()> {
     crate::wincompat::enable_utf8_console();
@@ -54,13 +103,24 @@ pub async fn run_plane() -> anyhow::Result<()> {
         .init();
 
     let state = Arc::new(AppState::new());
+
+    // Detect and initialise the container runtime (Docker or Podman).
+    match instance::runtime::ContainerRuntime::detect().await {
+        Ok(rt) => {
+            let engine = rt.engine.as_str();
+            tracing::info!(engine, "container runtime initialised");
+            instance::runtime::set_runtime(rt);
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "no container runtime detected; docker/podman instances unavailable");
+        }
+    }
+
     state.spawn_event_applier();
     instance::reattach_running(&state).await;
     state.spawn_scheduler();
     state.spawn_reconciler();
     crate::ops::spawn(&state);
-    crate::plugin_bridge::spawn_event_forwarder(&state);
-    crate::plugin_bridge::maybe_autostart(&state);
 
     let api = api::router()
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -69,6 +129,10 @@ pub async fn run_plane() -> anyhow::Result<()> {
             auth_middleware,
         ))
         .with_state(Arc::clone(&state));
+    let _ = state.plane.set(api.clone());
+
+    crate::plugin_bridge::spawn_event_forwarder(&state);
+    crate::plugin_bridge::maybe_autostart(&state);
 
     let mut app = Router::new()
         .merge(api)

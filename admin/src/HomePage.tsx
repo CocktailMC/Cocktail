@@ -1,7 +1,5 @@
 import type { HealthInfo, Instance, InstanceStatus, PanelEvent } from './api'
 import { formatBps } from './api'
-import { BrandImg, BRAND } from './brandIcons'
-import EnvBrandBar from './EnvBrandBar'
 import EventFeed from './EventFeed'
 
 const STATUS_LABEL: Record<InstanceStatus, string> = {
@@ -60,181 +58,70 @@ export default function HomePage(props: Props) {
     onStop,
     onRestart,
     onBulk,
-    onOpenSettings,
   } = props
   const allSelected =
     instances.length > 0 && selectedIds.length === instances.length
+  const crashed = fleet?.crashed ?? 0
 
   return (
     <div className="home-page">
       <div className="page-head">
         <div>
-          <p className="page-eyebrow">Cocktail Manager</p>
-          <h2 className="page-title">主界面</h2>
-        </div>
-        <div className="btn-row">
-          <button type="button" className="btn btn-ghost" onClick={onOpenSettings}>
-            <i className="fa fa-cog" /> 服务器设置
-          </button>
-          <button type="button" className="btn btn-primary" onClick={onCreate}>
-            <i className="fa fa-plus" /> 创建实例
-          </button>
+          <p className="page-eyebrow">控制面</p>
+          <h2 className="page-title">机群总览</h2>
         </div>
       </div>
 
-      <div className="grid-2" style={{ marginBottom: '1rem' }}>
-        <div className="card-panel">
-          <h3 className="card-title">事件中心</h3>
-          <EventFeed
-            events={events}
-            names={new Map(instances.map((i) => [i.id, i.spec.name]))}
-            onOpenInstance={onOpenInstance}
-          />
-        </div>
-        <div className="card-panel">
-          <h3 className="card-title">健康一览</h3>
-          {instances.length === 0 ? (
-            <p className="empty">还没有实例</p>
-          ) : (
-            <ul className="event-feed">
-              {instances.slice(0, 8).map((inst) => (
-                <li key={inst.id} className="event-item">
-                  <div style={{ flex: 1 }}>
-                    <button
-                      type="button"
-                      className="link-btn"
-                      onClick={() => onOpenInstance(inst.id)}
-                    >
-                      <strong>{inst.spec.name}</strong>
-                    </button>
-                    <div className="health-bar" style={{ marginTop: 6 }}>
-                      <span
-                        style={{
-                          width: `${Math.max(0, Math.min(100, inst.health_score ?? 0))}%`,
-                        }}
-                      />
-                    </div>
-                    <p className="meta">
-                      {inst.health_score ?? '—'}% ·{' '}
-                      {(inst.health_reasons ?? []).slice(0, 2).join(' · ') ||
-                        STATUS_LABEL[inst.status]}
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
+      <p className="plane-facts">
+        {health === 'offline' ? '离线' : '在线'}
+        {env?.version ? ` · v${env.version}` : ''}
+        {env?.release ? ` · ${env.release}` : ''}
+        {' · '}
+        {authRequired ? '鉴权已启用' : '鉴权关闭'}
+        {' · '}
+        Docker {fleet?.docker.available ? '就绪' : '不可用'}
+        {env?.hostname ? ` · ${env.hostname}` : ''}
+        {' · '}
+        插件源 Modrinth · Hangar · Spiget
+      </p>
+      {!fleet?.docker.available && fleet?.docker.message ? (
+        <p className="meta">{fleet.docker.message}</p>
+      ) : null}
 
-      <EnvBrandBar env={env} offline={health === 'offline'} />
-
-      <div className="stat-grid home-stats">
-        <div className="card-panel stat-card">
-          <div>
-            <p className="label">实例总数</p>
-            <p className="value">{fleet?.total ?? instances.length}</p>
-          </div>
-          <i className="fa fa-server icon primary" />
-        </div>
-        <div className="card-panel stat-card">
-          <div>
-            <p className="label">运行中</p>
-            <p className="value success">{fleet?.running ?? 0}</p>
-          </div>
-          <i className="fa fa-play-circle icon success" />
-        </div>
-        <div className="card-panel stat-card">
-          <div>
-            <p className="label">已停止</p>
-            <p className="value">{fleet?.stopped ?? 0}</p>
-          </div>
-          <i className="fa fa-pause-circle icon warning" />
-        </div>
-        <div className="card-panel stat-card">
-          <div>
-            <p className="label">异常 / 过渡</p>
-            <p className="value">
-              {(fleet?.crashed ?? 0) + (fleet?.starting ?? 0)}
-            </p>
-          </div>
-          <i
-            className={`fa fa-exclamation-triangle icon${
-              (fleet?.crashed ?? 0) > 0 ? ' warning' : ' primary'
-            }`}
-          />
-        </div>
-      </div>
-
-      <div className="grid-2 home-meta-grid">
-        <div className="card-panel">
-          <h3 className="card-title">
-            <i className="fa fa-heartbeat" /> 控制面
-          </h3>
-          <table className="info-table">
-            <tbody>
-              <tr>
-                <td>状态</td>
-                <td>{health === 'offline' ? '离线' : '在线'}</td>
-              </tr>
-              <tr>
-                <td>版本信息</td>
-                <td>{health}</td>
-              </tr>
-              <tr>
-                <td>API 鉴权</td>
-                <td>{authRequired ? '已启用' : '未启用'}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div className="card-panel">
-          <h3 className="card-title">
-            <BrandImg src={BRAND.docker} alt="" height={16} /> Docker
-          </h3>
-          <table className="info-table">
-            <tbody>
-              <tr>
-                <td>可用性</td>
-                <td>
-                  {fleet?.docker.available ? (
-                    <span className="ok-text">就绪</span>
-                  ) : (
-                    <span className="bad-text">不可用</span>
-                  )}
-                </td>
-              </tr>
-              <tr>
-                <td>说明</td>
-                <td>{fleet?.docker.message || '—'}</td>
-              </tr>
-            </tbody>
-          </table>
-          <p className="meta" style={{ marginTop: '0.75rem' }}>
-            容器运行时实例依赖 Docker；进程模式无需 Docker。
+      <div className="sheet" style={{ marginBottom: '1.25rem' }}>
+        <div className="sheet-cell">
+          <p className="k">运行</p>
+          <p className={fleet?.running ? 'v live' : 'v'}>
+            {fleet?.running ?? 0}
           </p>
         </div>
-      </div>
-
-      <div className="card-panel home-sources mt-6">
-        <h3 className="card-title">插件源</h3>
-        <div className="home-source-row">
-          <span className="home-source-chip">
-            <BrandImg src={BRAND.modrinth} alt="" /> Modrinth
-          </span>
-          <span className="home-source-chip">
-            <i className="fa fa-paper-plane" /> Hangar
-          </span>
-          <span className="home-source-chip">
-            <BrandImg src={BRAND.spigotmc} alt="" /> Spiget / SpigotMC
-          </span>
+        <div className="sheet-cell">
+          <p className="k">停止</p>
+          <p className="v">{fleet?.stopped ?? 0}</p>
+        </div>
+        <div className="sheet-cell">
+          <p className="k">崩溃</p>
+          <p className={crashed > 0 ? 'v bad' : 'v'}>{crashed}</p>
+        </div>
+        <div className="sheet-cell">
+          <p className="k">总计</p>
+          <p className="v">{fleet?.total ?? instances.length}</p>
         </div>
       </div>
 
-      <div className="card-panel home-servers mt-6">
+      <div className="card-panel" style={{ marginBottom: '1.25rem' }}>
+        <h3 className="card-title">事件</h3>
+        <EventFeed
+          events={events}
+          names={new Map(instances.map((i) => [i.id, i.spec.name]))}
+          onOpenInstance={onOpenInstance}
+        />
+      </div>
+
+      <div className="card-panel">
         <div className="home-servers-head">
           <h3 className="card-title" style={{ margin: 0 }}>
-            <i className="fa fa-list" /> 服务器列表
+            杯子
           </h3>
           <div className="home-servers-tools">
             <label className="home-check">
@@ -282,27 +169,38 @@ export default function HomePage(props: Props) {
         </div>
 
         {instances.length === 0 ? (
-          <div className="store-empty" style={{ marginTop: '0.75rem' }}>
-            <i className="fa fa-server" />
-            <span>还没有服务器实例</span>
-            <button type="button" className="btn btn-primary" onClick={onCreate}>
-              <i className="fa fa-plus" /> 创建第一个实例
-            </button>
+          <div className="empty-cup" style={{ marginTop: '0.75rem' }}>
+            <h2>还没有杯子</h2>
+            <p>创建后会出现在左边那一轨。批量启停也在这一页。</p>
+            <div className="power-row" style={{ marginTop: 16, marginBottom: 0 }}>
+              <button type="button" className="power primary" onClick={onCreate}>
+                创建实例
+              </button>
+            </div>
           </div>
         ) : (
-          <ul className="server-cards">
-            {instances.map((inst) => {
-              const running = inst.status === 'running'
-              const mem = inst.last_metrics?.memory_mib
-              const players = inst.last_metrics?.players
-              const tps = inst.last_metrics?.tps
-              return (
-                <li key={inst.id} className="server-card">
-                  <div className="server-card-top">
-                    <label
-                      className="home-check"
-                      onClick={(e) => e.stopPropagation()}
-                    >
+          <table className="data-table" style={{ marginTop: '0.75rem' }}>
+            <thead>
+              <tr>
+                <th />
+                <th>名称</th>
+                <th>状态</th>
+                <th>TPS</th>
+                <th>玩家</th>
+                <th>内存</th>
+                <th>网络</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {instances.map((inst) => {
+                const running = inst.status === 'running'
+                const mem = inst.last_metrics?.memory_mib
+                const players = inst.last_metrics?.players
+                const tps = inst.last_metrics?.tps
+                return (
+                  <tr key={inst.id}>
+                    <td>
                       <input
                         type="checkbox"
                         checked={selectedIds.includes(inst.id)}
@@ -310,86 +208,79 @@ export default function HomePage(props: Props) {
                           onToggleSelect(inst.id, e.target.checked)
                         }
                       />
-                    </label>
-                    <button
-                      type="button"
-                      className="server-card-main"
-                      onClick={() => onOpenInstance(inst.id)}
-                    >
-                      <div className="server-card-title">
-                        <strong>{inst.spec.name}</strong>
-                        <span className={`badge status-${inst.status}`}>
-                          {STATUS_LABEL[inst.status]}
-                        </span>
-                      </div>
-                      <span className="server-card-meta">
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="link-btn"
+                        onClick={() => onOpenInstance(inst.id)}
+                      >
+                        {inst.spec.name}
+                      </button>
+                      <div className="meta">
                         {inst.spec.core}
-                        <span className="dot" />:{inst.spec.port}
-                        <span className="dot" />
-                        {inst.spec.runtime}
-                        <span className="dot" />
-                        {inst.spec.memory_mib} MiB
-                        <span className="dot" />
-                        {inst.node_id ?? inst.spec.node_id ?? 'local'}
-                      </span>
-                    </button>
-                  </div>
-                  <div className="server-card-stats">
-                    <span>
-                      <i className="fa fa-users" /> {players ?? '—'}
-                    </span>
-                    <span>
-                      <i className="fa fa-microchip" />{' '}
-                      {mem != null ? `${mem} MiB` : '—'}
-                    </span>
-                    <span>
-                      <i className="fa fa-tachometer" />{' '}
-                      {tps != null ? tps.toFixed(1) : '—'}
-                    </span>
-                    <span>
-                      <i className="fa fa-exchange" />{' '}
+                        {' · '}
+                        <span className="mono">:{inst.spec.port}</span>
+                        {' · '}
+                        {inst.spec.runtime === 'docker' ? 'docker' : 'process'}
+                        {inst.reattached && running ? ' · 已接管' : ''}
+                      </div>
+                    </td>
+                    <td className={inst.status === 'crashed' ? 'v bad' : undefined}>
+                      {STATUS_LABEL[inst.status]}
+                    </td>
+                    <td className="mono">
+                      {running && tps != null ? tps.toFixed(2) : '—'}
+                    </td>
+                    <td className="mono">{running ? (players ?? 0) : '—'}</td>
+                    <td className="mono">
+                      {running && mem != null
+                        ? `${mem}/${inst.spec.memory_mib}`
+                        : `—/${inst.spec.memory_mib}`}
+                    </td>
+                    <td className="mono">
                       {running
                         ? `${formatBps(inst.last_metrics?.net_rx_bps)} ↓`
                         : '—'}
-                    </span>
-                  </div>
-                  <div className="server-card-actions">
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      disabled={busy || running}
-                      onClick={() => onStart(inst.id)}
-                    >
-                      <i className="fa fa-play" /> 启动
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      disabled={busy || !running}
-                      onClick={() => onStop(inst.id)}
-                    >
-                      <i className="fa fa-stop" /> 停止
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      disabled={busy}
-                      onClick={() => onRestart(inst.id)}
-                    >
-                      <i className="fa fa-refresh" /> 重启
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={() => onOpenInstance(inst.id)}
-                    >
-                      进入 <i className="fa fa-arrow-right" />
-                    </button>
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
+                    </td>
+                    <td className="actions">
+                      <button
+                        type="button"
+                        className="link-btn"
+                        disabled={busy || running}
+                        onClick={() => onStart(inst.id)}
+                      >
+                        启动
+                      </button>
+                      <button
+                        type="button"
+                        className="link-btn"
+                        disabled={busy || !running}
+                        onClick={() => onStop(inst.id)}
+                      >
+                        停止
+                      </button>
+                      <button
+                        type="button"
+                        className="link-btn"
+                        disabled={busy}
+                        onClick={() => onRestart(inst.id)}
+                      >
+                        重启
+                      </button>
+                      <button
+                        type="button"
+                        className="link-btn"
+                        onClick={() => onOpenInstance(inst.id)}
+                      >
+                        进入
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         )}
       </div>
     </div>

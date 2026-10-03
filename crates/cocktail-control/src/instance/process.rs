@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,6 +22,7 @@ pub enum StopMode {
 #[derive(Debug, Default, Clone)]
 struct LiveStats {
     game: ParsedGameStats,
+    ready: bool,
 }
 
 #[derive(Debug)]
@@ -38,15 +40,9 @@ impl ProcessHandle {
         let _ = tokio::time::timeout(Duration::from_secs(5), self.stop_tx.send(mode)).await;
         if let Some(name) = self.container_name {
             // Ensure container is removed even if docker run hung.
-            let _ = tokio::time::timeout(Duration::from_secs(20), async {
-                docker_cli()
-                    .args(["rm", "-f", &name])
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .await
-            })
-            .await;
+            if let Some(rt) = super::runtime::runtime() {
+                rt.remove(&name).await;
+            }
         }
     }
 
@@ -119,7 +115,10 @@ async fn attach_child(
     let (stop_tx, stop_rx) = mpsc::channel::<StopMode>(1);
     let (stop_metrics_tx, stop_metrics_rx) = mpsc::channel::<()>(1);
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<String>(64);
-    let live = Arc::new(Mutex::new(LiveStats::default()));
+    let live = Arc::new(Mutex::new(LiveStats {
+        ready: reattached,
+        ..Default::default()
+    }));
     let (stop_logs_tx, stop_logs_rx) = mpsc::channel::<()>(1);
 
     if let Some(stdout) = stdout {
@@ -366,18 +365,38 @@ async fn spawn_demo(
     })
 }
 
+fn wrap_script_command(bin: &str, args: &[String]) -> (String, Vec<String>) {
+    let lower = Path::new(bin)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(bin)
+        .to_ascii_lowercase();
+    if lower.ends_with(".bat") || lower.ends_with(".cmd") {
+        let mut all = vec!["/C".into(), bin.to_string()];
+        all.extend(args.iter().cloned());
+        return ("cmd.exe".into(), all);
+    }
+    if lower.ends_with(".sh") || lower.ends_with(".command") {
+        let mut all = vec![bin.to_string()];
+        all.extend(args.iter().cloned());
+        return ("sh".into(), all);
+    }
+    (bin.to_string(), args.to_vec())
+}
+
 fn build_command(bin: &str, args: &[String], workdir: &str, instance_id: &str) -> anyhow::Result<Child> {
     use std::process::Stdio;
 
     let log = open_console_log(instance_id)?;
     let err = log.try_clone()?;
-    let mut cmd = Command::new(bin);
-    cmd.args(args)
+    let (bin, args) = wrap_script_command(bin, args);
+    let mut cmd = Command::new(&bin);
+    cmd.args(&args)
         .current_dir(workdir)
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(err))
         .kill_on_drop(false);
-    crate::java::apply_java_home(&mut cmd, bin);
+    crate::java::apply_isolated_env(&mut cmd, &bin, workdir);
     crate::wincompat::hide_console(&mut cmd);
 
     #[cfg(unix)]
@@ -414,6 +433,9 @@ async fn pipe_lines<R>(
         {
             let mut g = live.lock().await;
             util::merge_game_stats(&mut g.game, &parsed);
+            if util::minecraft_ready(&line) {
+                g.ready = true;
+            }
         }
         let _ = events.send(InstanceEvent::Log {
             instance_id: instance_id.clone(),
@@ -535,7 +557,10 @@ pub async fn adopt_running(
     let (stop_tx, mut stop_rx) = mpsc::channel::<StopMode>(1);
     let (stop_metrics_tx, stop_metrics_rx) = mpsc::channel::<()>(1);
     let (cmd_tx, mut cmd_rx) = mpsc::channel::<String>(64);
-    let live = Arc::new(Mutex::new(LiveStats::default()));
+    let live = Arc::new(Mutex::new(LiveStats {
+        ready: reattached,
+        ..Default::default()
+    }));
     let (stop_logs_tx, stop_logs_rx) = mpsc::channel::<()>(1);
 
     let fifo_file = open_cmd_fifo(&workdir).ok().map(|f| Arc::new(Mutex::new(f)));
@@ -807,7 +832,9 @@ async fn request_graceful_stop(
     container_name: Option<&str>,
 ) {
     if let Some(name) = container_name {
-        let _ = docker_write_stdin(name, "stop").await;
+        if let Some(rt) = super::runtime::runtime() {
+            let _ = rt.write_stdin_exec(name, "stop").await;
+        }
         return;
     }
     if let Some(fifo) = fifo {
@@ -825,12 +852,9 @@ async fn request_graceful_stop(
 
 async fn force_kill(pid: u32, container_name: Option<&str>) {
     if let Some(name) = container_name {
-        let _ = docker_cli()
-            .args(["stop", "-t", "2", name])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await;
+        if let Some(rt) = super::runtime::runtime() {
+            let _ = rt.stop(name, 2).await;
+        }
         return;
     }
     if pid == 0 {
@@ -851,61 +875,21 @@ async fn force_kill(pid: u32, container_name: Option<&str>) {
     }
 }
 
-fn docker_cli() -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new("docker");
-    crate::wincompat::hide_console(&mut cmd);
-    cmd
-}
-
 pub(crate) async fn docker_container_running(name: &str) -> bool {
-    let Ok(out) = docker_cli()
-        .args(["inspect", "-f", "{{.State.Running}}", name])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .await
-    else {
-        return false;
-    };
-    out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true"
+    match super::runtime::runtime() {
+        Some(rt) => rt.running(name).await,
+        None => false,
+    }
 }
 
 pub async fn docker_container_pid(name: &str) -> Option<u32> {
-    let out = docker_cli()
-        .args(["inspect", "-f", "{{.State.Running}} {{.State.Pid}}", name])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .await
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut parts = text.split_whitespace();
-    let running = parts.next()? == "true";
-    let pid: u32 = parts.next()?.parse().ok()?;
-    if running && pid > 0 {
-        Some(pid)
-    } else {
-        None
-    }
+    let rt = super::runtime::runtime()?;
+    rt.pid_of(name).await
 }
 
 async fn docker_write_stdin(name: &str, command: &str) -> anyhow::Result<()> {
-    use std::process::Stdio;
-    let mut child = docker_cli()
-        .args(["exec", "-i", name, "sh", "-c", "cat > /proc/1/fd/0"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(format!("{command}\n").as_bytes()).await?;
-        stdin.flush().await?;
-    }
-    let _ = child.wait().await;
-    Ok(())
+    let rt = super::runtime::require_runtime().await?;
+    rt.write_stdin_exec(name, command).await
 }
 
 async fn follow_docker_logs(
@@ -915,37 +899,50 @@ async fn follow_docker_logs(
     live: Arc<Mutex<LiveStats>>,
     mut stop_rx: mpsc::Receiver<()>,
 ) {
-    use std::process::Stdio;
-    let Ok(mut child) = docker_cli()
-        .args(["logs", "-f", "--tail", "20", &name])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    else {
+    use futures_util::StreamExt;
+    let Some(rt) = super::runtime::runtime() else {
         return;
     };
-    if let Some(stdout) = child.stdout.take() {
-        tokio::spawn(pipe_lines(
-            stdout,
-            "stdout".into(),
-            instance_id.clone(),
-            events.clone(),
-            Arc::clone(&live),
-        ));
+    let mut stream = rt.logs_stream(&name, 20);
+    loop {
+        tokio::select! {
+            _ = stop_rx.recv() => break,
+            frame = stream.next() => {
+                let Some(frame) = frame else { break };
+                let line = match frame {
+                    Ok(l) => l,
+                    Err(e) => {
+                        warn!(error = %e, "container log stream error");
+                        break;
+                    }
+                };
+                // bollard logs may carry multiple lines per frame.
+                let text = String::from_utf8_lossy(&line);
+                for part in text.split_inclusive('\n') {
+                    let trimmed = part.trim_end_matches(['\n', '\r']);
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let parsed = crate::util::parse_game_stats(trimmed);
+                    {
+                        let mut g = live.lock().await;
+                        crate::util::merge_game_stats(&mut g.game, &parsed);
+                        if crate::util::minecraft_ready(trimmed) {
+                            g.ready = true;
+                        }
+                    }
+                    let _ = events.send(InstanceEvent::Log {
+                        instance_id: instance_id.clone(),
+                        line: LogLine {
+                            ts: Utc::now(),
+                            stream: "stdout".into(),
+                            line: trimmed.to_string(),
+                        },
+                    });
+                }
+            }
+        }
     }
-    if let Some(stderr) = child.stderr.take() {
-        tokio::spawn(pipe_lines(
-            stderr,
-            "stderr".into(),
-            instance_id,
-            events,
-            live,
-        ));
-    }
-    let _ = stop_rx.recv().await;
-    let _ = child.start_kill();
-    let _ = child.wait().await;
 }
 
 async fn follow_file(
@@ -1002,6 +999,9 @@ async fn follow_file(
                     {
                         let mut g = live.lock().await;
                         util::merge_game_stats(&mut g.game, &parsed);
+                        if util::minecraft_ready(&line) {
+                            g.ready = true;
+                        }
                     }
                     let _ = events.send(InstanceEvent::Log {
                         instance_id: instance_id.clone(),
@@ -1041,8 +1041,11 @@ async fn metric_ticker(
             _ = interval.tick() => {
                 probe_n = probe_n.wrapping_add(1);
                 if probe_n % 10 == 2 {
-                    if let Some(tx) = &cmd_tx {
-                        let _ = tx.try_send("tps".into());
+                    let ready = live.lock().await.ready;
+                    if ready {
+                        if let Some(tx) = &cmd_tx {
+                            let _ = tx.try_send("tps".into());
+                        }
                     }
                 }
                 let (cpu_pct, memory_mib) = if child_id == 0 {

@@ -24,6 +24,9 @@ import {
 } from './eulaText'
 
 const STEPS = ['基本信息', '运行时与资源', '核心与启动', 'EULA', '确认创建'] as const
+const ARCHIVE_ACCEPT = '.7z,.zip,.tar,.tar.gz,.tgz,.gz,.xz,.bz2,.jar'
+
+type CustomSource = 'archive' | 'jar' | 'command'
 
 type Props = {
   usedPorts: number[]
@@ -61,11 +64,13 @@ export default function CreateInstancePage({
     return p
   })
   const [autoRestart, setAutoRestart] = useState(false)
-  const [command, setCommand] = useState('java')
-  const [args, setArgs] = useState('-jar server.jar nogui')
+  const [command, setCommand] = useState('')
+  const [args, setArgs] = useState('')
   const [eulaRead, setEulaRead] = useState(false)
   const [eulaAccepted, setEulaAccepted] = useState(false)
   const [jarFile, setJarFile] = useState<File | null>(null)
+  const [archiveFile, setArchiveFile] = useState<File | null>(null)
+  const [customSource, setCustomSource] = useState<CustomSource>('archive')
   const [nodes, setNodes] = useState<NodeInfo[]>([])
   const [nodeId, setNodeId] = useState('local')
   const [gameVersions, setGameVersions] = useState<CoreVersion[]>([])
@@ -158,8 +163,19 @@ export default function CreateInstancePage({
 
   const previewCmd = useMemo(() => {
     if (core === 'demo') return '内置 demo（无需 jar）'
+    if (core === 'custom' && customSource === 'jar' && jarFile) {
+      return 'java -jar server.jar nogui'
+    }
+    if (core === 'custom' && customSource === 'archive') {
+      if (command.trim()) {
+        return `${command.trim()} ${args.trim()}`.trim()
+      }
+      return archiveFile
+        ? `解压 ${archiveFile.name} 后自动检测`
+        : '解压后自动检测启动命令'
+    }
     return `${command.trim() || 'java'} ${args.trim()}`
-  }, [core, command, args])
+  }, [core, command, args, customSource, jarFile, archiveFile])
 
   const canNext = () => {
     if (step === 0) return name.trim().length > 0
@@ -185,14 +201,18 @@ export default function CreateInstancePage({
       return
     }
     const autoInstall =
-      isInstallableCore(core) && Boolean(gameVersion) && !jarFile
+      isInstallableCore(core) && Boolean(gameVersion) && !jarFile && !archiveFile
+    const importArchive = core === 'custom' && customSource === 'archive' && Boolean(archiveFile)
+    const importJar = core === 'custom' && customSource === 'jar' && Boolean(jarFile)
     onBusy(
       true,
-      jarFile
-        ? '创建实例并导入 jar…'
-        : autoInstall
-          ? `创建实例并安装 ${core} ${gameVersion}${loader ? ` / ${loader}` : ''}…`
-          : '创建实例…',
+      importArchive
+        ? `创建实例并解压 ${archiveFile!.name}…`
+        : importJar
+          ? '创建实例并导入 jar…'
+          : autoInstall
+            ? `创建实例并安装 ${core} ${gameVersion}${loader ? ` / ${loader}` : ''}…`
+            : '创建实例…',
     )
     onError(null)
     try {
@@ -214,12 +234,23 @@ export default function CreateInstancePage({
         cpu_limit: runtime === 'docker' ? cpu : undefined,
         java_major: javaMajor >= 8 ? javaMajor : undefined,
       }
-      if (core === 'custom' && !jarFile) {
+      const customCommand =
+        core === 'custom' &&
+        !importJar &&
+        (customSource === 'command' || (customSource === 'archive' && command.trim()))
+      if (customCommand) {
         body.command = command.trim() || 'java'
         body.args = args.trim().split(/\s+/).filter(Boolean)
       }
       const created = await api.createInstance(body)
-      if (jarFile) {
+      if (importArchive && archiveFile) {
+        await api.importArchive(created.id, archiveFile, {
+          core: 'custom',
+          accept_eula: eulaAccepted || !needsEula,
+          command: command.trim() || undefined,
+          args: command.trim() && args.trim() ? args.trim() : undefined,
+        })
+      } else if (importJar && jarFile) {
         await api.installJar(created.id, jarFile, {
           path: 'server.jar',
           core: 'custom',
@@ -231,7 +262,9 @@ export default function CreateInstancePage({
       const fresh = (await api.listInstances()).find((i) => i.id === created.id)
       onCreated(
         fresh ?? created,
-        core === 'demo' || jarFile || autoInstall ? 'dashboard' : 'version',
+        core === 'demo' || importJar || importArchive || autoInstall
+          ? 'dashboard'
+          : 'version',
       )
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err))
@@ -330,7 +363,7 @@ export default function CreateInstancePage({
                   checked={runtime === 'process'}
                   onChange={() => setRuntime('process')}
                 />
-                Java 进程（本机 java）
+                Java 进程（实例 JRE）
               </label>
               <label className="check">
                 <input
@@ -374,8 +407,9 @@ export default function CreateInstancePage({
               </select>
             </label>
             <p className="meta">
-              本机进程：若 PATH 里没有合适的 Java，会从 Adoptium 自动下载 Temurin
-              JRE。Docker：默认使用 eclipse-temurin 镜像。
+              本机进程：每个杯子独占文件根，并从模板复制一份 Temurin 到{' '}
+              <code>runtime/jre</code>
+              ，不用系统 Java。Docker：默认 eclipse-temurin 镜像，工作目录挂到 /data。
             </p>
             {runtime === 'docker' && (
               <>
@@ -462,7 +496,7 @@ export default function CreateInstancePage({
                 value={core}
                 onChange={(e) => setCore(e.target.value)}
               >
-                <option value="custom">自定义 jar（推荐）</option>
+                <option value="custom">自定义导入（压缩包 / jar / 命令）</option>
                 {INSTALLABLE_CORE_GROUPS.map((g) => (
                   <optgroup key={g.label} label={g.label}>
                     {g.items.map((item) => (
@@ -477,24 +511,95 @@ export default function CreateInstancePage({
             </label>
             {core === 'custom' && (
               <>
-                <label>
-                  导入 server.jar（可选，也可创建后再导入）
-                  <input
-                    type="file"
-                    accept=".jar"
-                    onChange={(e) => setJarFile(e.target.files?.[0] ?? null)}
-                  />
-                </label>
-                {jarFile && (
-                  <p className="meta ok">已选择：{jarFile.name}</p>
+                <fieldset className="settings" style={{ border: 0, padding: 0, margin: 0 }}>
+                  <legend className="label">导入方式</legend>
+                  <label className="check">
+                    <input
+                      type="radio"
+                      name="custom-source"
+                      checked={customSource === 'archive'}
+                      onChange={() => {
+                        setCustomSource('archive')
+                        setJarFile(null)
+                      }}
+                    />
+                    导入压缩包（7z / zip / tar.gz）
+                  </label>
+                  <label className="check">
+                    <input
+                      type="radio"
+                      name="custom-source"
+                      checked={customSource === 'jar'}
+                      onChange={() => {
+                        setCustomSource('jar')
+                        setArchiveFile(null)
+                      }}
+                    />
+                    导入 server.jar
+                  </label>
+                  <label className="check">
+                    <input
+                      type="radio"
+                      name="custom-source"
+                      checked={customSource === 'command'}
+                      onChange={() => {
+                        setCustomSource('command')
+                        setJarFile(null)
+                        setArchiveFile(null)
+                        if (!command.trim()) setCommand('java')
+                        if (!args.trim()) setArgs('-jar server.jar nogui')
+                      }}
+                    />
+                    仅自定义启动命令
+                  </label>
+                </fieldset>
+                {customSource === 'archive' && (
+                  <>
+                    <label>
+                      服务器压缩包（可选，也可创建后再导入）
+                      <input
+                        type="file"
+                        accept={ARCHIVE_ACCEPT}
+                        onChange={(e) =>
+                          setArchiveFile(e.target.files?.[0] ?? null)
+                        }
+                      />
+                    </label>
+                    {archiveFile && (
+                      <p className="meta ok">已选择：{archiveFile.name}</p>
+                    )}
+                    <p className="meta">
+                      内置 7-Zip 解压到实例目录；若压缩包只有一层目录会自动铺平。解压后识别
+                      server.jar、Forge/NeoForge 参数或 run.bat / start.sh。
+                    </p>
+                  </>
+                )}
+                {customSource === 'jar' && (
+                  <>
+                    <label>
+                      导入 server.jar（可选，也可创建后再导入）
+                      <input
+                        type="file"
+                        accept=".jar"
+                        onChange={(e) => setJarFile(e.target.files?.[0] ?? null)}
+                      />
+                    </label>
+                    {jarFile && (
+                      <p className="meta ok">已选择：{jarFile.name}</p>
+                    )}
+                  </>
                 )}
                 <label>
                   启动命令
                   <input
                     value={command}
                     onChange={(e) => setCommand(e.target.value)}
-                    placeholder="java"
-                    disabled={!!jarFile}
+                    placeholder={
+                      customSource === 'archive'
+                        ? '留空则解压后自动检测，例如 java 或 cmd.exe'
+                        : 'java'
+                    }
+                    disabled={customSource === 'jar'}
                   />
                 </label>
                 <label>
@@ -502,12 +607,16 @@ export default function CreateInstancePage({
                   <input
                     value={args}
                     onChange={(e) => setArgs(e.target.value)}
-                    placeholder="-jar server.jar nogui"
-                    disabled={!!jarFile}
+                    placeholder={
+                      customSource === 'archive'
+                        ? '留空则自动检测，例如 -jar server.jar nogui'
+                        : '-jar server.jar nogui'
+                    }
+                    disabled={customSource === 'jar'}
                   />
                 </label>
                 <p className="meta">
-                  {jarFile
+                  {customSource === 'jar' && jarFile
                     ? '导入 jar 后将自动配置为 java -jar server.jar nogui'
                     : `当前预览：${previewCmd}`}
                 </p>
@@ -560,7 +669,7 @@ export default function CreateInstancePage({
                       core === 'quilt'
                       ? '创建后会自动下载安装器；若本机没有合适的 Java，会从 Adoptium 补全 Temurin 再安装。'
                       : '创建后会自动下载服务器包并配置启动命令。'
-                    : '未选版本则创建空实例，之后可在「版本 / jar」页安装。'}
+                    : '未选版本则创建空实例，之后可在「版本 / 导入」页安装。'}
                 </p>
               </>
             )}
@@ -653,19 +762,25 @@ export default function CreateInstancePage({
                   <td>核心</td>
                   <td>
                     {core}
-                    {jarFile
-                      ? ` · 将导入 ${jarFile.name}`
-                      : isInstallableCore(core) && gameVersion
-                        ? ` · ${gameVersion}${loader ? ` / ${loader}` : ''}`
-                        : isInstallableCore(core)
-                          ? ' · 稍后安装'
-                          : ''}
+                    {archiveFile
+                      ? ` · 将解压 ${archiveFile.name}`
+                      : jarFile
+                        ? ` · 将导入 ${jarFile.name}`
+                        : isInstallableCore(core) && gameVersion
+                          ? ` · ${gameVersion}${loader ? ` / ${loader}` : ''}`
+                          : isInstallableCore(core)
+                            ? ' · 稍后安装'
+                            : ''}
                   </td>
                 </tr>
                 <tr>
                   <td>启动</td>
                   <td>
-                    <code>{jarFile ? 'java -jar server.jar nogui' : previewCmd}</code>
+                    <code>
+                      {jarFile && customSource === 'jar'
+                        ? 'java -jar server.jar nogui'
+                        : previewCmd}
+                    </code>
                   </td>
                 </tr>
                 <tr>
@@ -675,6 +790,15 @@ export default function CreateInstancePage({
                 <tr>
                   <td>自动重启</td>
                   <td>{autoRestart ? '是' : '否'}</td>
+                </tr>
+                <tr>
+                  <td>隔离</td>
+                  <td>
+                    独占文件根 <code>data/instances/&lt;id&gt;</code>
+                    {runtime === 'process'
+                      ? ' · 独立 JRE runtime/jre（不用系统 Java）'
+                      : ' · Docker 镜像内 JRE，工作目录挂到 /data'}
+                  </td>
                 </tr>
               </tbody>
             </table>

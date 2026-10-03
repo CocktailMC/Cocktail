@@ -179,10 +179,64 @@ pub fn jar_exists(workdir: &str, relative: &str) -> bool {
         .unwrap_or(false)
 }
 
+pub fn default_instance_root(id: &str) -> String {
+    PathBuf::from("data")
+        .join("instances")
+        .join(id)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn comparable_workdir(s: &str) -> PathBuf {
+    let p = Path::new(s.trim());
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(p)
+    };
+    lexical_normalize(&abs)
+}
+
+fn lexical_normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    #[cfg(windows)]
+    {
+        PathBuf::from(out.to_string_lossy().to_ascii_lowercase())
+    }
+    #[cfg(not(windows))]
+    {
+        out
+    }
+}
+
+/// True when two workdirs are the same tree or one nests inside the other.
+pub fn workdirs_conflict(a: &str, b: &str) -> bool {
+    let a = comparable_workdir(a);
+    let b = comparable_workdir(b);
+    a == b || a.starts_with(&b) || b.starts_with(&a)
+}
+
 pub fn ensure_seed_files(workdir: &str, port: u16, eula_accepted: bool) -> anyhow::Result<()> {
     fs::create_dir_all(workdir)?;
     fs::create_dir_all(Path::new(workdir).join("plugins"))?;
     fs::create_dir_all(Path::new(workdir).join("mods"))?;
+    fs::create_dir_all(Path::new(workdir).join("cache"))?;
+    fs::create_dir_all(Path::new(workdir).join("libraries"))?;
+    fs::create_dir_all(Path::new(workdir).join("logs"))?;
+    fs::create_dir_all(Path::new(workdir).join("runtime"))?;
+    fs::create_dir_all(Path::new(workdir).join(".cocktail").join("tmp"))?;
+    fs::create_dir_all(Path::new(workdir).join(".cocktail").join("appdata"))?;
     let props = PathBuf::from(workdir).join("server.properties");
     if !props.exists() {
         fs::write(
@@ -353,6 +407,9 @@ fn add_dir_to_zip(
             .strip_prefix(root)?
             .to_string_lossy()
             .replace('\\', "/");
+        if skip_backup_rel(&name) {
+            continue;
+        }
         if path.is_dir() {
             if !name.is_empty() {
                 zip.add_directory(format!("{name}/"), opts)?;
@@ -438,4 +495,44 @@ fn rel_path(workdir: &str, path: &Path) -> anyhow::Result<String> {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/"))
+}
+
+fn skip_backup_rel(name: &str) -> bool {
+    let n = name.trim_end_matches('/');
+    matches!(n, "runtime" | ".cocktail/tmp" | ".cocktail/appdata")
+        || n.starts_with("runtime/")
+        || n.starts_with(".cocktail/tmp/")
+        || n.starts_with(".cocktail/appdata/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_root_is_per_id() {
+        assert_eq!(
+            default_instance_root("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            "data/instances/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        );
+    }
+
+    #[test]
+    fn workdir_overlap_is_component_aware() {
+        assert!(workdirs_conflict("data/instances/a", "data/instances/a"));
+        assert!(workdirs_conflict(
+            "data/instances/a",
+            "data/instances/a/world"
+        ));
+        assert!(!workdirs_conflict("data/instances/a", "data/instances/ab"));
+    }
+
+    #[test]
+    fn backup_skips_jre_and_tmp() {
+        assert!(skip_backup_rel("runtime"));
+        assert!(skip_backup_rel("runtime/jre/bin/java.exe"));
+        assert!(skip_backup_rel(".cocktail/tmp/x"));
+        assert!(!skip_backup_rel("world/level.dat"));
+        assert!(!skip_backup_rel("plugins/foo.jar"));
+    }
 }

@@ -423,6 +423,11 @@ export default function HomeSettings({
               账号与面板配置保存在 SQLite；实例列表仍在 <code>data/state.json</code>。
             </li>
             <li>
+              Java 面板里的 Temurin 是模板缓存。每个杯子启动时复制到自己的{' '}
+              <code>runtime/jre</code>，文件根是 <code>data/instances/&lt;id&gt;</code>
+              ，互不共用。
+            </li>
+            <li>
               QQ 机器人按开放平台 API v2 主动发消息；群/单聊 openid 与 AppID 绑定，不能混用别的机器人的
               id。
             </li>

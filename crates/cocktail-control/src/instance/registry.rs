@@ -50,20 +50,20 @@ pub async fn create_instance(
     }
     ensure_port_free(state, req.port, &node_id, None).await?;
 
-    let workdir = req.workdir.unwrap_or_else(|| {
-        PathBuf::from("data")
-            .join("instances")
-            .join(sanitize(&req.name))
-            .to_string_lossy()
-            .into_owned()
-    });
+    let id = Uuid::new_v4().to_string();
+    let workdir = req
+        .workdir
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| files::default_instance_root(&id));
+    ensure_exclusive_workdir(state, &workdir, None).await?;
 
     if is_local_node(&node_id) {
         files::ensure_seed_files(&workdir, req.port, req.eula_accepted)?;
     }
 
     let docker_image = match req.runtime {
-        RuntimeKind::Docker => Some(
+        RuntimeKind::Docker | RuntimeKind::Podman => Some(
             req.docker_image
                 .unwrap_or_else(|| "eclipse-temurin:21-jre".into()),
         ),
@@ -94,9 +94,8 @@ pub async fn create_instance(
         mc_version: None,
     };
 
-    let instance = Instance::new(spec);
+    let instance = Instance::with_id(id.clone(), spec);
     let view = instance.public_view();
-    let id = instance.id.clone();
 
     state.instances.write().await.insert(id.clone(), instance);
     state.publish(InstanceEvent::StatusChanged {
@@ -342,20 +341,20 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
             if instance.spec.core == "demo" {
                 instance.spec.core = "custom".into();
             }
-        } else if runtime == RuntimeKind::Docker
+        } else if matches!(runtime, RuntimeKind::Docker | RuntimeKind::Podman)
             || (instance.spec.core != "demo"
                 && super::versions::is_known_core(&instance.spec.core))
             || instance.spec.core == "custom"
             || instance.spec.core == "spigot"
         {
             anyhow::bail!(
-                "未配置启动命令且找不到 server.jar：请先在「版本安装」导入 jar 或下载核心"
+                "未配置启动命令且找不到 server.jar：请先在「版本 / jar」导入压缩包、jar 或下载核心"
             );
         }
     }
 
     let seed_port = match runtime {
-        RuntimeKind::Docker => 25565,
+        RuntimeKind::Docker | RuntimeKind::Podman => 25565,
         RuntimeKind::Process => port,
     };
     files::ensure_seed_files(&workdir, seed_port, eula)?;
@@ -367,7 +366,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
     });
     drop(guard);
 
-    let docker_image = if runtime == RuntimeKind::Docker
+    let docker_image = if matches!(runtime, RuntimeKind::Docker | RuntimeKind::Podman)
         && (docker_image.is_empty() || docker_image.starts_with("eclipse-temurin:"))
     {
         crate::java::docker_image_for(
@@ -381,7 +380,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
             .as_deref()
             .is_some_and(util::is_java_command)
     {
-        match crate::java::ensure_for_spec(java_major, mc_version.as_deref()).await {
+        match crate::java::ensure_for_spec(&workdir, java_major, mc_version.as_deref()).await {
             Ok(bin) => crate::java::rewrite_java_command(command, &bin),
             Err(e) => {
                 let mut g = state.instances.write().await;
@@ -405,7 +404,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
         .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
 
     let handle = match runtime {
-        RuntimeKind::Docker => {
+        RuntimeKind::Docker | RuntimeKind::Podman => {
             super::container::spawn_docker_instance(
                 instance_id.clone(),
                 workdir,
@@ -478,7 +477,7 @@ pub async fn reattach_running(state: &std::sync::Arc<AppState>) {
 
     for (id, runtime, workdir, last_pid, start, container, port) in snapshot {
         let adopted = match runtime {
-            RuntimeKind::Docker => {
+            RuntimeKind::Docker | RuntimeKind::Podman => {
                 if let Some(name) = container.clone() {
                     if let Some(pid) = process::docker_container_pid(&name).await {
                         match process::adopt_running(
@@ -1566,7 +1565,13 @@ pub async fn probe_players(state: &AppState, id: &str) -> anyhow::Result<Vec<Pla
     let view = get_instance(state, id)
         .await
         .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
-    if view.status == InstanceStatus::Running {
+    if view.status == InstanceStatus::Running
+        && view
+            .last_metrics
+            .as_ref()
+            .and_then(|m| m.tps)
+            .is_some()
+    {
         let _ = send_command(
             state,
             id,
@@ -1724,16 +1729,25 @@ async fn ensure_port_free(
     Ok(())
 }
 
-fn sanitize(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+async fn ensure_exclusive_workdir(
+    state: &AppState,
+    workdir: &str,
+    except_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let guard = state.instances.read().await;
+    for inst in guard.values() {
+        if except_id.is_some_and(|id| inst.id == id) {
+            continue;
+        }
+        if files::workdirs_conflict(workdir, &inst.spec.workdir) {
+            anyhow::bail!(
+                "文件根 '{}' 已被实例 '{}' 占用，每个杯子必须独占目录",
+                workdir,
+                inst.spec.name
+            );
+        }
+    }
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -1785,6 +1799,10 @@ pub async fn docker_list_images() -> anyhow::Result<Vec<super::container::Docker
     super::container::list_images().await
 }
 
+pub async fn docker_pull_image(image: &str) -> anyhow::Result<()> {
+    super::container::pull_image(image).await
+}
+
 pub async fn player_history(state: &AppState, id: &str) -> anyhow::Result<Vec<PlayerInfo>> {
     let _ = get_instance(state, id)
         .await
@@ -1816,6 +1834,7 @@ pub async fn fleet_summary(state: &AppState) -> FleetSummary {
         *groups.entry(g).or_default() += 1;
         let rt = match inst.spec.runtime {
             RuntimeKind::Docker => "docker",
+            RuntimeKind::Podman => "podman",
             RuntimeKind::Process => "process",
         };
         *runtimes.entry(rt.into()).or_default() += 1;

@@ -1,3 +1,4 @@
+pub(crate) mod archive;
 pub(crate) mod container;
 pub(crate) mod files;
 pub mod hangar;
@@ -10,7 +11,9 @@ mod registry;
 pub mod spiget;
 mod versions;
 mod worlds;
+pub(crate) mod runtime;
 
+pub use archive::{import_archive, ImportArchiveOpts, MAX_ARCHIVE_BYTES};
 pub use container::{DockerImage, DockerStatus};
 pub use hangar::{InstallRequest as InstallHangarRequest, VersionsQuery as HangarVersionsQuery};
 pub use model::*;

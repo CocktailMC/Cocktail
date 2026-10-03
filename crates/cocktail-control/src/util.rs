@@ -30,6 +30,40 @@ pub fn is_java_command(command: &str) -> bool {
     base == "java" || base == "java.exe" || base.starts_with("java")
 }
 
+/// Split a launch line into binary + args, honoring single/double quotes.
+pub fn parse_command_line(line: &str) -> anyhow::Result<(String, Vec<String>)> {
+    let parts = split_command_line(line);
+    let mut iter = parts.into_iter();
+    let command = iter
+        .next()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("启动命令为空"))?;
+    Ok((command, iter.collect()))
+}
+
+fn split_command_line(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    for c in line.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => cur.push(c),
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c.is_whitespace() => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            None => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
 /// Default Minecraft server launch line for a jar relative to workdir.
 pub fn java_jar_startup(jar_rel: &str) -> (String, Vec<String>) {
     let jar = jar_rel.replace('\\', "/").trim_start_matches('/').to_string();
@@ -246,6 +280,17 @@ pub fn parse_game_stats(line: &str) -> ParsedGameStats {
     stats
 }
 
+/// True once vanilla/Paper-style bootstrap has finished ("Done (1.23s)!").
+pub fn minecraft_ready(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    if let Some(rest) = lower.split("done (").nth(1) {
+        if rest.contains("s)!") {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn health_report(
     status: &str,
     tps: Option<f32>,
@@ -433,5 +478,27 @@ pub async fn notify_webhook(url: &str, instance_id: &str, status: &str, name: &s
     let client = crate::http::client();
     if let Err(e) = client.post(url).json(&body).send().await {
         tracing::warn!(error = %e, "webhook notify failed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{minecraft_ready, parse_command_line};
+
+    #[test]
+    fn splits_quoted_startup() {
+        let (cmd, args) = parse_command_line(r#"java -jar "My Server.jar" nogui"#).unwrap();
+        assert_eq!(cmd, "java");
+        assert_eq!(args, vec!["-jar", "My Server.jar", "nogui"]);
+        assert!(parse_command_line("   ").is_err());
+    }
+
+    #[test]
+    fn paper_done_line_is_ready() {
+        assert!(minecraft_ready(
+            "[00:00:01] [Server thread/INFO]: Done (12.345s)! For help, type \"help\""
+        ));
+        assert!(!minecraft_ready("Downloading mojang_1.21.10.jar"));
+        assert!(!minecraft_ready("> tps"));
     }
 }

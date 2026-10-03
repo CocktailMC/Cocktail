@@ -70,6 +70,10 @@ pub fn router() -> Router<SharedState> {
             post(handlers::install_jar),
         )
         .route(
+            "/api/v1/instances/{id}/import-archive",
+            post(handlers::import_archive),
+        )
+        .route(
             "/api/v1/instances/{id}/startup-jar",
             post(handlers::set_startup_jar),
         )
@@ -195,6 +199,7 @@ pub fn router() -> Router<SharedState> {
         .route("/api/v1/fleet/bulk", post(handlers::fleet_bulk))
         .route("/api/v1/docker/status", get(handlers::docker_status))
         .route("/api/v1/docker/images", get(handlers::docker_images))
+        .route("/api/v1/docker/images/pull", post(handlers::docker_pull))
         .route("/api/v1/java", get(handlers::list_java))
         .route("/api/v1/java/install", post(handlers::install_java))
         .route("/api/v1/java/ensure", post(handlers::ensure_java))

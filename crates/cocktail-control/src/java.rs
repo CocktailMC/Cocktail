@@ -447,7 +447,26 @@ pub async fn inventory() -> JavaInventory {
     }
 }
 
+/// Relative JRE home under an instance file root.
+pub const INSTANCE_JRE_REL: &str = "runtime/jre";
+
+pub fn instance_jre_home(workdir: &Path) -> PathBuf {
+    INSTANCE_JRE_REL
+        .split('/')
+        .fold(workdir.to_path_buf(), |p, seg| p.join(seg))
+}
+
+/// Template cache in `data/java` (never used as a live JAVA_HOME for instances).
+pub async fn ensure_template(major: u32, image: ImageType) -> anyhow::Result<PathBuf> {
+    if let Some(rt) = find_managed(major, Some(image)).or_else(|| find_managed(major, None)) {
+        return Ok(PathBuf::from(rt.java_bin));
+    }
+    let rt = install(major, image).await?;
+    Ok(PathBuf::from(rt.java_bin))
+}
+
 /// Resolve a Java binary: managed Temurin, then system, then download JRE.
+/// Panel / pre-warm only. Instance processes must use [`ensure_instance_jre`].
 pub async fn ensure(major: u32, image: ImageType) -> anyhow::Result<PathBuf> {
     if let Some(rt) = find_managed(major, Some(image)).or_else(|| find_managed(major, None)) {
         return Ok(PathBuf::from(rt.java_bin));
@@ -461,23 +480,129 @@ pub async fn ensure(major: u32, image: ImageType) -> anyhow::Result<PathBuf> {
     Ok(PathBuf::from(rt.java_bin))
 }
 
-pub async fn ensure_for_spec(java_major: Option<u32>, mc_version: Option<&str>) -> anyhow::Result<PathBuf> {
-    let major = java_major.unwrap_or_else(|| recommended_java_major(mc_version));
-    ensure(major, ImageType::Jre).await
+pub async fn ensure_for_spec(
+    workdir: &str,
+    java_major: Option<u32>,
+    mc_version: Option<&str>,
+) -> anyhow::Result<PathBuf> {
+    ensure_instance_jre(workdir, java_major, mc_version).await
 }
 
-pub fn rewrite_java_command(command: Option<String>, java_bin: &Path) -> Option<String> {
-    let Some(cmd) = command else {
-        return Some(java_bin.to_string_lossy().into_owned());
-    };
-    if crate::util::is_java_command(&cmd) {
-        let p = Path::new(&cmd);
-        if p.is_file() {
-            return Some(cmd);
+/// Copy a dedicated Temurin JRE into `{workdir}/runtime/jre`. Never uses system Java.
+pub async fn ensure_instance_jre(
+    workdir: &str,
+    java_major: Option<u32>,
+    mc_version: Option<&str>,
+) -> anyhow::Result<PathBuf> {
+    let major = java_major.unwrap_or_else(|| recommended_java_major(mc_version));
+    let dest = instance_jre_home(Path::new(workdir));
+    if let Some(bin) = locate_java(&dest) {
+        if major_from_home(&dest) == Some(major) {
+            return Ok(bin);
         }
-        return Some(java_bin.to_string_lossy().into_owned());
+        tracing::info!(
+            workdir,
+            have = ?major_from_home(&dest),
+            need = major,
+            "replacing instance JRE (major mismatch)"
+        );
+        let _ = fs::remove_dir_all(&dest);
     }
-    Some(cmd)
+
+    let template_bin = ensure_template(major, ImageType::Jre).await?;
+    let template_home = java_home_of(&template_bin);
+    if !template_home.is_dir() {
+        anyhow::bail!("Temurin 模板目录不存在：{}", template_home.display());
+    }
+
+    let job = crate::http::Transfer::new(&format!("实例 JRE {major}"));
+    job.emit("copy", 0, None);
+    let src = template_home.clone();
+    let dst = dest.clone();
+    tokio::task::spawn_blocking(move || {
+        if dst.exists() {
+            fs::remove_dir_all(&dst)?;
+        }
+        copy_dir(&src, &dst)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("复制实例 JRE 任务失败：{e}"))?
+    .with_context(|| {
+        format!(
+            "复制 JRE {} → {}",
+            template_home.display(),
+            dest.display()
+        )
+    })?;
+
+    let bin = locate_java(&dest).ok_or_else(|| {
+        anyhow::anyhow!("实例 JRE 复制后找不到 {}（{}）", java_exe(), dest.display())
+    })?;
+    chmod_bin(bin.parent().unwrap_or(&dest))?;
+    write_instance_meta(&dest, major, &bin)?;
+    job.finish(dir_size(&dest), Some(dir_size(&dest).max(1)));
+    tracing::info!(
+        workdir,
+        bin = %bin.display(),
+        major,
+        "instance JRE ready"
+    );
+    Ok(bin)
+}
+
+fn major_from_home(home: &Path) -> Option<u32> {
+    if let Ok(text) = fs::read_to_string(home.join(".cocktail.json")) {
+        if let Ok(meta) = serde_json::from_str::<RuntimeMeta>(&text) {
+            return Some(meta.major);
+        }
+    }
+    let release = fs::read_to_string(home.join("release")).ok()?;
+    parse_release_major(&release)
+}
+
+fn parse_release_major(text: &str) -> Option<u32> {
+    for line in text.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("JAVA_VERSION=") else {
+            continue;
+        };
+        let ver = rest.trim().trim_matches('"');
+        return if ver.starts_with("1.") {
+            ver.split('.').nth(1)?.parse().ok()
+        } else {
+            ver.split(|c: char| !c.is_ascii_digit())
+                .next()?
+                .parse()
+                .ok()
+        };
+    }
+    None
+}
+
+fn write_instance_meta(home: &Path, major: u32, bin: &Path) -> anyhow::Result<()> {
+    let meta = RuntimeMeta {
+        id: format!("instance-{}", runtime_id(major, ImageType::Jre)),
+        vendor: "temurin".into(),
+        major,
+        image_type: ImageType::Jre,
+        release_name: String::new(),
+        os: adoptium_os().into(),
+        arch: adoptium_arch().into(),
+        java_bin: bin.to_string_lossy().into(),
+        java_home: java_home_of(bin).to_string_lossy().into(),
+    };
+    fs::write(home.join(".cocktail.json"), serde_json::to_vec_pretty(&meta)?)?;
+    Ok(())
+}
+
+/// Always pin java launches to the instance JRE. Previous shared/system paths are discarded.
+pub fn rewrite_java_command(command: Option<String>, java_bin: &Path) -> Option<String> {
+    let path = java_bin.to_string_lossy().into_owned();
+    match command {
+        None => Some(path),
+        Some(cmd) if crate::util::is_java_command(&cmd) => Some(path),
+        Some(cmd) => Some(cmd),
+    }
 }
 
 pub async fn install(major: u32, image: ImageType) -> anyhow::Result<InstalledRuntime> {
@@ -802,5 +927,109 @@ pub fn apply_java_home(cmd: &mut tokio::process::Command, bin: &str) {
                 cmd.env("JAVA_HOME", home);
             }
         }
+    }
+}
+
+/// Pin JAVA_HOME and JVM user.home/tmpdir to the instance file root.
+pub fn apply_isolated_env(cmd: &mut tokio::process::Command, java_bin: &str, workdir: &str) {
+    apply_java_home(cmd, java_bin);
+    let work = abs_workdir(workdir);
+    let cocktail = work.join(".cocktail");
+    let tmp = cocktail.join("tmp");
+    let appdata = cocktail.join("appdata");
+    let _ = fs::create_dir_all(&tmp);
+    let _ = fs::create_dir_all(&appdata);
+
+    let work_env = native_path(&work);
+    let tmp_env = native_path(&tmp);
+    let work_prop = java_prop_path(&work);
+    let tmp_prop = java_prop_path(&tmp);
+
+    cmd.env("HOME", &work_env);
+    cmd.env("TEMP", &tmp_env);
+    cmd.env("TMP", &tmp_env);
+    cmd.env("TMPDIR", &tmp_env);
+    cmd.env_remove("_JAVA_OPTIONS");
+    cmd.env_remove("JDK_JAVA_OPTIONS");
+    cmd.env_remove("JAVA_TOOL_OPTIONS");
+    cmd.env(
+        "JAVA_TOOL_OPTIONS",
+        format!("-Duser.home={work_prop} -Djava.io.tmpdir={tmp_prop}"),
+    );
+
+    #[cfg(windows)]
+    {
+        cmd.env("USERPROFILE", &work_env);
+        cmd.env("APPDATA", native_path(&appdata));
+        cmd.env("LOCALAPPDATA", native_path(&appdata));
+        if let Some(s) = work.to_str() {
+            if s.len() >= 2 && s.as_bytes()[1] == b':' {
+                cmd.env("HOMEDRIVE", &s[..2]);
+                cmd.env("HOMEPATH", &s[2..]);
+            }
+        }
+    }
+}
+
+fn abs_workdir(workdir: &str) -> PathBuf {
+    let p = PathBuf::from(workdir);
+    if p.is_absolute() {
+        p
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(p))
+            .unwrap_or_else(|_| PathBuf::from(workdir))
+    }
+}
+
+fn native_path(p: &Path) -> String {
+    p.to_string_lossy().into_owned()
+}
+
+fn java_prop_path(p: &Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    if s.chars().any(|c| c.is_whitespace()) {
+        format!("\"{s}\"")
+    } else {
+        s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewrite_always_pins_java() {
+        let bin = Path::new(r"D:\cup\runtime\jre\bin\java.exe");
+        assert_eq!(
+            rewrite_java_command(Some("java".into()), bin).as_deref(),
+            Some(bin.to_str().unwrap())
+        );
+        assert_eq!(
+            rewrite_java_command(Some(r"C:\Program Files\Java\bin\java.exe".into()), bin)
+                .as_deref(),
+            Some(bin.to_str().unwrap())
+        );
+        assert_eq!(
+            rewrite_java_command(Some("paper.bat".into()), bin).as_deref(),
+            Some("paper.bat")
+        );
+    }
+
+    #[test]
+    fn parse_temurin_release_major() {
+        assert_eq!(
+            parse_release_major("JAVA_VERSION=\"21.0.5\"\nOS_NAME=\"Windows\"\n"),
+            Some(21)
+        );
+        assert_eq!(parse_release_major("JAVA_VERSION=\"1.8.0_422\"\n"), Some(8));
+        assert_eq!(parse_release_major("IMPLEMENTOR=\"Eclipse Adoptium\"\n"), None);
+    }
+
+    #[test]
+    fn instance_jre_lives_under_workdir() {
+        let home = instance_jre_home(Path::new("data/instances/abc"));
+        assert!(home.ends_with(Path::new("runtime").join("jre")));
     }
 }

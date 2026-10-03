@@ -53,6 +53,10 @@ import {
   recommendedJavaMajor,
 } from './cores'
 import './App.css'
+import './shell.css'
+import './pages.css'
+import InstanceRail from './InstanceRail'
+import DashPane from './DashPane'
 
 const STATUS_LABEL: Record<InstanceStatus, string> = {
   created: '已创建',
@@ -79,40 +83,40 @@ type Tab =
   | 'plugins'
   | 'schedules'
 
-const NAV_GROUPS: {
-  label: string
-  items: { id: Tab; label: string; icon: string }[]
-}[] = [
-  {
-    label: '概览',
-    items: [
-      { id: 'dashboard', label: '仪表盘', icon: 'fa-dashboard' },
-      { id: 'control', label: '服务器控制', icon: 'fa-power-off' },
-      { id: 'players', label: '玩家中心', icon: 'fa-users' },
-      { id: 'automations', label: '自动化', icon: 'fa-bolt' },
-      { id: 'network', label: '网络', icon: 'fa-globe' },
-      { id: 'console', label: '控制台', icon: 'fa-terminal' },
-    ],
-  },
-  {
-    label: '内容',
-    items: [
-      { id: 'properties', label: '服务端配置', icon: 'fa-cog' },
-      { id: 'plugins', label: '插件/模组', icon: 'fa-puzzle-piece' },
-      { id: 'files', label: '文件', icon: 'fa-folder' },
-      { id: 'worlds', label: '世界', icon: 'fa-globe' },
-      { id: 'backups', label: '备份策略', icon: 'fa-database' },
-    ],
-  },
-  {
-    label: '运维',
-    items: [
-      { id: 'schedules', label: '计划任务', icon: 'fa-calendar' },
-      { id: 'version', label: '版本 / jar', icon: 'fa-download' },
-      { id: 'settings', label: '系统设置', icon: 'fa-desktop' },
-    ],
-  },
+const PRIMARY_TABS: { id: Tab; label: string }[] = [
+  { id: 'dashboard', label: '仪表盘' },
+  { id: 'console', label: '控制台' },
+  { id: 'players', label: '玩家' },
+  { id: 'network', label: '网络' },
+  { id: 'control', label: '控制' },
 ]
+
+const MORE_TABS: { id: Tab; label: string }[] = [
+  { id: 'automations', label: '自动化' },
+  { id: 'properties', label: '服务端配置' },
+  { id: 'plugins', label: '插件/模组' },
+  { id: 'files', label: '文件' },
+  { id: 'worlds', label: '世界' },
+  { id: 'backups', label: '备份' },
+  { id: 'schedules', label: '计划任务' },
+  { id: 'version', label: '版本 / 导入' },
+  { id: 'settings', label: '系统设置' },
+]
+
+const PLANE_LINKS: { tab: HomeTab; label: string }[] = [
+  { tab: 'overview', label: '机群总览' },
+  { tab: 'network', label: '全局网络' },
+  { tab: 'events', label: '事件中心' },
+  { tab: 'users', label: '用户权限' },
+  { tab: 'settings', label: '服务器设置' },
+  { tab: 'nodes', label: '节点 / Agent' },
+  { tab: 'extensions', label: '扩展中心' },
+  { tab: 'audit', label: '审计日志' },
+]
+
+function closeDetails(el: HTMLElement) {
+  el.closest('details')?.removeAttribute('open')
+}
 
 export default function App() {
   const [instances, setInstances] = useState<Instance[]>([])
@@ -144,7 +148,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [health, setHealth] = useState<string>('…')
   const [envInfo, setEnvInfo] = useState<HealthInfo | null>(null)
-  const [tab, setTab] = useState<Tab>('dashboard')
+  const [tab, setTab] = useState<Tab>('console')
   const [cmd, setCmd] = useState('')
 
   const [filePath, setFilePath] = useState('')
@@ -199,6 +203,10 @@ export default function App() {
   const selected = useMemo(
     () => instances.find((i) => i.id === selectedId) ?? null,
     [instances, selectedId],
+  )
+  const instanceNames = useMemo(
+    () => new Map(instances.map((i) => [i.id, i.spec.name])),
+    [instances],
   )
 
   const displayPlayers = useMemo((): PlayerInfo[] => {
@@ -669,13 +677,20 @@ export default function App() {
 
   const selectInstance = (id: string) => {
     setSelectedId(id)
-    setTab('dashboard')
+    setTab('console')
     setFilePath('')
     setEditPath(null)
     setView('manager')
     setPluginFocus(null)
     setError(null)
-    writeHash({ kind: 'instance', id, tab: 'dashboard' })
+    writeHash({ kind: 'instance', id, tab: 'console' })
+  }
+
+  const goTab = (next: Tab) => {
+    setTab(next)
+    if (selectedId) {
+      writeHash({ kind: 'instance', id: selectedId, tab: next })
+    }
   }
 
   const goHome = (tab: HomeTab = 'overview') => {
@@ -707,22 +722,27 @@ export default function App() {
   const memUsed = selected?.last_metrics?.memory_mib
   const memTotal = selected?.spec.memory_mib
   const tpsVal = selected?.last_metrics?.tps
-  const msptVal = selected?.last_metrics?.mspt
   const cpuVal = selected?.last_metrics?.cpu_pct
   const playersCount = selected?.last_metrics?.players
   const playersMax = selected?.last_metrics?.players_max
-  const entitiesVal = selected?.last_metrics?.entities
-  const chunksVal = selected?.last_metrics?.chunks
-  const gcVal = selected?.last_metrics?.gc_count
-  const heapUsed = selected?.last_metrics?.heap_used_mib
-  const heapMax = selected?.last_metrics?.heap_max_mib
   const netRx = selected?.last_metrics?.net_rx_bps
-  const netTx = selected?.last_metrics?.net_tx_bps
-  const netConns = selected?.last_metrics?.net_connections
-  const netListen = selected?.last_metrics?.net_listen
-  const netAlerts = selected?.last_metrics?.net_alerts ?? []
-  const alertsTeaser = netAlerts.length ? ` · ${netAlerts.length} 条告警` : ''
   const statusOk = selected?.status === 'running'
+  const meterKind =
+    selected?.status === 'crashed'
+      ? 'is-spill'
+      : statusOk
+        ? 'is-live'
+        : 'is-empty'
+  const memPct =
+    memUsed != null && memTotal
+      ? Math.max(0, Math.min(100, (memUsed / memTotal) * 100))
+      : 0
+  const cpuBar = Math.max(0, Math.min(100, cpuVal ?? 0))
+  const netBar =
+    netRx != null
+      ? Math.max(6, Math.min(100, (netRx / (2 * 1024 * 1024)) * 100))
+      : 0
+  const moreTabOpen = MORE_TABS.some((item) => item.id === tab)
 
   if (gate !== 'app') {
     return (
@@ -808,7 +828,6 @@ export default function App() {
             if (e.key === 'Enter' || e.key === ' ') goHome('overview')
           }}
           title="返回主界面"
-          style={{ cursor: 'pointer' }}
         >
           <div className="brand-mark" aria-hidden>
             <img src="/logo.png" alt="" className="brand-logo-img" />
@@ -818,18 +837,65 @@ export default function App() {
             <span className="brand-sub">Manager · 26Q3</span>
           </div>
         </div>
+        <span className="channel-chip">
+          {envInfo?.release || envInfo?.version || 'v0.1'}
+        </span>
+        <span
+          className={`plane-live${health === 'offline' ? ' offline' : ''}`}
+          title={health}
+        >
+          <span className="dot" aria-hidden />
+          {health === 'offline' ? '控制面离线' : '控制面在线'}
+        </span>
+        <span className="plane-meta">
+          {envInfo?.version ? `v${envInfo.version.replace(/^v/, '')}` : 'v0.1'}
+          {' · '}
+          {authRequired ? '鉴权已启用' : '鉴权关闭'}
+          {' · '}
+          Docker {fleet?.docker.available ? '就绪' : '不可用'}
+        </span>
+        <span className="topbar-grow" />
         <div className="topbar-right">
-          <span
-            className={`health-pill${health === 'offline' ? ' offline' : ''}`}
-            title={health}
-          >
-            <span className="dot" />
-            {health}
-            {authRequired ? ' · 已登录' : ''}
-          </span>
-          <span>
-            <i className="fa fa-user-circle" /> {adminName}
-          </span>
+          <details className="plane-menu">
+            <summary>设置</summary>
+            <div className="plane-menu-list">
+              {PLANE_LINKS.map((link) => (
+                <button
+                  key={link.tab}
+                  type="button"
+                  className={
+                    !selected &&
+                    homeTab === link.tab &&
+                    (link.tab !== 'extensions' || !pluginFocus)
+                      ? 'is-current'
+                      : undefined
+                  }
+                  onClick={(e) => {
+                    goHome(link.tab)
+                    closeDetails(e.currentTarget)
+                  }}
+                >
+                  {link.label}
+                </button>
+              ))}
+              {wasmPlugins.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={
+                    !selected && pluginFocus === p.id ? 'is-current' : undefined
+                  }
+                  onClick={(e) => {
+                    openPlugin(p.id)
+                    closeDetails(e.currentTarget)
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </details>
+          <span>{adminName}</span>
           <button
             type="button"
             onClick={() => {
@@ -839,305 +905,215 @@ export default function App() {
               })
             }}
           >
-            <i className="fa fa-sign-out" /> 退出
+            退出
           </button>
         </div>
       </header>
 
       <div className="app-body">
-        <aside className="sidebar">
-          <div className="sidebar-instances">
-            <h3>实例</h3>
-            <button
-              type="button"
-              className="btn btn-primary create-entry"
-              onClick={() => {
-                setError(null)
-                setView('create')
-                writeHash({ kind: 'create' })
-              }}
-            >
-              <i className="fa fa-plus" /> 创建实例
-            </button>
+        <InstanceRail
+          instances={instances}
+          selectedId={selectedId}
+          fleet={fleet}
+          events={panelEvents}
+          names={instanceNames}
+          onSelect={selectInstance}
+          onCreate={() => {
+            setError(null)
+            setView('create')
+            writeHash({ kind: 'create' })
+          }}
+        />
 
-            <div className="select-all">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={
-                    instances.length > 0 &&
-                    selectedIds.length === instances.length
-                  }
-                  onChange={(e) => {
-                    setSelectedIds(
-                      e.target.checked ? instances.map((i) => i.id) : [],
-                    )
-                  }}
-                />{' '}
-                全选
-              </label>
-            </div>
-
-            <ul className="instance-pick">
-              {instances.map((inst) => (
-                <li key={inst.id}>
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.includes(inst.id)}
-                    onChange={(e) => {
-                      setSelectedIds((prev) =>
-                        e.target.checked
-                          ? [...prev, inst.id]
-                          : prev.filter((x) => x !== inst.id),
-                      )
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className={
-                      inst.id === selectedId ? 'pick-btn active' : 'pick-btn'
-                    }
-                    onClick={() => selectInstance(inst.id)}
-                  >
-                    <span className="pick-name">{inst.spec.name}</span>
-                    <span className={`badge status-${inst.status}`}>
-                      {STATUS_LABEL[inst.status]}
-                    </span>
-                  </button>
-                </li>
-              ))}
-              {instances.length === 0 && (
-                <li className="empty">还没有实例</li>
-              )}
-            </ul>
-          </div>
-
-          {fleet && (
-            <div className="fleet-strip">
-              <span>机群 {fleet.total}</span>
-              <span className="ok">运行 {fleet.running}</span>
-              <span>停止 {fleet.stopped}</span>
-              <span>过渡 {fleet.starting}</span>
-              <span className="bad">崩溃 {fleet.crashed}</span>
-              <span title={fleet.docker.message}>
-                Docker {fleet.docker.available ? '就绪' : '不可用'}
-              </span>
-              <div className="fleet-strip-actions">
-                <button
-                  type="button"
-                  disabled={!selectedIds.length || busy}
-                  onClick={() =>
-                    run(async () => {
-                      await api.fleetBulk('start', selectedIds)
-                    }, '批量启动…')
-                  }
-                >
-                  批量启动
-                </button>
-                <button
-                  type="button"
-                  disabled={!selectedIds.length || busy}
-                  onClick={() =>
-                    run(async () => {
-                      await api.fleetBulk('stop', selectedIds)
-                    }, '批量停止…')
-                  }
-                >
-                  批量停止
-                </button>
-                <button
-                  type="button"
-                  disabled={!selectedIds.length || busy}
-                  onClick={() =>
-                    run(async () => {
-                      await api.fleetBulk('restart', selectedIds)
-                    }, '批量重启…')
-                  }
-                >
-                  批量重启
-                </button>
-                <button
-                  type="button"
-                  disabled={!selectedIds.length || busy}
-                  onClick={() =>
-                    run(async () => {
-                      await api.fleetBulk('delete', selectedIds)
-                      setSelectedIds([])
-                    }, '批量删除…')
-                  }
-                >
-                  批量删除
-                </button>
-              </div>
-            </div>
-          )}
-
-          <nav>
-            <div className="nav-group">
-              <p className="nav-group-label">机群</p>
-              <button
-                type="button"
-                className={
-                  !selected && homeTab === 'overview'
-                    ? 'nav-item active'
-                    : 'nav-item'
-                }
-                onClick={() => goHome('overview')}
-              >
-                <i className="fa fa-th-large" />
-                主界面
-              </button>
-              <button
-                type="button"
-                className={
-                  !selected && homeTab === 'network'
-                    ? 'nav-item active'
-                    : 'nav-item'
-                }
-                onClick={() => goHome('network')}
-              >
-                <i className="fa fa-globe" />
-                全局网络
-              </button>
-              <button
-                type="button"
-                className={
-                  !selected && homeTab === 'events'
-                    ? 'nav-item active'
-                    : 'nav-item'
-                }
-                onClick={() => goHome('events')}
-              >
-                <i className="fa fa-bell" />
-                事件中心
-              </button>
-              <button
-                type="button"
-                className={
-                  !selected && homeTab === 'users'
-                    ? 'nav-item active'
-                    : 'nav-item'
-                }
-                onClick={() => goHome('users')}
-              >
-                <i className="fa fa-id-badge" />
-                用户权限
-              </button>
-              <button
-                type="button"
-                className={
-                  !selected && homeTab === 'settings'
-                    ? 'nav-item active'
-                    : 'nav-item'
-                }
-                onClick={() => goHome('settings')}
-              >
-                <i className="fa fa-cogs" />
-                服务器设置
-              </button>
-              <button
-                type="button"
-                className={
-                  !selected && homeTab === 'nodes'
-                    ? 'nav-item active'
-                    : 'nav-item'
-                }
-                onClick={() => goHome('nodes')}
-              >
-                <i className="fa fa-sitemap" />
-                节点 / Agent
-              </button>
-              <button
-                type="button"
-                className={
-                  !selected && homeTab === 'extensions' && !pluginFocus
-                    ? 'nav-item active'
-                    : 'nav-item'
-                }
-                onClick={() => goHome('extensions')}
-              >
-                <i className="fa fa-puzzle-piece" />
-                扩展中心
-              </button>
-              {wasmPlugins.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className={
-                    !selected && pluginFocus === p.id ? 'nav-item active' : 'nav-item'
-                  }
-                  onClick={() => openPlugin(p.id)}
-                >
-                  <i className={`fa ${p.icon}`} />
-                  {p.label}
-                </button>
-              ))}
-              <button
-                type="button"
-                className={
-                  !selected && homeTab === 'audit'
-                    ? 'nav-item active'
-                    : 'nav-item'
-                }
-                onClick={() => goHome('audit')}
-              >
-                <i className="fa fa-list-alt" />
-                审计日志
-              </button>
-            </div>
-          </nav>
-        </aside>
-
-        <div className="workspace">
+        <div
+          className={
+            view === 'manager' && selected
+              ? 'workspace has-instance'
+              : 'workspace'
+          }
+        >
           {view === 'manager' && selected && (
-            <nav className="subnav" aria-label="实例操作">
-              <div className="subnav-id">
-                <button
-                  type="button"
-                  className="subnav-back"
-                  onClick={() => goHome('overview')}
-                >
-                  <i className="fa fa-chevron-left" /> 机群
-                </button>
-                <strong className="subnav-name">{selected.spec.name}</strong>
-                <span className={`status-pill status-${selected.status}`}>
-                  <span className="pulse" />
-                  {STATUS_LABEL[selected.status]}
-                </span>
-              </div>
-              <div className="subnav-groups">
-                {NAV_GROUPS.map((group) => (
-                  <div key={group.label} className="subnav-group">
-                    <span className="subnav-group-label">{group.label}</span>
-                    {group.items.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className={
-                          tab === item.id ? 'subnav-item active' : 'subnav-item'
+            <div className="ws-head">
+              <div className="who">
+                <div>
+                  <h1>
+                    {selected.spec.name}
+                    {selected.reattached && selected.status === 'running' ? (
+                      <span className="takeover">已接管</span>
+                    ) : null}
+                  </h1>
+                  <p className="who-sub">
+                    {selected.spec.core}
+                    {selected.spec.mc_version
+                      ? ` ${selected.spec.mc_version}`
+                      : ''}
+                    {' · '}
+                    <span className="mono">:{selected.spec.port}</span>
+                    {' · '}
+                    {selected.spec.runtime === 'docker' ? 'docker' : 'process'}
+                    {selected.pid ? ` · pid ${selected.pid}` : ''}
+                    {` · 节点 ${selected.node_id ?? selected.spec.node_id ?? 'local'}`}
+                    {` · ${STATUS_LABEL[selected.status]}`}
+                  </p>
+                </div>
+                <div className="meters">
+                  <div className={`meter ${meterKind}`}>
+                    <div className="meter-lab">
+                      CPU{' '}
+                      <b>
+                        {statusOk && cpuVal != null
+                          ? `${cpuVal.toFixed(1)}%`
+                          : '—'}
+                      </b>
+                    </div>
+                    <div className="meter-bar">
+                      <span
+                        style={
+                          meterKind === 'is-spill'
+                            ? undefined
+                            : { width: `${statusOk ? cpuBar : 0}%` }
                         }
-                        onClick={() => {
-                          setTab(item.id)
-                          if (selectedId) {
-                            writeHash({
-                              kind: 'instance',
-                              id: selectedId,
-                              tab: item.id,
-                            })
-                          }
-                        }}
-                      >
-                        <i className={`fa ${item.icon}`} />
-                        {item.label}
-                      </button>
-                    ))}
+                      />
+                    </div>
                   </div>
-                ))}
+                  <div className={`meter ${meterKind}`}>
+                    <div className="meter-lab">
+                      内存{' '}
+                      <b>
+                        {statusOk && memUsed != null
+                          ? `${Math.round(memPct)}%`
+                          : '—'}
+                      </b>
+                    </div>
+                    <div className="meter-bar">
+                      <span
+                        style={
+                          meterKind === 'is-spill'
+                            ? undefined
+                            : { width: `${statusOk ? memPct : 0}%` }
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className={`meter ${meterKind}`}>
+                    <div className="meter-lab">
+                      网络 <b>{statusOk ? formatBps(netRx) : '—'}</b>
+                    </div>
+                    <div className="meter-bar">
+                      <span
+                        style={
+                          meterKind === 'is-spill'
+                            ? undefined
+                            : { width: `${statusOk ? netBar : 0}%` }
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
-            </nav>
+              <ul className="facts">
+                <li>
+                  <span className="k">TPS</span>
+                  <span
+                    className={
+                      statusOk && tpsVal != null ? 'v live' : 'v dead'
+                    }
+                  >
+                    {statusOk && tpsVal != null ? tpsVal.toFixed(2) : '—'}
+                  </span>
+                </li>
+                <li>
+                  <span className="k">玩家</span>
+                  <span className={statusOk ? 'v' : 'v dead'}>
+                    {statusOk
+                      ? `${playersCount ?? 0}${playersMax != null ? `/${playersMax}` : ''}`
+                      : '—'}
+                  </span>
+                </li>
+                <li>
+                  <span className="k">内存</span>
+                  <span
+                    className={
+                      statusOk && memUsed != null ? 'v' : 'v dead'
+                    }
+                  >
+                    {statusOk && memUsed != null
+                      ? `${Math.round(memUsed)}/${memTotal ?? '—'}`
+                      : `—/${memTotal ?? '—'}`}
+                  </span>
+                </li>
+                {selected.reattached && selected.status === 'running' ? (
+                  <li>
+                    <span className="k">热接管</span>
+                    <span className="v live">已接管</span>
+                  </li>
+                ) : (
+                  <li>
+                    <span className="k">健康</span>
+                    <span
+                      className={
+                        selected.status === 'crashed'
+                          ? 'v bad'
+                          : selected.health_score != null && statusOk
+                            ? 'v live'
+                            : 'v dead'
+                      }
+                    >
+                      {selected.health_score != null
+                        ? `${selected.health_score}%`
+                        : '—'}
+                    </span>
+                  </li>
+                )}
+              </ul>
+              <nav className="subnav" aria-label="实例操作">
+                <div className="subnav-groups">
+                  {PRIMARY_TABS.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={
+                        tab === item.id ? 'subnav-item active' : 'subnav-item'
+                      }
+                      onClick={() => goTab(item.id)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                  <details
+                    className={
+                      moreTabOpen ? 'subnav-more is-current' : 'subnav-more'
+                    }
+                  >
+                    <summary>更多</summary>
+                    <div className="subnav-more-list">
+                      {MORE_TABS.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={tab === item.id ? 'is-current' : undefined}
+                          onClick={(e) => {
+                            goTab(item.id)
+                            closeDetails(e.currentTarget)
+                          }}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              </nav>
+            </div>
           )}
 
-        <main className="main">
+        <main
+          className={
+            view === 'manager' && selected && tab === 'console'
+              ? 'main is-console'
+              : 'main'
+          }
+        >
           <div
             className="page-stage"
             key={
@@ -1348,482 +1324,172 @@ export default function App() {
                 </div>
               )}
               {tab === 'dashboard' && (
-                <>
-                  <div className="page-head">
-                    <div>
-                      <p className="page-eyebrow">{selected.spec.name}</p>
-                      <h2 className="page-title">仪表盘</h2>
-                    </div>
-                    <span className={`status-pill status-${selected.status}`}>
-                      <span className="pulse" />
-                      {STATUS_LABEL[selected.status]}
-                      {selected.pid ? ` · pid ${selected.pid}` : ''}
-                      {selected.reattached ? ' · 已接管' : ''}
-                      {` · 节点 ${selected.node_id ?? selected.spec.node_id ?? 'local'}`}
-                    </span>
-                  </div>
-                  {selected.health_score != null && (
-                    <div className="card-panel health-score">
-                      <div className="health-score-head">
-                        <p className="label">健康度</p>
-                        <p className="value">{selected.health_score}%</p>
-                      </div>
-                      <div className="health-bar" aria-hidden>
-                        <span
-                          style={{
-                            width: `${Math.max(0, Math.min(100, selected.health_score))}%`,
-                          }}
-                        />
-                      </div>
-                      <p className="meta">
-                        {(selected.health_reasons ?? []).join(' · ') || '规则评分（非 AI）'}
-                      </p>
-                    </div>
+                <DashPane
+                  selected={selected}
+                  events={panelEvents.filter(
+                    (e) => !e.instance_id || e.instance_id === selected.id,
                   )}
-                  <div className="stat-grid">
-                    <div className="card-panel stat-card">
-                      <div>
-                        <p className="label">服务器状态</p>
-                        <p className={`value ${statusOk ? 'success' : ''}`}>
-                          <i
-                            className={`fa ${statusOk ? 'fa-check-circle' : 'fa-circle'}`}
-                          />{' '}
-                          {STATUS_LABEL[selected.status]}
-                        </p>
-                      </div>
-                      <i
-                        className={`fa fa-play-circle icon ${statusOk ? 'success' : ''}`}
-                      />
-                    </div>
-                    <div className="card-panel stat-card">
-                      <div>
-                        <p className="label">CPU</p>
-                        <p className="value">
-                          {cpuVal != null ? `${cpuVal.toFixed(1)}%` : '—'}
-                        </p>
-                      </div>
-                      <i className="fa fa-line-chart icon primary" />
-                    </div>
-                    <div className="card-panel stat-card">
-                      <div>
-                        <p className="label">在线玩家</p>
-                        <p className="value">
-                          {playersCount != null
-                            ? `${playersCount}${playersMax != null ? `/${playersMax}` : ''}`
-                            : '—'}
-                        </p>
-                      </div>
-                      <i className="fa fa-users icon primary" />
-                    </div>
-                    <div className="card-panel stat-card">
-                      <div>
-                        <p className="label">内存占用</p>
-                        <p className="value">
-                          {memUsed != null && memTotal != null
-                            ? `${memUsed} / ${memTotal} MiB`
-                            : `— / ${memTotal ?? '—'} MiB`}
-                        </p>
-                      </div>
-                      <i className="fa fa-microchip icon warning" />
-                    </div>
-                    <div className="card-panel stat-card">
-                      <div>
-                        <p className="label">TPS</p>
-                        <p
-                          className={`value ${tpsVal != null && tpsVal >= 18 ? 'success' : ''}`}
-                        >
-                          {tpsVal != null ? tpsVal.toFixed(2) : '—'}
-                        </p>
-                      </div>
-                      <i className="fa fa-tachometer icon primary" />
-                    </div>
-                    <div className="card-panel stat-card">
-                      <div>
-                        <p className="label">MSPT</p>
-                        <p className="value">
-                          {msptVal != null ? `${msptVal.toFixed(1)} ms` : '—'}
-                        </p>
-                      </div>
-                      <i className="fa fa-clock-o icon warning" />
-                    </div>
-                    <div className="card-panel stat-card">
-                      <div>
-                        <p className="label">下行 / 上行</p>
-                        <p className="value net-rate">
-                          {statusOk ? `${formatBps(netRx)} ↓` : '—'}
-                          <span className="net-split">·</span>
-                          {statusOk ? `${formatBps(netTx)} ↑` : '—'}
-                        </p>
-                      </div>
-                      <i className="fa fa-exchange icon primary" />
-                    </div>
-                    <div className="card-panel stat-card">
-                      <div>
-                        <p className="label">实体 / 区块</p>
-                        <p className="value">
-                          {entitiesVal ?? '—'}
-                          <span className="net-split">·</span>
-                          {chunksVal ?? '—'}
-                        </p>
-                      </div>
-                      <i className="fa fa-cubes icon primary" />
-                    </div>
-                    <div className="card-panel stat-card">
-                      <div>
-                        <p className="label">JVM 堆 / GC</p>
-                        <p className="value">
-                          {heapUsed != null
-                            ? `${heapUsed.toFixed(0)}${heapMax != null ? `/${heapMax.toFixed(0)}` : ''} MiB`
-                            : '—'}
-                          <span className="net-sub">
-                            {' '}
-                            GC {gcVal ?? '—'}
-                          </span>
-                        </p>
-                      </div>
-                      <i className="fa fa-database icon warning" />
-                    </div>
-                  </div>
-
-                  <div className="card-panel net-panel">
-                    <div className="store-head" style={{ marginBottom: '0.6rem' }}>
-                      <div>
-                        <h3 className="card-title">
-                          <i className="fa fa-globe" /> 网络
-                        </h3>
-                        <p className="store-sub">
-                          {netListen || `0.0.0.0:${selected.spec.port}`}
-                          {selected.last_metrics?.net_rtt_ms != null
-                            ? ` · ping ${selected.last_metrics.net_rtt_ms.toFixed(0)} ms`
-                            : ''}
-                          {alertsTeaser}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        onClick={() => setTab('network')}
-                      >
-                        详细分析
-                      </button>
-                    </div>
-                    <p className="meta">
-                      {statusOk
-                        ? `${netConns ?? 0} 条 TCP · ${selected.last_metrics?.net_unique_ips ?? 0} IP · ↓ ${formatBps(netRx)} · ↑ ${formatBps(netTx)}`
-                        : '启动后采集该端口的连接、流量与 status ping。'}
-                    </p>
-                  </div>
-
-                  <div className="card-panel">
-                    <h3 className="card-title">最近事件</h3>
-                    <EventFeed
-                      events={panelEvents.filter(
-                        (e) => !e.instance_id || e.instance_id === selected.id,
-                      )}
-                      names={new Map([[selected.id, selected.spec.name]])}
-                      onOpenInstance={selectInstance}
-                    />
-                  </div>
-
-                  <div className="grid-2">
-                    <div className="card-panel">
-                      <h3 className="card-title">服务器快捷控制</h3>
-                      <div className="btn-row">
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          disabled={busy}
-                          onClick={() => {
-                            if (
-                              !selected.spec.eula_accepted &&
-                              selected.spec.core !== 'demo'
-                            ) {
-                              setView('eula')
-                              return
-                            }
-                            run(() => api.startInstance(selected.id), '启动服务器…')
-                          }}
-                        >
-                          <i className="fa fa-play" /> 启动
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-warning"
-                          disabled={busy}
-                          onClick={() =>
-                            run(() => api.restartInstance(selected.id), '重启服务器…')
-                          }
-                        >
-                          <i className="fa fa-refresh" /> 重启
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-danger"
-                          disabled={busy}
-                          onClick={() =>
-                            run(() => api.stopInstance(selected.id), '停止服务器…')
-                          }
-                        >
-                          <i className="fa fa-stop" /> 停止
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-danger"
-                          disabled={busy}
-                          onClick={() =>
-                            run(async () => {
-                              await api.deleteInstance(selected.id)
-                              setSelectedId(null)
-                            })
-                          }
-                        >
-                          <i className="fa fa-trash" /> 删除
-                        </button>
-                      </div>
-                    </div>
-                    <div className="card-panel">
-                      <h3 className="card-title">服务器基础信息</h3>
-                      <table className="info-table">
-                        <tbody>
-                          <tr>
-                            <td>核心</td>
-                            <td>{selected.spec.core}</td>
-                          </tr>
-                          <tr>
-                            <td>端口</td>
-                            <td>{selected.spec.port}</td>
-                          </tr>
-                          <tr>
-                            <td>运行时</td>
-                            <td>
-                              {selected.spec.runtime === 'docker'
-                                ? 'Docker'
-                                : '进程'}
-                            </td>
-                          </tr>
-                          <tr>
-                            <td>分组</td>
-                            <td>{selected.spec.group || 'default'}</td>
-                          </tr>
-                          <tr>
-                            <td>工作目录</td>
-                            <td>
-                              <code>{selected.spec.workdir}</code>
-                            </td>
-                          </tr>
-                          <tr>
-                            <td>内存</td>
-                            <td>{selected.spec.memory_mib} MiB</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  <div className="card-panel mt-6">
-                    <h3 className="card-title">实时控制台输出</h3>
-                    <pre className="console-box">
-                      {logs.length === 0
-                        ? '等待日志…（启动后出现；支持历史缓冲）'
-                        : logs.map((l) => l.line).join('\n')}
-                    </pre>
-                    <form className="cmd-row" onSubmit={sendCmd}>
-                      <input
-                        value={cmd}
-                        onChange={(e) => setCmd(e.target.value)}
-                        placeholder="输入服务器命令，例如 list / say hello"
-                        disabled={busy || selected.status !== 'running'}
-                      />
-                      <button
-                        type="submit"
-                        className="btn btn-primary"
-                        disabled={busy || selected.status !== 'running'}
-                      >
-                        发送命令
-                      </button>
-                    </form>
-                  </div>
-
-                  {displayPlayers.length > 0 && (
-                    <div className="card-panel mt-6">
-                      <h3 className="card-title">在线玩家列表</h3>
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>玩家名</th>
-                            <th>操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {displayPlayers.map((p) => (
-                            <tr key={p.name}>
-                              <td>{p.name}</td>
-                              <td>
-                                {(['kick', 'ban', 'op', 'deop'] as const).map(
-                                  (a) => (
-                                    <button
-                                      key={a}
-                                      type="button"
-                                      className={
-                                        a === 'ban'
-                                          ? 'link-btn danger'
-                                          : a === 'kick'
-                                            ? 'link-btn warn'
-                                            : 'link-btn'
-                                      }
-                                      disabled={
-                                        busy || selected.status !== 'running'
-                                      }
-                                      onClick={() =>
-                                        run(() =>
-                                          api.playerAction(
-                                            selected.id,
-                                            p.name,
-                                            a,
-                                          ),
-                                        )
-                                      }
-                                    >
-                                      {a}
-                                    </button>
-                                  ),
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </>
+                  onOpenNetwork={() => goTab('network')}
+                />
               )}
 
               {tab === 'control' && (
                 <>
-                  <div className="page-head">
-                    <div>
-                      <p className="page-eyebrow">{selected.spec.name}</p>
-                      <h2 className="page-title">服务器控制</h2>
-                    </div>
-                    <span className={`status-pill status-${selected.status}`}>
-                      <span className="pulse" />
-                      {STATUS_LABEL[selected.status]}
-                    </span>
-                  </div>
-                  <div className="card-panel">
-                    <h3 className="card-title">{selected.spec.name}</h3>
-                    <p className="meta mb-1">
-                      {selected.spec.core} · :{selected.spec.port} ·{' '}
-                      {STATUS_LABEL[selected.status]} ·{' '}
-                      {selected.spec.runtime === 'docker' ? 'Docker' : '进程'}
-                    </p>
-                    <p className="meta mb-1">
-                      启动：<code>{effectiveCmd(selected)}</code>
-                    </p>
-                    {!selected.spec.command &&
+                  <div className="power-row">
+                    <button
+                      type="button"
+                      className="power primary"
+                      disabled={
+                        busy ||
+                        selected.status === 'running' ||
+                        selected.status === 'starting'
+                      }
+                      onClick={() => {
+                        if (
+                          !selected.spec.eula_accepted &&
+                          selected.spec.core !== 'demo'
+                        ) {
+                          setView('eula')
+                          return
+                        }
+                        run(() => api.startInstance(selected.id), '启动服务器…')
+                      }}
+                    >
+                      启动
+                    </button>
+                    <button
+                      type="button"
+                      className="power"
+                      disabled={
+                        busy ||
+                        selected.status === 'stopped' ||
+                        selected.status === 'created' ||
+                        selected.status === 'crashed'
+                      }
+                      onClick={() =>
+                        run(() => api.stopInstance(selected.id), '停止服务器…')
+                      }
+                    >
+                      停止
+                    </button>
+                    <button
+                      type="button"
+                      className="power"
+                      disabled={busy}
+                      onClick={() =>
+                        run(() => api.restartInstance(selected.id), '重启服务器…')
+                      }
+                    >
+                      重启
+                    </button>
+                    {!selected.spec.eula_accepted &&
                       selected.spec.core !== 'demo' && (
-                        <p className="error" style={{ marginBottom: '0.75rem' }}>
-                          尚未配置 jar。请到「版本/导入jar」上传或下载核心。
-                        </p>
+                        <button
+                          type="button"
+                          className="power"
+                          disabled={busy}
+                          onClick={() => setView('eula')}
+                        >
+                          同意 EULA
+                        </button>
                       )}
-                    <div className="btn-row mt-4">
-                      {!selected.spec.eula_accepted &&
-                        selected.spec.core !== 'demo' && (
-                          <button
-                            type="button"
-                            className="btn btn-ghost"
-                            disabled={busy}
-                            onClick={() => setView('eula')}
-                          >
-                            <i className="fa fa-file-text-o" /> 阅读并同意 EULA
-                          </button>
-                        )}
-                      <button
-                        type="button"
-                        className="btn btn-primary"
-                        disabled={busy}
-                        onClick={() => {
-                          if (
-                            !selected.spec.eula_accepted &&
-                            selected.spec.core !== 'demo'
-                          ) {
-                            setView('eula')
-                            return
-                          }
-                          run(() => api.startInstance(selected.id), '启动服务器…')
-                        }}
-                      >
-                        <i className="fa fa-play" /> 启动服务器
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-warning"
-                        disabled={busy}
-                        onClick={() =>
-                          run(() => api.restartInstance(selected.id), '重启服务器…')
-                        }
-                      >
-                        <i className="fa fa-refresh" /> 重启服务器
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-danger"
-                        disabled={busy}
-                        onClick={() =>
-                          run(() => api.stopInstance(selected.id), '停止服务器…')
-                        }
-                      >
-                        <i className="fa fa-stop" /> 停止服务器
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-danger"
-                        disabled={busy}
-                        onClick={() =>
-                          run(async () => {
-                            await api.deleteInstance(selected.id)
-                            setSelectedId(null)
-                          })
-                        }
-                      >
-                        <i className="fa fa-trash" /> 删除实例
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      className="link-btn"
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          await api.deleteInstance(selected.id)
+                          setSelectedId(null)
+                        })
+                      }
+                    >
+                      删除实例
+                    </button>
                   </div>
+                  {!selected.spec.command && selected.spec.core !== 'demo' && (
+                    <p className="error" style={{ marginBottom: '0.75rem' }}>
+                      尚未配置启动命令。请到「更多 → 版本 / 导入」上传压缩包、jar 或下载核心。
+                    </p>
+                  )}
+                  <dl className="ctl-dl">
+                    <dt>状态</dt>
+                    <dd>
+                      {STATUS_LABEL[selected.status]}
+                      {selected.reattached && selected.status === 'running'
+                        ? ' · 已接管'
+                        : ''}
+                    </dd>
+                    <dt>pid</dt>
+                    <dd className="mono">{selected.pid ?? '—'}</dd>
+                    <dt>运行时</dt>
+                    <dd>
+                      {selected.spec.runtime === 'docker' ? 'docker' : 'process'}
+                      {' · '}
+                      {selected.spec.core}
+                      {selected.spec.mc_version
+                        ? ` ${selected.spec.mc_version}`
+                        : ''}
+                    </dd>
+                    <dt>内存</dt>
+                    <dd>{selected.spec.memory_mib} MiB</dd>
+                    <dt>启动</dt>
+                    <dd>
+                      <code>{effectiveCmd(selected)}</code>
+                    </dd>
+                    <dt>热接管</dt>
+                    <dd>
+                      {selected.reattached && selected.status === 'running'
+                        ? '控制面重启后仍是这杯酒，只换了调酒师'
+                        : '—'}
+                    </dd>
+                  </dl>
                 </>
               )}
 
               {tab === 'console' && (
-                <>
-                  <div className="page-head">
-                    <div>
-                      <p className="page-eyebrow">{selected.spec.name}</p>
-                      <h2 className="page-title">控制台</h2>
-                    </div>
-                  </div>
-                  <div className="card-panel">
-                    <pre className="console-box tall">
-                      {logs.length === 0
-                        ? '等待日志…（启动后出现；支持历史缓冲）'
-                        : logs.map((l) => l.line).join('\n')}
-                    </pre>
-                    <form className="cmd-row" onSubmit={sendCmd}>
-                      <input
-                        value={cmd}
-                        onChange={(e) => setCmd(e.target.value)}
-                        placeholder="输入命令，如 list / say hello"
-                        disabled={busy || selected.status !== 'running'}
-                      />
-                      <button
-                        type="submit"
-                        className="btn btn-primary"
-                        disabled={busy || selected.status !== 'running'}
-                      >
-                        发送
-                      </button>
-                    </form>
-                  </div>
-                </>
+                <div
+                  className={
+                    selected.status === 'crashed'
+                      ? 'console-well is-spill'
+                      : selected.status === 'running' ||
+                          selected.status === 'starting'
+                        ? 'console-well is-live'
+                        : 'console-well is-empty'
+                  }
+                >
+                  <pre className="console-box tall">
+                    {logs.length === 0
+                      ? selected.status === 'crashed'
+                        ? '酒洒了。井是空的。'
+                        : selected.status === 'running' ||
+                            selected.status === 'starting'
+                          ? '等待日志…（启动后出现；支持历史缓冲）'
+                          : `封口 · ${STATUS_LABEL[selected.status]}\n没有 STDIN。空杯。`
+                      : logs.map((l) => l.line).join('\n')}
+                  </pre>
+                  <form className="cmd-row" onSubmit={sendCmd}>
+                    <input
+                      value={cmd}
+                      onChange={(e) => setCmd(e.target.value)}
+                      placeholder={
+                        selected.status === 'running'
+                          ? '输入命令，如 list / say hello'
+                          : selected.status === 'crashed'
+                            ? '已崩溃 · 无 STDIN'
+                            : '实例已停止'
+                      }
+                      disabled={busy || selected.status !== 'running'}
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={busy || selected.status !== 'running'}
+                    >
+                      发送
+                    </button>
+                  </form>
+                </div>
               )}
 
               {tab === 'version' && (
@@ -1831,7 +1497,7 @@ export default function App() {
                   <div className="page-head">
                     <div>
                       <p className="page-eyebrow">{selected.spec.name}</p>
-                      <h2 className="page-title">版本 / 导入 jar</h2>
+                      <h2 className="page-title">版本 / 自定义导入</h2>
                     </div>
                   </div>
                   <div className="card-panel">
@@ -1843,6 +1509,44 @@ export default function App() {
                         : ' · 本机进程'}
                     </p>
                     <div className="settings">
+                      <label className="upload-btn btn btn-primary">
+                        <i className="fa fa-file-archive-o" /> 导入压缩包（7z / zip）
+                        <input
+                          type="file"
+                          accept=".7z,.zip,.tar,.tar.gz,.tgz,.gz,.xz,.bz2,.jar"
+                          hidden
+                          disabled={
+                            busy ||
+                            selected.status === 'running' ||
+                            selected.status === 'starting'
+                          }
+                          onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            if (!file) return
+                            run(async () => {
+                              const result = await api.importArchive(
+                                selected.id,
+                                file,
+                                {
+                                  core: 'custom',
+                                  accept_eula: selected.spec.eula_accepted,
+                                },
+                              )
+                              if (result.startup === 'none') {
+                                setError(
+                                  '已解压，但未检测到启动命令。请到设置里填写自定义启动命令。',
+                                )
+                              }
+                            }, `解压导入：${file.name}`)
+                            e.target.value = ''
+                          }}
+                        />
+                      </label>
+                      <p className="meta">
+                        内置 7-Zip 解压整包到此实例目录（支持 7z / zip / tar.gz /
+                        tar.xz）。解压后自动识别 server.jar、Forge 参数或
+                        run.bat / start.sh，核心设为 custom。
+                      </p>
                       <label className="upload-btn btn btn-primary">
                         <i className="fa fa-upload" /> 导入自定义 server.jar
                         <input
@@ -1869,8 +1573,8 @@ export default function App() {
                         />
                       </label>
                       <p className="meta">
-                        导入后自动配置：java -jar server.jar nogui，并按设置注入
-                        -Xmx/-Xms；容器运行时映射 主机端口→容器 25565。
+                        导入 jar 后自动配置：java -jar server.jar nogui，并按设置注入
+                        -Xmx/-Xms；容器运行时映射 主机端口→容器 25565。启动命令也可在「设置」中随时改。
                       </p>
                       <hr style={{ margin: '1.25rem 0', borderColor: '#e5eaf0' }} />
                       <label>
@@ -1980,154 +1684,155 @@ export default function App() {
 
               {tab === 'players' && (
                 <>
-                  <div className="page-head">
-                    <div>
-                      <p className="page-eyebrow">{selected.spec.name}</p>
-                      <h2 className="page-title">玩家中心</h2>
+                  {selected.status === 'crashed' && displayPlayers.length === 0 ? (
+                    <div className="spilled">
+                      <h2>没有会话</h2>
+                      <p>进程已经退出。踢 / op 没有对象。</p>
                     </div>
-                  </div>
-                  <div className="card-panel">
-                    <div className="files-toolbar">
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        disabled={busy || selected.status !== 'running'}
-                        onClick={() =>
-                          run(async () => {
-                            setPlayers(
-                              await api.listPlayers(selected.id, {
-                                probe: true,
-                              }),
-                            )
-                            setPlayerHistory(
-                              await api.listPlayerHistory(selected.id),
-                            )
-                          })
-                        }
-                      >
-                        <i className="fa fa-refresh" /> 刷新 list
-                      </button>
+                  ) : selected.status !== 'running' &&
+                    selected.status !== 'starting' &&
+                    displayPlayers.length === 0 ? (
+                    <div className="empty-cup">
+                      <h2>没有人</h2>
+                      <p>
+                        {STATUS_LABEL[selected.status]}。名单是空的，不是藏起来了。
+                      </p>
                     </div>
-                    <h3 className="card-title">实时玩家</h3>
-                    {displayPlayers.length === 0 ? (
-                      <p className="empty">暂无在线玩家（启动后点刷新）</p>
-                    ) : (
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>玩家</th>
-                            <th>延迟</th>
-                            <th>位置</th>
-                            <th>在线</th>
-                            <th>操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {displayPlayers.map((p) => (
-                            <tr key={p.name}>
-                              <td>
-                                <strong>{p.name}</strong>
-                                <div className="meta">{p.uuid ?? '—'}</div>
-                              </td>
-                              <td>
-                                {p.ping_ms != null
-                                  ? `${p.ping_ms.toFixed(0)}ms`
-                                  : '—'}
-                              </td>
-                              <td>{p.world ?? 'world'}</td>
-                              <td>{formatDuration(p.session_secs)}</td>
-                              <td className="actions">
-                                {(
-                                  [
-                                    ['kick', '踢出'],
-                                    ['ban', '封禁'],
-                                    ['pardon', '解封'],
-                                    ['whitelist', '白名单'],
-                                    ['unwhitelist', '移出白名单'],
-                                    ['op', 'OP'],
-                                    ['deop', '撤 OP'],
-                                  ] as const
-                                ).map(([a, label]) => (
-                                  <button
-                                    key={a}
-                                    type="button"
-                                    className={
-                                      a === 'ban'
-                                        ? 'link-btn danger'
-                                        : a === 'kick'
-                                          ? 'link-btn warn'
-                                          : 'link-btn'
-                                    }
-                                    disabled={
-                                      busy || selected.status !== 'running'
-                                    }
-                                    onClick={() =>
-                                      run(() =>
-                                        api.playerAction(
-                                          selected.id,
-                                          p.name,
-                                          a,
-                                        ),
-                                      )
-                                    }
-                                  >
-                                    {label}
-                                  </button>
-                                ))}
-                              </td>
+                  ) : (
+                    <>
+                      <p className="net-lead">
+                        在线{' '}
+                        <strong>
+                          {playersCount ?? displayPlayers.length}
+                          {playersMax != null ? ` / ${playersMax}` : ''}
+                        </strong>
+                        {' · '}
+                        <button
+                          type="button"
+                          className="link-btn"
+                          disabled={busy || selected.status !== 'running'}
+                          onClick={() =>
+                            run(async () => {
+                              setPlayers(
+                                await api.listPlayers(selected.id, {
+                                  probe: true,
+                                }),
+                              )
+                              setPlayerHistory(
+                                await api.listPlayerHistory(selected.id),
+                              )
+                            })
+                          }
+                        >
+                          刷新 list
+                        </button>
+                      </p>
+                      {displayPlayers.length === 0 ? (
+                        <p className="empty">暂无在线玩家（启动后点刷新）</p>
+                      ) : (
+                        <table className="player-table">
+                          <thead>
+                            <tr>
+                              <th>玩家</th>
+                              <th>来源</th>
+                              <th>在线</th>
+                              <th />
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                  <div className="card-panel" style={{ marginTop: '1rem' }}>
-                    <h3 className="card-title">玩家历史</h3>
-                    {playerHistory.length === 0 ? (
-                      <p className="empty">加入过的玩家会出现在这里</p>
-                    ) : (
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>玩家</th>
-                            <th>UUID</th>
-                            <th>首次加入</th>
-                            <th>最后在线</th>
-                            <th>累计</th>
-                            <th>状态</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {playerHistory.map((p) => (
-                            <tr key={p.name}>
-                              <td>
-                                <strong>{p.name}</strong>
-                              </td>
-                              <td className="meta">{p.uuid ?? '—'}</td>
-                              <td className="meta">
-                                {p.first_seen
-                                  ? new Date(p.first_seen).toLocaleString(
-                                      'zh-CN',
-                                      { hour12: false },
-                                    )
-                                  : '—'}
-                              </td>
-                              <td className="meta">
-                                {p.last_seen
-                                  ? new Date(p.last_seen).toLocaleString(
-                                      'zh-CN',
-                                      { hour12: false },
-                                    )
-                                  : '—'}
-                              </td>
-                              <td>{formatDuration(p.total_secs)}</td>
-                              <td>{p.online ? '在线' : '离线'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
+                          </thead>
+                          <tbody>
+                            {displayPlayers.map((p) => (
+                              <tr key={p.name}>
+                                <td>
+                                  {p.name}
+                                  <div className="meta">{p.uuid ?? ''}</div>
+                                </td>
+                                <td className="mono">
+                                  {p.world ?? 'world'}
+                                  {p.ping_ms != null
+                                    ? ` · ${p.ping_ms.toFixed(0)}ms`
+                                    : ''}
+                                </td>
+                                <td>{formatDuration(p.session_secs)}</td>
+                                <td>
+                                  {(
+                                    [
+                                      ['kick', '踢出'],
+                                      ['op', 'op'],
+                                      ['deop', '撤 op'],
+                                      ['ban', '封禁'],
+                                    ] as const
+                                  ).map(([a, label]) => (
+                                    <button
+                                      key={a}
+                                      type="button"
+                                      className="link-btn"
+                                      disabled={
+                                        busy || selected.status !== 'running'
+                                      }
+                                      onClick={() =>
+                                        run(() =>
+                                          api.playerAction(
+                                            selected.id,
+                                            p.name,
+                                            a,
+                                          ),
+                                        )
+                                      }
+                                    >
+                                      {label}
+                                    </button>
+                                  ))}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {playerHistory.length > 0 && (
+                        <div style={{ marginTop: '1.25rem' }}>
+                          <h3 className="card-title">历史</h3>
+                          <table className="player-table">
+                            <thead>
+                              <tr>
+                                <th>玩家</th>
+                                <th>UUID</th>
+                                <th>首次加入</th>
+                                <th>最后在线</th>
+                                <th>累计</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {playerHistory.map((p) => (
+                                <tr key={p.name}>
+                                  <td>{p.name}</td>
+                                  <td className="mono">{p.uuid ?? '—'}</td>
+                                  <td className="meta">
+                                    {p.first_seen
+                                      ? new Date(p.first_seen).toLocaleString(
+                                          'zh-CN',
+                                          { hour12: false },
+                                        )
+                                      : '—'}
+                                  </td>
+                                  <td className="meta">
+                                    {p.last_seen
+                                      ? new Date(p.last_seen).toLocaleString(
+                                          'zh-CN',
+                                          { hour12: false },
+                                        )
+                                      : '—'}
+                                  </td>
+                                  <td>
+                                    {formatDuration(p.total_secs)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </>
               )}
 
@@ -2900,8 +2605,9 @@ export default function App() {
                         </select>
                       </label>
                       <p className="meta">
-                        命令填写 java 时，启动会解析为 Adoptium 托管 JRE 或系统
-                        Java；缺失则自动下载。
+                        命令填写 java 时，启动会把 Temurin 复制到本杯子的{' '}
+                        <code>runtime/jre</code>
+                        ，不用系统 Java。
                       </p>
                       <label>
                         启动参数（空格分隔；内存会自动注入 -Xmx/-Xms）
@@ -3007,7 +2713,13 @@ export default function App() {
                           </button>
                         )}
                       </label>
-                      <p className="meta">工作目录：{selected.spec.workdir}</p>
+                      <p className="meta">
+                        工作目录：{selected.spec.workdir}
+                        {' · '}独占文件根
+                        {selected.spec.runtime !== 'docker'
+                          ? ' · 独立 JRE runtime/jre'
+                          : ''}
+                      </p>
                       <p className="meta">
                         节点：{selected.node_id ?? selected.spec.node_id ?? 'local'}
                         {selected.desired_running ?? selected.spec.desired_running

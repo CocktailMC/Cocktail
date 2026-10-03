@@ -10,8 +10,9 @@ type Props = {
 
 const PHASE_LABEL: Record<string, string> = {
   download: '下载中',
-  extract: '解压安装中',
+  extract: '解压中',
   install: '安装中',
+  upload: '上传中',
   done: '完成',
 }
 

@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cocktail · Scroll 是流动的，Edge 是凝固的</title>
+  <!--
+    Collins / Mailchimp Brand Book 方法，不是 Mailchimp 黄。
+    form：同一只杯子里的两种 vintage——左是流动酒液，右是凝固酒标。
+    一张屏一个决定；type-as-hero；两个人格共用一只 mark。
+    120% 签名：垂直封口线被斜向酒液条带切断。
+  -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,62..125,400..900;1,62..125,700..900&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --cream: #FCF0D8;
+      --cream-deep: #F0E4C0;
+      --paper: #F7F4EC;
+      --ice: #B4D8F0;
+      --lime: #6CC054;
+      --lime-ink: #24780C;
+      --navy: #0F4C81;
+      --void: #0A0A0A;
+      --display: "Archivo", "Noto Sans SC", sans-serif;
+      --body: "Noto Sans SC", "Archivo", sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--body);
+      font-size: 17px;
+      line-height: 1.65;
+      color: var(--void);
+      background: var(--paper);
+      text-wrap: pretty;
+    }
+
+    a { color: inherit; }
+
+    /* ——— 首屏：50/50 对剖色场 ——— */
+    .hero {
+      --split: 1fr 1fr;
+      --seam: 50%;
+      display: grid;
+      grid-template-columns: var(--split);
+      min-height: 900px;
+      height: 100vh;
+      height: 100svh;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .hero:has(.pane-scroll:hover),
+    .hero:has(.pane-scroll:focus-within) {
+      --split: 1.14fr 0.86fr;
+      --seam: 57%;
+    }
+
+    .hero:has(.pane-edge:hover),
+    .hero:has(.pane-edge:focus-within) {
+      --split: 0.86fr 1.14fr;
+      --seam: 43%;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .hero { transition: grid-template-columns 520ms cubic-bezier(0.22, 1, 0.36, 1), --seam 520ms cubic-bezier(0.22, 1, 0.36, 1); }
+    }
+
+    .overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 9;
+      pointer-events: none;
+      grid-column: 1 / -1;
+      grid-row: 1;
+    }
+
+    .overlay .pour {
+      position: absolute;
+      left: 50%;
+      top: 47%;
+      width: 220px;
+      height: 56px;
+      margin-left: -80px;
+      background: #FCF0D8;
+      transform: rotate(-28deg);
+    }
+
+    .pane {
+      position: relative;
+      z-index: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-width: 0;
+      text-decoration: none;
+    }
+
+    .pane-scroll {
+      background: var(--cream);
+      color: var(--void);
+      padding: 36px 108px 36px 52px;
+    }
+
+    .pane-edge {
+      background: var(--navy);
+      color: var(--cream);
+      padding: 36px 52px 36px 108px;
+      text-align: right;
+    }
+
+    .catalog {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      line-height: 1.4;
+    }
+
+    .pane-scroll .catalog { color: var(--void); }
+    .pane-edge .catalog { color: var(--ice); }
+
+    .pane-main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-height: 0;
+      padding-bottom: 4vh;
+    }
+
+    .rail {
+      font-family: var(--display);
+      font-weight: 800;
+      line-height: 0.82;
+      text-transform: uppercase;
+      text-wrap: pretty;
+    }
+
+    .pane-scroll .rail {
+      font-size: clamp(4.6rem, 8.6vw, 7.4rem);
+      font-stretch: 118%;
+      letter-spacing: -0.045em;
+      font-style: italic;
+    }
+
+    .pane-edge .rail {
+      font-size: clamp(4.6rem, 8.6vw, 7.4rem);
+      font-stretch: 68%;
+      letter-spacing: 0.01em;
+      font-style: normal;
+    }
+
+    .trait {
+      margin-top: 18px;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0.42em;
+      line-height: 1.3;
+    }
+
+    .pane-edge .trait { letter-spacing: 0.52em; }
+
+    .gold-l,
+    .gold-r {
+      position: absolute;
+      top: 64%;
+      z-index: 6;
+      white-space: nowrap;
+      font-family: var(--display);
+      font-size: 18px;
+      font-weight: 700;
+      font-stretch: 95%;
+      line-height: 1.3;
+      pointer-events: none;
+    }
+
+    .gold-l {
+      right: 14px;
+      color: var(--void);
+    }
+
+    .gold-r {
+      left: 14px;
+      color: var(--cream);
+    }
+
+    .pane-foot { display: grid; gap: 16px; }
+
+    .human {
+      font-size: 17px;
+      font-weight: 400;
+      line-height: 1.65;
+      max-width: 16em;
+    }
+
+    .pane-edge .human { margin-left: auto; }
+
+    .cta {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: max-content;
+      min-height: 48px;
+      padding: 0 22px;
+      border: 1.5px solid currentColor;
+      font-family: var(--display);
+      font-size: 16px;
+      font-weight: 700;
+      font-stretch: 90%;
+      letter-spacing: 0.08em;
+      text-decoration: none;
+      text-transform: uppercase;
+      background: transparent;
+      transition: background 180ms ease, color 180ms ease;
+    }
+
+    .pane-scroll .cta:hover,
+    .pane-scroll .cta:focus-visible {
+      background: var(--void);
+      color: var(--cream);
+    }
+
+    .pane-edge .cta:hover,
+    .pane-edge .cta:focus-visible {
+      background: var(--cream);
+      color: var(--navy);
+    }
+
+    .pane-edge .cta { margin-left: auto; }
+
+    .lot {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 400;
+      line-height: 1.5;
+      letter-spacing: 0.01em;
+      overflow-wrap: anywhere;
+    }
+
+    .pane-scroll .lot { color: var(--void); }
+    .pane-edge .lot { color: var(--ice); }
+
+    /* ——— 交界：封口线 + 酒液切断 + 真 logo ——— */
+    .seam {
+      position: absolute;
+      left: var(--seam);
+      top: 0;
+      bottom: 0;
+      width: 0;
+      z-index: 10;
+      overflow: visible;
+      pointer-events: none;
+    }
+
+    .seal {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: -1.5px;
+      width: 3px;
+      background: var(--lime);
+      z-index: 1;
+    }
+
+    .mark {
+      position: absolute;
+      top: 34%;
+      left: 0;
+      width: 148px;
+      height: auto;
+      transform: translate(-50%, -50%);
+      display: block;
+      z-index: 5;
+    }
+
+    /* ——— 酒标式对照 ——— */
+    .label-sheet {
+      background: var(--paper);
+      color: var(--void);
+      padding: 88px 72px 72px;
+    }
+
+    .label-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 24px;
+      padding-bottom: 22px;
+      border-bottom: 1px solid var(--void);
+    }
+
+    .label-head h2 {
+      font-family: var(--display);
+      font-size: clamp(2rem, 3.2vw, 3rem);
+      font-weight: 800;
+      font-stretch: 90%;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+    }
+
+    .label-head p {
+      font-family: var(--mono);
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .vintages {
+      display: grid;
+      grid-template-columns: 1fr 1px 1fr;
+      gap: 0 48px;
+      padding-top: 48px;
+    }
+
+    .vintage-rule {
+      background: var(--lime);
+      width: 1px;
+      justify-self: center;
+    }
+
+    .vintage-name {
+      font-family: var(--display);
+      font-size: clamp(2.4rem, 4vw, 3.6rem);
+      font-weight: 800;
+      line-height: 0.9;
+      text-transform: uppercase;
+    }
+
+    .col-scroll .vintage-name {
+      font-stretch: 115%;
+      font-style: italic;
+    }
+
+    .col-edge .vintage-name {
+      font-stretch: 70%;
+      text-align: right;
+    }
+
+    .vintage-kana {
+      margin: 12px 0 36px;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.36em;
+    }
+
+    .col-edge .vintage-kana { text-align: right; }
+
+    .spec {
+      display: grid;
+      gap: 22px;
+    }
+
+    .spec div {
+      display: grid;
+      gap: 4px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid color-mix(in srgb, var(--void) 18%, transparent);
+    }
+
+    .spec dt {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--navy);
+    }
+
+    .spec dd {
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.4;
+      font-family: var(--display);
+      font-stretch: 92%;
+    }
+
+    .col-edge .spec dt,
+    .col-edge .spec dd { text-align: right; }
+
+    .spec .mono { font-family: var(--mono); font-size: 16px; font-weight: 500; }
+
+    /* ——— 背标 CLI ——— */
+    .back-label {
+      background: var(--void);
+      color: var(--cream);
+      padding: 80px 72px;
+    }
+
+    .back-label h2 {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--ice);
+      margin-bottom: 20px;
+    }
+
+    .back-label h3 {
+      font-family: var(--display);
+      font-size: clamp(2rem, 3vw, 2.6rem);
+      font-weight: 800;
+      font-stretch: 88%;
+      line-height: 1.2;
+      margin-bottom: 36px;
+    }
+
+    .cli {
+      display: grid;
+      gap: 0;
+      border-top: 1px solid color-mix(in srgb, var(--cream) 22%, transparent);
+    }
+
+    .cli code {
+      display: block;
+      padding: 18px 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--cream) 22%, transparent);
+      font-family: var(--mono);
+      font-size: 16px;
+      line-height: 1.6;
+      color: var(--cream);
+      overflow-wrap: anywhere;
+    }
+
+    .note {
+      background: var(--cream);
+      color: var(--void);
+      padding: 64px 72px 72px;
+    }
+
+    .note p {
+      max-width: 34em;
+      font-size: 18px;
+      line-height: 1.75;
+    }
+
+    .note strong {
+      font-family: var(--display);
+      font-stretch: 90%;
+    }
+
+    footer {
+      background: var(--navy);
+      color: var(--cream);
+      padding: 28px 72px;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      font-family: var(--mono);
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      line-height: 1.5;
+    }
+
+    footer a { text-decoration: underline; text-underline-offset: 3px; }
+
+    @media (max-width: 900px) {
+      .hero {
+        height: auto;
+        min-height: 0;
+        grid-template-columns: 1fr;
+      }
+      .hero:has(.pane-scroll:hover),
+      .hero:has(.pane-edge:hover),
+      .hero:has(.pane-scroll:focus-within),
+      .hero:has(.pane-edge:focus-within) {
+        grid-template-columns: 1fr;
+        --seam: 50%;
+      }
+      .pane-scroll,
+      .pane-edge {
+        min-height: 72vh;
+        padding: 36px 28px 48px;
+        text-align: left;
+      }
+      .gold-l,
+      .gold-r {
+        top: auto;
+        bottom: 10px;
+        font-size: 16px;
+      }
+      .pane-edge .human,
+      .pane-edge .cta { margin-left: 0; }
+      .pane-edge .vintage-name,
+      .col-edge .spec dt,
+      .col-edge .spec dd,
+      .col-edge .vintage-kana { text-align: left; }
+      .seam {
+        position: relative;
+        left: auto;
+        width: 100%;
+        height: 80px;
+      }
+      .seal {
+        top: 50%;
+        left: 0;
+        right: 0;
+        bottom: auto;
+        width: 100%;
+        height: 3px;
+      }
+      .overlay .pour {
+        left: 18%;
+        margin-left: 0;
+        width: 160px;
+        height: 36px;
+        transform: rotate(-18deg);
+      }
+      .mark {
+        top: 50%;
+        width: 88px;
+      }
+      .vintages {
+        grid-template-columns: 1fr;
+        gap: 48px;
+      }
+      .vintage-rule { width: 100%; height: 1px; }
+      .label-sheet,
+      .back-label,
+      .note,
+      footer { padding-left: 28px; padding-right: 28px; }
+    }
+  </style>
+</head>
+<body>
+  <section class="hero" id="top" aria-label="Cocktail 双轨对剖">
+    <article class="pane pane-scroll" id="scroll">
+      <p class="catalog">Cocktail · 同一份代码</p>
+      <div class="pane-main">
+        <h1 class="rail">Scroll</h1>
+        <p class="trait">流动</p>
+      </div>
+      <div class="pane-foot">
+        <p class="human">永远最新，但已经构建。</p>
+        <a class="cta" href="#label-scroll">选 Scroll</a>
+        <p class="lot">scroll-a3f9c2b-20260912-1430</p>
+      </div>
+    </article>
+
+    <div class="seam">
+      <div class="seal"></div>
+      <img class="mark" alt="Cocktail" src="data:image/png;base64,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vrcjfM0wBBAgNwQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0ggvksRvuZLEb4mwL4EEojoytWVU0mSXI70tV+O8XUB9iKQQFxfT5JkPuLXBsiFSpqmsR8DlNKVqytfS5Lk9yI/jG8mSfLK5YvzNyM/DqDkBBIYsCtXVy61Vye+nJNv/rXweC5fnP9G7AcClJdAAn105epKOB8SAsiF9uu8Hyb9XpIkbyZJ8nZ4+OHPVk+AQRBIoAeuXF0JgSO8dAaQFwvyzV1ph5QrWVi5fHE+vAboGYEEjrflcmlXAIl1MDWmb7dXUt5sr6SEwAJwLAIJdL+Se2nXS1FWPfp5HqUVUDqCSggtAF0JJHB/yyULHWHVI7x93jenp1s+nSHFlg+wg0BC6QzhQdOicoAW2CaQUIYtlyIeNC3yls/2DR8HaKE8BBIKwUHTUhygza4jO0ALBSSQMOwHTcOqhy2Xcuo8QHulfR3ZAVoYUgIJw3LQNHtx0JRuHKCFISWQkKeDpp0BxKoHveQALeScQMJAOWhKjg/Q6kyBiAQSBrHt8rWSN5oynAdo39A+C4MjkNA3V66uvJ4kyW/7FjPk4eRlAwah/6oD+BqUkDBCQYSzTGb0wAAIJPRrm8bKCEXx4pWrK1+P/SCg6AQS+uEV31YKJpyDAvpIIKEfwuFVKBL9N9BnAgkAEJ1AAgBEJ5DQD2/4tlIw34r9AKDoBBL64RvtmSJQpP+ngT4SSOi5domUmzYUxTcvX5y36gd9JpDQF5cvzoffKH/VSglD7ncvX5x35RcGQHU8fXfl6srLrgIzZN5uz7IJq33AAAgkAEB0tmwAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQAiE4gAQCiE0gAgOgEEgAgOoEEAIhOIAEAohNIAIDoBBIAIDqBBACITiABAKITSACA6AQSACA6gQQASGL731iwlpGZP8N3AAAAAElFTkSuQmCC">
+      <p class="gold-l">「Scroll 是流动的，</p>
+      <p class="gold-r">Edge 是凝固的。」</p>
+    </div>
+
+    <article class="pane pane-edge" id="edge">
+      <p class="catalog">Apache-2.0 · v0.1</p>
+      <div class="pane-main">
+        <h1 class="rail">Edge</h1>
+        <p class="trait">凝固</p>
+      </div>
+      <div class="pane-foot">
+        <p class="human">月度装瓶的稳定快照。</p>
+        <a class="cta" href="#label-edge">选 Edge</a>
+        <p class="lot">edge-26.10</p>
+      </div>
+    </article>
+    <div class="overlay" aria-hidden="true"><div class="pour"></div></div>
+  </section>
+
+  <section class="label-sheet" id="compare" aria-labelledby="label-title">
+    <header class="label-head">
+      <h2 id="label-title">装瓶说明</h2>
+      <p>同一只杯子 · 两种 vintage</p>
+    </header>
+    <div class="vintages">
+      <article class="col-scroll" id="label-scroll">
+        <h3 class="vintage-name">Scroll</h3>
+        <p class="vintage-kana">流动</p>
+        <dl class="spec">
+          <div>
+            <dt>隐喻</dt>
+            <dd>Arch 式滚动</dd>
+          </div>
+          <div>
+            <dt>节奏</dt>
+            <dd>CI 全绿即出（日均 1–3，方案预期）</dd>
+          </div>
+          <div>
+            <dt>版本</dt>
+            <dd class="mono">scroll-a3f9c2b-20260912-1430</dd>
+          </div>
+          <div>
+            <dt>EOL</dt>
+            <dd>7 天</dd>
+          </div>
+          <div>
+            <dt>实验</dt>
+            <dd>低+中风险默认开</dd>
+          </div>
+          <div>
+            <dt>升级</dt>
+            <dd>自动；崩溃 3 次回滚</dd>
+          </div>
+          <div>
+            <dt>给谁</dt>
+            <dd>开发者 / 尝鲜党</dd>
+          </div>
+        </dl>
+      </article>
+      <div class="vintage-rule" aria-hidden="true"></div>
+      <article class="col-edge" id="label-edge">
+        <h3 class="vintage-name">Edge</h3>
+        <p class="vintage-kana">凝固</p>
+        <dl class="spec">
+          <div>
+            <dt>隐喻</dt>
+            <dd>Fedora / Manjaro 式凝固</dd>
+          </div>
+          <div>
+            <dt>节奏</dt>
+            <dd>每月 1 次</dd>
+          </div>
+          <div>
+            <dt>版本</dt>
+            <dd class="mono">edge-26.10</dd>
+          </div>
+          <div>
+            <dt>EOL</dt>
+            <dd>2 个月</dd>
+          </div>
+          <div>
+            <dt>实验</dt>
+            <dd>只开低风险</dd>
+          </div>
+          <div>
+            <dt>升级</dt>
+            <dd>通知后确认</dd>
+          </div>
+          <div>
+            <dt>给谁</dt>
+            <dd>小服主 / 早期采用者</dd>
+          </div>
+        </dl>
+      </article>
+    </div>
+  </section>
+
+  <section class="back-label" id="cli" aria-labelledby="cli-title">
+    <h2>背标 · Batch</h2>
+    <h3 id="cli-title">四条真实命令</h3>
+    <div class="cli">
+      <code>cocktail update --channel=scroll</code>
+      <code>cocktail update --channel=scroll --pin=scroll-a3f9c2b-20260912-1430</code>
+      <code>cocktail update --channel=scroll --rollback</code>
+      <code>cocktail update --channel=edge</code>
+    </div>
+  </section>
+
+  <section class="note">
+    <p>
+      <strong>为什么不是锁功能。</strong>
+      main、Scroll、Edge 都是 Apache-2.0 完整功能。付费的是更后面的稳定承诺与商标，本页不卖 PRO。
+    </p>
+  </section>
+
+  <footer>
+    <p>Apache-2.0 · CocktailMC · 2026</p>
+    <p>第一个 Edge 目标 <a href="#label-edge">edge-26.10</a></p>
+  </footer>
+</body>
+</html>

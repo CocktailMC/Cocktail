@@ -32,7 +32,7 @@ export function parseHash(): HashLoc {
   if (parts[0] === 'create') return { kind: 'create' }
   if (parts[0] === 'eula' && parts[1]) return { kind: 'eula', id: parts[1] }
   if (parts[0] === 'instances' && parts[1]) {
-    return { kind: 'instance', id: parts[1], tab: parts[2] || 'dashboard' }
+    return { kind: 'instance', id: parts[1], tab: parts[2] || 'console' }
   }
   if (parts[0] === 'plugins' && parts[1]) {
     return { kind: 'plugin', id: parts[1] }

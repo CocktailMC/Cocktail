@@ -1,7 +1,11 @@
 //! Guest helpers for Cocktail WASM plugins.
 //!
-//! Host functions live in the Extism default namespace. Plugins export
-//! `start`, `http_handle`, optional `on_event` / `tick` / `stop`.
+//! Host functions live in the Extism default namespace (`ExtismHost`).
+//! Plugins export `start`, `http_handle`, and optionally `on_event` / `tick` / `stop`.
+//!
+//! `cocktail_control` is answered **in-process** by the control-plane router.
+//! Do not assume it is an HTTP round-trip to `127.0.0.1`; the host never
+//! sends plugin traffic through the system proxy.
 
 use extism_pdk::*;
 use serde::{Deserialize, Serialize};

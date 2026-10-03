@@ -1,15 +1,16 @@
-//! Docker container runtime for instances (CLI-based; works with Docker Desktop / Engine).
+//! Container instance runtime — backed by the Bollard SDK (Docker/Podman).
+//!
+//! This module is a thin façade over `crate::instance::runtime`, keeping the
+//! public API used by `registry.rs` and `handlers.rs` stable.
 
 use std::path::PathBuf;
-use std::process::Stdio;
 
 use anyhow::Context;
-use tokio::process::Command;
-use tracing::info;
-
-use super::process::{self, ProcessHandle};
-use super::model::InstanceEvent;
 use tokio::sync::broadcast;
+
+use super::model::InstanceEvent;
+use super::process::{self, ProcessHandle};
+use super::runtime::{self, ContainerEngine, ContainerRuntime, ContainerSpawnSpec};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DockerStatus {
@@ -19,48 +20,19 @@ pub struct DockerStatus {
 }
 
 pub async fn docker_status() -> DockerStatus {
-    let mut cmd = Command::new("docker");
-    cmd.args(["version", "--format", "{{.Server.Version}}"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    crate::wincompat::hide_console(&mut cmd);
-    match cmd.output().await
-    {
-        Ok(out) if out.status.success() => {
-            let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    match runtime::runtime() {
+        Some(rt) => {
+            let s = rt.status().await;
             DockerStatus {
-                available: !version.is_empty(),
-                version: Some(version.clone()),
-                message: if version.is_empty() {
-                    "docker CLI ok but no server version".into()
-                } else {
-                    format!("Docker Engine {version}")
-                },
+                available: s.available,
+                version: s.version,
+                message: s.message,
             }
         }
-        Ok(out) => {
-            let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            let hint = if cfg!(windows) {
-                "（请确认 Docker Desktop 已启动）"
-            } else if err.to_ascii_lowercase().contains("permission") {
-                "（把当前用户加入 docker 组，或用 root 运行控制面）"
-            } else {
-                ""
-            };
-            DockerStatus {
-                available: false,
-                version: None,
-                message: format!("Docker 引擎不可用: {err}{hint}"),
-            }
-        }
-        Err(e) => DockerStatus {
+        None => DockerStatus {
             available: false,
             version: None,
-            message: if cfg!(windows) {
-                format!("未找到 docker.exe（{e}）。安装 Docker Desktop 后可选容器运行方式。")
-            } else {
-                format!("未找到 docker CLI（{e}）。安装 Docker Engine 后可选容器运行方式。")
-            },
+            message: "容器运行时未初始化(未检测到 Docker 或 Podman)".into(),
         },
     }
 }
@@ -81,80 +53,39 @@ pub async fn spawn_docker_instance(
     image: &str,
     events: broadcast::Sender<InstanceEvent>,
 ) -> anyhow::Result<ProcessHandle> {
-    let status = docker_status().await;
-    if !status.available {
-        anyhow::bail!("Docker unavailable: {}", status.message);
-    }
+    let rt = runtime::require_runtime().await?;
 
     std::fs::create_dir_all(&workdir)?;
-    let abs = std::fs::canonicalize(&workdir)
-        .with_context(|| format!("canonicalize workdir {workdir}"))?;
-    let mount = docker_mount_path(&abs);
-
     let name = container_name(&instance_id);
-    // Best-effort cleanup leftover container with same name.
-    let _ = docker_cmd()
-        .args(["rm", "-f", &name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
 
     let bin = command.unwrap_or_else(|| "java".into());
     if crate::util::is_java_command(&bin) {
         if !args.iter().any(|a| a == "-jar") {
             anyhow::bail!(
-                "Docker 启动缺少 -jar：请先导入 server.jar 或设置启动命令"
+                "Docker 启动缺少 -jar:请先导入 server.jar 或设置启动命令"
             );
         }
         crate::util::inject_jvm_memory(&mut args, memory_mib);
     }
 
-    let mut docker_args: Vec<String> = vec![
-        "run".into(),
-        "-d".into(),
-        "-i".into(),
-        "--name".into(),
-        name.clone(),
-        "-v".into(),
-        format!("{mount}:/data"),
-        "-w".into(),
-        "/data".into(),
-        "-p".into(),
-        format!("{port}:25565"),
-        "--memory".into(),
-        format!("{memory_mib}m"),
-    ];
-    if let Some(cpus) = cpu_limit {
-        if cpus > 0.0 {
-            docker_args.push("--cpus".into());
-            docker_args.push(format!("{cpus:.2}"));
-        }
-    }
-    docker_args.push(image.to_string());
-    docker_args.push(bin.clone());
-    docker_args.extend(args);
+    let spec = ContainerSpawnSpec {
+        name: name.clone(),
+        image: image.to_string(),
+        workdir: workdir.clone(),
+        command: bin.clone(),
+        args,
+        memory_mib,
+        host_port: port,
+        container_port: 25565,
+        cpu_limit,
+        env: Vec::new(),
+    };
 
-    info!(%name, %image, %mount, bin = %bin, "starting docker container instance");
+    let handle = rt.spawn(spec).await.context("spawn container")?;
 
-    let out = docker_cmd()
-        .args(&docker_args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "docker run failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let pid = process::docker_container_pid(&name)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("docker container started but pid is unavailable"))?;
     process::adopt_running(
         instance_id,
-        pid,
+        handle.pid,
         workdir,
         events,
         Some(name),
@@ -164,7 +95,33 @@ pub async fn spawn_docker_instance(
     .await
 }
 
-fn docker_mount_path(abs: &PathBuf) -> String {
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DockerImage {
+    pub repo_tag: String,
+    pub id: String,
+    pub size: String,
+}
+
+pub async fn list_images() -> anyhow::Result<Vec<DockerImage>> {
+    let rt = runtime::require_runtime().await?;
+    let images = rt.list_images().await?;
+    Ok(images
+        .into_iter()
+        .map(|i| DockerImage {
+            repo_tag: i.repo_tag,
+            id: i.id,
+            size: i.size,
+        })
+        .collect())
+}
+
+/// Pull an image by reference (used by the install/pull API).
+pub async fn pull_image(image: &str) -> anyhow::Result<()> {
+    let rt = runtime::require_runtime().await?;
+    rt.pull_image(image).await
+}
+
+pub(crate) fn docker_mount_path(abs: &PathBuf) -> String {
     let mut s = abs.to_string_lossy().to_string();
     if let Some(rest) = s.strip_prefix(r"\\?\") {
         s = rest.to_string();
@@ -182,54 +139,4 @@ fn docker_mount_path(abs: &PathBuf) -> String {
         }
     }
     s.replace('\\', "/")
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct DockerImage {
-    pub repo_tag: String,
-    pub id: String,
-    pub size: String,
-}
-
-fn docker_cmd() -> Command {
-    let mut cmd = Command::new("docker");
-    crate::wincompat::hide_console(&mut cmd);
-    cmd
-}
-
-pub async fn list_images() -> anyhow::Result<Vec<DockerImage>> {
-    let status = docker_status().await;
-    if !status.available {
-        anyhow::bail!("{}", status.message);
-    }
-    let out = docker_cmd()
-        .args([
-            "images",
-            "--format",
-            "{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "docker images: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let mut images = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let mut parts = line.splitn(3, '\t');
-        let repo_tag = parts.next().unwrap_or("").to_string();
-        if repo_tag.is_empty() || repo_tag == "<none>:<none>" {
-            continue;
-        }
-        images.push(DockerImage {
-            repo_tag,
-            id: parts.next().unwrap_or("").to_string(),
-            size: parts.next().unwrap_or("").to_string(),
-        });
-    }
-    Ok(images)
 }
