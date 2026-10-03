@@ -12,6 +12,8 @@ use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast;
 
+use anyhow::Context as _;
+
 use crate::instance::InstanceEvent;
 
 const DEFAULT_UA: &str = "Cocktail-Manager/0.1 (https://github.com/CocktailMC/Cocktail)";
@@ -287,6 +289,7 @@ pub async fn download_to_path(
     job: &Transfer,
 ) -> anyhow::Result<u64> {
     job.emit("download", 0, None);
+    tracing::info!(%url, dest = %dest.display(), "download_to_path: sending request");
     let resp = client
         .get(url)
         .send()
@@ -295,16 +298,33 @@ pub async fn download_to_path(
         .error_for_status()
         .map_err(|e| explain(e, url))?;
     let total = resp.content_length();
-    let mut file = tokio::fs::File::create(dest).await?;
+    tracing::info!(%url, status = %resp.status(), content_length = total, dest = %dest.display(), "download_to_path: response received");
+    if let Some(parent) = dest.parent() {
+        if !parent.as_os_str().is_empty() {
+            tracing::debug!(parent = %parent.display(), "download_to_path: ensuring parent dir exists");
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("create parent dir {} for {}", parent.display(), dest.display()))?;
+        }
+    }
+    tracing::debug!(dest = %dest.display(), "download_to_path: creating file");
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .with_context(|| format!("create file {}", dest.display()))?;
     let mut stream = resp.bytes_stream();
     let mut written = 0u64;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| explain(e, url))?;
         written += chunk.len() as u64;
-        file.write_all(&chunk).await?;
+        file.write_all(&chunk)
+            .await
+            .with_context(|| format!("write to file {} ({} bytes written)", dest.display(), written))?;
         job.emit("download", written, total);
     }
-    file.flush().await?;
+    file.flush()
+        .await
+        .with_context(|| format!("flush file {}", dest.display()))?;
+    tracing::info!(%url, dest = %dest.display(), written, "download_to_path: complete");
     job.emit("download", written, total);
     Ok(written)
 }
@@ -316,6 +336,7 @@ pub async fn download_vec(
     max_bytes: u64,
 ) -> anyhow::Result<Vec<u8>> {
     job.emit("download", 0, None);
+    tracing::info!(%url, "download_vec: sending request");
     let resp = client
         .get(url)
         .send()
@@ -324,6 +345,7 @@ pub async fn download_vec(
         .error_for_status()
         .map_err(|e| explain(e, url))?;
     let total = resp.content_length();
+    tracing::info!(%url, status = %resp.status(), content_length = total, "download_vec: response received");
     let mut stream = resp.bytes_stream();
     let mut buf = Vec::new();
     if let Some(t) = total.filter(|n| *n > 0 && *n <= max_bytes) {
@@ -338,6 +360,7 @@ pub async fn download_vec(
         job.emit("download", buf.len() as u64, total);
     }
     let n = buf.len() as u64;
+    tracing::info!(%url, bytes = n, "download_vec: complete");
     job.finish(n, total.or(Some(n)));
     Ok(buf)
 }

@@ -495,7 +495,11 @@ pub async fn ensure_instance_jre(
     mc_version: Option<&str>,
 ) -> anyhow::Result<PathBuf> {
     let major = java_major.unwrap_or_else(|| recommended_java_major(mc_version));
-    let dest = instance_jre_home(Path::new(workdir));
+    // The child changes its working directory before executing Java on Unix.
+    // Resolve here so a relative instance path is not interpreted twice.
+    let work = std::path::absolute(workdir)
+        .with_context(|| format!("resolve instance directory {workdir}"))?;
+    let dest = instance_jre_home(&work);
     if let Some(bin) = locate_java(&dest) {
         if major_from_home(&dest) == Some(major) {
             return Ok(bin);
@@ -998,6 +1002,20 @@ fn java_prop_path(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cached_instance_jre_returns_absolute_path() {
+        let work = PathBuf::from(format!(".java-path-test-{}", uuid::Uuid::new_v4()));
+        let home = instance_jre_home(&work);
+        fs::create_dir_all(home.join("bin")).unwrap();
+        fs::write(home.join("bin").join(java_exe()), b"").unwrap();
+        fs::write(home.join("release"), "JAVA_VERSION=\"21.0.5\"\n").unwrap();
+        let result = ensure_instance_jre(work.to_str().unwrap(), Some(21), None).await;
+        fs::remove_dir_all(&work).unwrap();
+        let bin = result.unwrap();
+        assert!(bin.is_absolute());
+        assert_eq!(bin, std::env::current_dir().unwrap().join(home).join("bin").join(java_exe()));
+    }
 
     #[test]
     fn rewrite_always_pins_java() {

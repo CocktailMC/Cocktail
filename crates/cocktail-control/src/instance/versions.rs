@@ -9,6 +9,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use anyhow::Context as _;
+
 const USER_AGENT: &str = "Cocktail-Manager/0.1 (https://github.com/cocktail; contact=dev@local)";
 const MAX_LIST: usize = 40;
 
@@ -101,7 +103,8 @@ pub async fn download_and_install(
     version: &str,
     loader: Option<&str>,
 ) -> anyhow::Result<(String, Vec<String>)> {
-    fs::create_dir_all(workdir)?;
+    fs::create_dir_all(workdir)
+        .with_context(|| format!("create server directory {workdir}"))?;
     let loader = opt_loader(loader);
     match core {
         "forge" => install_forge(workdir, version, loader).await,
@@ -218,7 +221,8 @@ async fn write_server_jar(workdir: &str, url: &str, label: &str) -> anyhow::Resu
     if bytes.len() < 1024 {
         anyhow::bail!("downloaded jar looks too small ({} bytes)", bytes.len());
     }
-    fs::write(&jar_path, &bytes)?;
+    fs::write(&jar_path, &bytes)
+        .with_context(|| format!("write downloaded server jar {}", jar_path.display()))?;
     tracing::info!(path = %jar_path.display(), size = bytes.len(), "server jar installed");
     Ok(crate::util::java_jar_startup("server.jar"))
 }
@@ -989,7 +993,10 @@ async fn run_java_installer(
         .await
         .map_err(|_| anyhow::anyhow!("installer timed out (java --installServer)"))?
         .map_err(|e| {
-            anyhow::anyhow!("failed to spawn java (needed to run the installer): {e}")
+            anyhow::anyhow!(
+                "failed to spawn java {} in {} (needed to run the installer): {e}",
+                java.display(), workdir
+            )
         })?;
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
