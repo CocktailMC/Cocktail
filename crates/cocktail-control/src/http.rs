@@ -1,8 +1,8 @@
-//! Outbound HTTP: OS certificate store + Windows system proxy.
-//!
-//! Browser traffic often works while reqwest fails on Windows because:
-//! - rustls + Mozilla roots ignore 杀毒 HTTPS 扫描 / 企业 CA
-//! - Clash / 系统代理写在 IE/WinINET，进程环境变量里没有 HTTPS_PROXY
+
+
+
+
+
 
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};

@@ -12,11 +12,11 @@ use crate::util;
 use super::files;
 use super::model::{
     is_local_node,
-    BackupInfo, BulkActionRequest, BulkActionResult, BulkFailure, CommandRequest,
-    CreateInstanceRequest, CreateScheduleRequest, EulaRequest, FileContent, FileEntry, FleetSummary,
-    GroupCount, Instance, InstanceEvent, InstanceSpec, InstanceStatus, InstanceView, PlayerInfo,
-    PluginInfo, PropertyEntry, RuntimeCount, RuntimeKind, Schedule, ScheduleKind,
-    UpdateInstanceRequest,
+    BackupInfo, BulkActionRequest, BulkActionResult, BulkFailure, CloneInstanceRequest,
+    CommandRequest, CreateInstanceRequest, CreateScheduleRequest, EulaRequest, FileContent,
+    FileEntry, FleetSummary, GroupCount, Instance, InstanceEvent, InstanceSpec, InstanceStatus,
+    InstanceView, PlayerInfo, PluginInfo, PreflightReport, PropertyEntry, RestorePreview,
+    RuntimeCount, RuntimeKind, Schedule, ScheduleKind, UpdateInstanceRequest, VersionCompare,
 };
 use super::process::{self, StopMode};
 
@@ -330,7 +330,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
     let mc_version = instance.spec.mc_version.clone();
     let events = state.events.clone();
 
-    // Auto-wire java -jar if server.jar exists but command was never set.
+    
     if command.is_none() || (command.as_deref() == Some("java") && args.is_empty()) {
         if files::jar_exists(&workdir, "server.jar") {
             let (cmd, a) = util::java_jar_startup("server.jar");
@@ -959,7 +959,7 @@ pub async fn mkdir(state: &AppState, id: &str, path: &str) -> anyhow::Result<Fil
     Ok(out)
 }
 
-/// Upload a server jar and auto-configure `java -jar <path> nogui`.
+
 pub async fn install_local_jar(
     state: &AppState,
     id: &str,
@@ -1021,7 +1021,7 @@ pub async fn install_local_jar(
     Ok(out)
 }
 
-/// Point startup at an existing jar under the instance workdir.
+
 pub async fn set_startup_jar(
     state: &AppState,
     id: &str,
@@ -1560,7 +1560,7 @@ pub async fn list_players(state: &AppState, id: &str) -> anyhow::Result<Vec<Play
     Ok(super::players::list_enriched(state, id, &view.last_players).await)
 }
 
-/// Optionally probe the server with `list` (writes to console). Prefer cached names.
+
 pub async fn probe_players(state: &AppState, id: &str) -> anyhow::Result<Vec<PlayerInfo>> {
     let view = get_instance(state, id)
         .await
@@ -1716,7 +1716,7 @@ async fn ensure_port_free(
             );
         }
         if inst.spec.port == port && except_id.is_some() {
-            // Also warn on assigned but stopped? Allow reuse when stopped.
+            
             continue;
         }
         if inst.spec.port == port {
@@ -1765,6 +1765,11 @@ pub async fn run_due_schedules(state: &std::sync::Arc<AppState>) {
         match sched.kind {
             ScheduleKind::Backup => {
                 let _ = create_backup(state, &sched.instance_id).await;
+                let keep = get_instance(state, &sched.instance_id)
+                    .await
+                    .map(|v| v.spec.backup_keep.max(1))
+                    .unwrap_or(7);
+                let _ = files::prune_backups(&sched.instance_id, keep);
             }
             ScheduleKind::Restart => {
                 let _ = restart_instance(state, &sched.instance_id).await;
@@ -1856,6 +1861,429 @@ pub async fn fleet_summary(state: &AppState) -> FleetSummary {
             .collect(),
         docker: super::container::docker_status().await,
     }
+}
+
+pub async fn clone_instance(
+    state: &AppState,
+    id: &str,
+    req: CloneInstanceRequest,
+) -> anyhow::Result<InstanceView> {
+    let src = get_instance(state, id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+    let src_workdir = src.spec.workdir.clone();
+    let new_id = Uuid::new_v4().to_string();
+    let name = req
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{} 副本", src.spec.name));
+    let node_id = req
+        .node_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| src.spec.node_id.clone());
+    if !cluster::node_exists(state, &node_id).await {
+        anyhow::bail!("节点不存在：{node_id}");
+    }
+    let port = match req.port {
+        Some(p) => p,
+        None => next_free_port(state, &node_id, src.spec.port).await?,
+    };
+    ensure_port_free(state, port, &node_id, None).await?;
+    let workdir = req
+        .workdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| files::default_instance_root(&new_id));
+    ensure_exclusive_workdir(state, &workdir, None).await?;
+
+    let copy_data = req.copy_data.unwrap_or(true);
+    let src_dir = src_workdir.clone();
+    let dst_dir = workdir.clone();
+    let skip_logs = req.skip_logs.unwrap_or(true);
+    tokio::task::spawn_blocking(move || {
+        files::copy_instance_tree(&src_dir, &dst_dir, copy_data, skip_logs)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("复制任务失败：{e}"))??;
+
+    if is_local_node(&node_id) {
+        files::ensure_seed_files(&workdir, port, src.spec.eula_accepted)?;
+        files::sync_port(&workdir, port)?;
+    }
+
+    let mut spec = src.spec.clone();
+    spec.name = name;
+    spec.workdir = workdir;
+    spec.port = port;
+    spec.node_id = node_id;
+    spec.desired_running = false;
+    let instance = Instance::with_id(new_id.clone(), spec);
+    let view = instance.public_view();
+    state.instances.write().await.insert(new_id.clone(), instance);
+    state.publish(InstanceEvent::StatusChanged {
+        instance_id: new_id.clone(),
+        status: InstanceStatus::Created,
+        at: Utc::now(),
+    });
+    let _ = state.persist().await;
+    let _ = crate::netops::try_apply(state).await;
+    util::audit(
+        "instance.clone",
+        Some(&new_id),
+        json!({ "from": id, "port": port, "copy_data": copy_data }),
+        "api",
+    );
+    Ok(view)
+}
+
+async fn next_free_port(state: &AppState, node_id: &str, from: u16) -> anyhow::Result<u16> {
+    let guard = state.instances.read().await;
+    let used: Vec<u16> = guard
+        .values()
+        .filter(|i| {
+            i.spec.node_id == node_id
+                || (is_local_node(&i.spec.node_id) && is_local_node(node_id))
+        })
+        .map(|i| i.spec.port)
+        .collect();
+    drop(guard);
+    let mut candidate = from.saturating_add(1).max(25566);
+    for _ in 0..2000 {
+        if !used.contains(&candidate) && !port_in_use(candidate) {
+            return Ok(candidate);
+        }
+        candidate = candidate.saturating_add(1);
+        if candidate == 0 {
+            candidate = 25566;
+        }
+    }
+    anyhow::bail!("找不到可用端口，请手动指定")
+}
+
+pub fn port_in_use(port: u16) -> bool {
+    std::net::TcpListener::bind(("0.0.0.0", port)).is_err()
+}
+
+pub fn free_disk_bytes(path: &str) -> Option<u64> {
+    let target = std::path::Path::new(path);
+    let probe = if target.exists() {
+        target.to_path_buf()
+    } else {
+        target.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."))
+    };
+    let out = std::process::Command::new("df")
+        .arg("-Pk")
+        .arg(&probe)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().nth(1)?;
+    let cols: Vec<&str> = line.split_whitespace().collect();
+    let avail_kb: u64 = cols.get(3)?.parse().ok()?;
+    Some(avail_kb.saturating_mul(1024))
+}
+
+fn dir_size_bytes(path: &str) -> u64 {
+    fn walk(dir: &std::path::Path, total: &mut u64, depth: u32) {
+        if depth > 24 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_symlink() {
+                continue;
+            }
+            if p.is_dir() {
+                walk(&p, total, depth + 1);
+            } else if let Ok(meta) = p.metadata() {
+                *total += meta.len();
+            }
+        }
+    }
+    let mut total = 0u64;
+    walk(std::path::Path::new(path), &mut total, 0);
+    total
+}
+
+pub async fn preflight_start(state: &AppState, id: &str) -> anyhow::Result<Vec<String>> {
+    let view = get_instance(state, id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+    let mut warnings = Vec::new();
+    if view.spec.runtime == RuntimeKind::Process && !is_local_node(&view.spec.node_id) {
+        warnings.push("远程节点实例的资源预检在 agent 侧执行".to_string());
+        return Ok(warnings);
+    }
+    if view.spec.runtime == RuntimeKind::Process && port_in_use(view.spec.port) {
+        let ours = {
+            let guard = state.instances.read().await;
+            guard
+                .values()
+                .filter(|i| i.spec.port == view.spec.port && i.id != view.id)
+                .count()
+        };
+        if ours == 0 {
+            warnings.push(format!(
+                "端口 {} 已被本机其他进程占用，启动可能失败",
+                view.spec.port
+            ));
+        }
+    }
+    let need = view.spec.memory_mib as u64 * 1024 * 1024;
+    let workdir = view.spec.workdir.clone();
+    let (free, used) = tokio::task::spawn_blocking(move || {
+        (free_disk_bytes(&workdir), dir_size_bytes(&workdir))
+    })
+    .await
+    .unwrap_or((None, 0));
+    if let Some(free) = free {
+        if free < need {
+            warnings.push(format!(
+                "磁盘可用 {} MiB，低于实例内存上限 {} MiB，备份可能失败",
+                free / (1024 * 1024),
+                view.spec.memory_mib
+            ));
+        } else if free < need * 2 {
+            warnings.push(format!(
+                "磁盘可用 {} MiB 偏紧（当前工作目录已占 {} MiB）",
+                free / (1024 * 1024),
+                used / (1024 * 1024)
+            ));
+        }
+    }
+    if !view.spec.eula_accepted && view.spec.core != "demo" {
+        warnings.push("EULA 尚未接受".to_string());
+    }
+    if view.spec.command.is_none() && !files::jar_exists(&view.spec.workdir, "server.jar") {
+        warnings.push("未配置启动命令且找不到 server.jar".to_string());
+    }
+    Ok(warnings)
+}
+
+pub async fn detect_mc_version(state: &AppState, id: &str) -> anyhow::Result<Option<String>> {
+    let view = get_instance(state, id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+    if !is_local_node(&view.spec.node_id) {
+        return Ok(None);
+    }
+    let found = files::guess_mc_version(&view.spec.workdir);
+    if let Some(v) = found.as_deref() {
+        let mut guard = state.instances.write().await;
+        if let Some(inst) = guard.get_mut(id) {
+            if inst.spec.mc_version.as_deref() != Some(v) {
+                inst.spec.mc_version = Some(v.to_string());
+                inst.updated_at = Utc::now();
+            }
+        }
+        drop(guard);
+        let _ = state.persist().await;
+    }
+    Ok(found)
+}
+
+pub async fn preflight_report(state: &AppState, id: &str) -> anyhow::Result<PreflightReport> {
+    let view = get_instance(state, id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+    let warnings = preflight_start(state, id).await?;
+    let workdir = view.spec.workdir.clone();
+    let (free, used) = tokio::task::spawn_blocking(move || {
+        (free_disk_bytes(&workdir), dir_size_bytes(&workdir))
+    })
+    .await
+    .unwrap_or((None, 0));
+    let port_busy = view.spec.runtime == RuntimeKind::Process && port_in_use(view.spec.port);
+    Ok(PreflightReport {
+        instance_id: view.id,
+        warnings,
+        free_bytes: free,
+        used_bytes: used,
+        port_busy,
+    })
+}
+
+pub async fn backup_preview(
+    state: &AppState,
+    id: &str,
+    backup_id: &str,
+) -> anyhow::Result<RestorePreview> {
+    let workdir = workdir_of(state, id).await?;
+    let meta = files::backup_meta(id, backup_id)?;
+    let path = files::backup_path(id, backup_id)?;
+    let target = path.clone();
+    let scan = tokio::task::spawn_blocking(move || files::inspect_backup_zip(&target))
+        .await
+        .map_err(|e| anyhow::anyhow!("读取备份失败：{e}"))??;
+    let mut warnings = Vec::new();
+    if !scan.has_server_properties {
+        warnings.push("备份内没有 server.properties，恢复后端口与配置可能被重置".to_string());
+    }
+    if !scan.has_level_dat {
+        warnings.push("备份内没有 level.dat，可能不是完整的世界存档".to_string());
+    }
+    if scan.plugin_count == 0 {
+        warnings.push("备份内没有插件，恢复后功能可能缺失".to_string());
+    }
+    let current = files::total_dir_bytes(&workdir);
+    if current > scan.size_bytes.saturating_mul(4).max(64 * 1024 * 1024) {
+        warnings.push(format!(
+            "当前目录 {} MiB 明显大于备份 {} MiB，恢复会丢弃新增内容",
+            current / (1024 * 1024),
+            scan.size_bytes / (1024 * 1024)
+        ));
+    }
+    Ok(RestorePreview {
+        backup_id: backup_id.to_string(),
+        size_bytes: meta.size_bytes,
+        created_at: meta.created_at.to_rfc3339(),
+        entries: scan.entries,
+        world_size_bytes: scan.world_bytes,
+        plugin_count: scan.plugin_count,
+        has_server_properties: scan.has_server_properties,
+        has_level_dat: scan.has_level_dat,
+        warnings,
+    })
+}
+
+pub async fn version_compare(state: &AppState, id: &str) -> anyhow::Result<VersionCompare> {
+    let view = get_instance(state, id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+    let current = view.spec.mc_version.clone();
+    let core = view.spec.core.clone();
+    if core == "custom" || core == "demo" {
+        return Ok(VersionCompare {
+            current,
+            latest: None,
+            behind: false,
+            note: "自定义核心不参与版本比对".into(),
+        });
+    }
+    let versions = super::versions::list_versions(&core).await.unwrap_or_default();
+    let latest = versions
+        .iter()
+        .find(|v| v.latest)
+        .map(|v| v.id.clone())
+        .or_else(|| versions.first().map(|v| v.id.clone()));
+    let behind = match (current.as_deref(), latest.as_deref()) {
+        (Some(c), Some(l)) => c != l,
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    let note = match (current.as_deref(), latest.as_deref()) {
+        (Some(c), Some(l)) if c == l => format!("已是最新（{c}）"),
+        (Some(c), Some(l)) => format!("本机 {c}，仓库最新 {l}"),
+        (None, Some(l)) => format!("未记录版本，仓库最新 {l}"),
+        _ => "无法获取远端版本列表（检查代理/网络）".into(),
+    };
+    Ok(VersionCompare {
+        current,
+        latest,
+        behind,
+        note,
+    })
+}
+
+pub async fn world_download(
+    state: &AppState,
+    id: &str,
+    world: &str,
+) -> anyhow::Result<(String, std::path::PathBuf)> {
+    let view = get_instance(state, id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+    if !is_local_node(&view.spec.node_id) {
+        anyhow::bail!("远程节点的世界导出请在该节点本机执行");
+    }
+    let safe = world
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' { c } else { '_' })
+        .collect::<String>();
+    let dir = std::path::PathBuf::from("data")
+        .join("backups")
+        .join(id);
+    let stamp = Utc::now().format("%Y%m%d-%H%M%S");
+    let filename = format!("{safe}-{stamp}.zip");
+    let dest = dir.join(&filename);
+    let workdir = view.spec.workdir.clone();
+    let rel = world.to_string();
+    let dest_clone = dest.clone();
+    tokio::task::spawn_blocking(move || files::pack_subdir_zip(&workdir, &rel, &dest_clone))
+        .await
+        .map_err(|e| anyhow::anyhow!("打包失败：{e}"))??;
+    util::audit(
+        "world.download",
+        Some(id),
+        json!({ "world": world, "file": filename }),
+        "api",
+    );
+    Ok((filename, dest))
+}
+
+pub async fn world_upload(
+    state: &AppState,
+    id: &str,
+    world: &str,
+    bytes: &[u8],
+) -> anyhow::Result<u32> {
+    let view = get_instance(state, id)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
+    if matches!(
+        view.status,
+        InstanceStatus::Running | InstanceStatus::Starting | InstanceStatus::Stopping
+    ) {
+        anyhow::bail!("请先停止实例再导入世界");
+    }
+    if !is_local_node(&view.spec.node_id) {
+        anyhow::bail!("远程节点的世界导入请在该节点本机执行");
+    }
+    let workdir = view.spec.workdir.clone();
+    let rel = world.to_string();
+    let owned = bytes.to_vec();
+    let count = tokio::task::spawn_blocking(move || files::extract_zip_into(&workdir, &rel, &owned))
+        .await
+        .map_err(|e| anyhow::anyhow!("解压失败：{e}"))??;
+    util::audit(
+        "world.upload",
+        Some(id),
+        json!({ "world": world, "files": count }),
+        "api",
+    );
+    Ok(count)
+}
+
+pub async fn rescan_version(state: &AppState, id: &str) -> anyhow::Result<Option<String>> {
+    let found = detect_mc_version(state, id).await?;
+    if let Some(v) = found.as_deref() {
+        let view = get_instance(state, id).await;
+        if let Some(view) = view {
+            if is_local_node(&view.spec.node_id) {
+                let _ = files::write_mc_version_marker(&view.spec.workdir, v);
+            }
+        }
+    }
+    Ok(found)
+}
+
+pub async fn prune_instance_backups(state: &AppState, id: &str, keep: u32) -> anyhow::Result<usize> {
+    if get_instance(state, id).await.is_none() {
+        anyhow::bail!("instance not found");
+    }
+    files::prune_backups(id, keep.max(1))
 }
 
 pub async fn bulk_action(

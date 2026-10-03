@@ -1,4 +1,4 @@
-//! Host network ticker, QQ alerts, and periodic status digest.
+
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -44,6 +44,7 @@ pub fn spawn(state: &SharedState) {
         loop {
             interval.tick().await;
             let _ = crate::netops::expire_now(&state).await;
+            state.purge_sessions().await;
             crate::automations::tick(&state).await;
             crate::automations::run_backup_hours(&state).await;
             sample_local_node(&state).await;

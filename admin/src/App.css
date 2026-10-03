@@ -1,4 +1,4 @@
-/* —— Shell —— */
+
 .app-shell {
   min-height: 100vh;
   display: flex;
@@ -6,7 +6,7 @@
   background: transparent;
 }
 
-/* —— Top header —— */
+
 .topbar {
   height: 56px;
   background: linear-gradient(180deg, #1e2834 0%, var(--sidebar-bg) 100%);
@@ -198,7 +198,7 @@
   font-size: 0.75rem;
 }
 
-/* —— Body: sidebar + main —— */
+
 .app-body {
   display: flex;
   flex: 1;
@@ -571,7 +571,7 @@
   opacity: 0.35;
 }
 
-/* —— Main —— */
+
 .main {
   flex: 1;
   overflow-y: auto;
@@ -1374,7 +1374,7 @@
   }
 }
 
-/* —— Global loading —— */
+
 .load-bar {
   position: fixed;
   top: 0;
@@ -1502,7 +1502,7 @@
   pointer-events: none;
 }
 
-/* —— server.properties editor —— */
+
 .props-layout {
   display: flex;
   flex-direction: column;
@@ -1748,7 +1748,7 @@
   }
 }
 
-/* —— Plugin store —— */
+
 .store-panel {
   display: flex;
   flex-direction: column;
@@ -2314,7 +2314,7 @@
 }
 
 
-/* —— Brand icons (Simple Icons / m3 badges) —— */
+
 .brand-img {
   display: inline-block;
   vertical-align: -0.2em;
@@ -2336,7 +2336,7 @@
   opacity: 1;
 }
 
-/* —— Env brand bar (project + OS + chips) —— */
+
 .env-brand-bar {
   display: flex;
   flex-wrap: wrap;
@@ -2446,7 +2446,7 @@
   filter: none;
 }
 
-/* —— Home / fleet —— */
+
 .home-page {
   display: flex;
   flex-direction: column;
@@ -2505,7 +2505,7 @@
 }
 
 .home-source-chip .brand-img {
-  /* Simple Icons SVGs are black */
+  
   opacity: 0.9;
 }
 

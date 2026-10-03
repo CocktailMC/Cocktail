@@ -1,4 +1,4 @@
-//! Host-wide NIC traffic and TCP state (not bound to a single game port).
+
 
 use std::path::Path;
 use std::time::Instant;
@@ -113,7 +113,7 @@ pub fn sample(prev: &HostNetPrev, rx_alert_bps: f32) -> (HostNetSample, HostNetP
             rx_bytes: n.rx,
             tx_bytes: n.tx,
             rx_bps: if prev.at.is_some() {
-                // Per-NIC rate is approximate from share of totals if we lack history.
+                
                 if rx > 0 {
                     rx_bps * (n.rx as f32 / rx as f32)
                 } else {

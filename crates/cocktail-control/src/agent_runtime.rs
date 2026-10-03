@@ -1,4 +1,4 @@
-//! Remote node agent — runs instances on behalf of the control plane.
+
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -95,11 +95,12 @@ async fn serve_once(url: &str) -> anyhow::Result<()> {
 
     let mut ev_rx = events.subscribe();
     let mut beat = tokio::time::interval(Duration::from_secs(15));
+    let mut net_prev = crate::hostnet::HostNetPrev::default();
 
     loop {
         tokio::select! {
             _ = beat.tick() => {
-                sink.send(Message::Text(serde_json::to_string(&sample_heartbeat())?.into()))
+                sink.send(Message::Text(serde_json::to_string(&sample_heartbeat(&mut net_prev))?.into()))
                     .await?;
             }
             ev = ev_rx.recv() => {
@@ -302,15 +303,17 @@ async fn spawn_live(
     }
 }
 
-fn sample_heartbeat() -> AgentUp {
+fn sample_heartbeat(prev: &mut crate::hostnet::HostNetPrev) -> AgentUp {
     let mut sys = sysinfo::System::new();
     sys.refresh_cpu_all();
     sys.refresh_memory();
+    let (sample, next) = crate::hostnet::sample(prev, 0.0);
+    *prev = next;
     AgentUp::Heartbeat {
         cpu_pct: sys.global_cpu_usage(),
         memory_mib: (sys.used_memory() as f32) / (1024.0 * 1024.0),
-        rx_bps: 0.0,
-        tx_bps: 0.0,
+        rx_bps: sample.rx_bps,
+        tx_bps: sample.tx_bps,
     }
 }
 

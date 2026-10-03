@@ -1,4 +1,4 @@
-//! Custom instance pack import: extract zip/7z/tar.* and detect startup.
+
 
 use std::fs::{self, File};
 use std::io;

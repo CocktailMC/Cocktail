@@ -17,6 +17,7 @@ pub use archive::{import_archive, ImportArchiveOpts, MAX_ARCHIVE_BYTES};
 pub use container::{DockerImage, DockerStatus};
 pub use hangar::{InstallRequest as InstallHangarRequest, VersionsQuery as HangarVersionsQuery};
 pub use model::*;
+pub use files::BackupScan;
 pub use modrinth::{InstallModrinthRequest, SearchQuery, VersionsQuery as ModrinthVersionsQuery};
 pub use process::ProcessHandle;
 pub use registry::*;

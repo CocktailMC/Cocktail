@@ -177,6 +177,34 @@ pub fn router() -> Router<SharedState> {
             post(handlers::import_world),
         )
         .route(
+            "/api/v1/instances/{id}/worlds/{world}/download",
+            get(handlers::world_download),
+        )
+        .route(
+            "/api/v1/instances/{id}/worlds/{world}/upload",
+            post(handlers::world_upload),
+        )
+        .route(
+            "/api/v1/instances/{id}/clone",
+            post(handlers::clone_instance),
+        )
+        .route(
+            "/api/v1/instances/{id}/preflight",
+            get(handlers::preflight),
+        )
+        .route(
+            "/api/v1/instances/{id}/version-compare",
+            get(handlers::version_compare),
+        )
+        .route(
+            "/api/v1/instances/{id}/version-rescan",
+            post(handlers::rescan_version),
+        )
+        .route(
+            "/api/v1/instances/{id}/backups/{backup_id}/preview",
+            get(handlers::backup_preview),
+        )
+        .route(
             "/api/v1/schedules",
             get(handlers::list_schedules).post(handlers::create_schedule),
         )
@@ -195,8 +223,8 @@ pub fn router() -> Router<SharedState> {
         )
         .route("/api/v1/automations/{id}", delete(handlers::delete_automation))
         .route("/api/v1/users", get(handlers::list_users).post(handlers::create_user))
-        .route("/api/v1/users/{id}", delete(handlers::delete_user))
-        .route("/api/v1/fleet/bulk", post(handlers::fleet_bulk))
+        .route("/api/v1/users/{id}", delete(handlers::delete_user).put(handlers::update_user))
+        .route("/api/v1/fleet/bulk", post(handlers::bulk_action))
         .route("/api/v1/docker/status", get(handlers::docker_status))
         .route("/api/v1/docker/images", get(handlers::docker_images))
         .route("/api/v1/docker/images/pull", post(handlers::docker_pull))

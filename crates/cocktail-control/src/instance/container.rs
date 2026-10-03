@@ -1,7 +1,7 @@
-//! Container instance runtime — backed by the Bollard SDK (Docker/Podman).
-//!
-//! This module is a thin façade over `crate::instance::runtime`, keeping the
-//! public API used by `registry.rs` and `handlers.rs` stable.
+
+
+
+
 
 use std::path::PathBuf;
 
@@ -115,7 +115,7 @@ pub async fn list_images() -> anyhow::Result<Vec<DockerImage>> {
         .collect())
 }
 
-/// Pull an image by reference (used by the install/pull API).
+
 pub async fn pull_image(image: &str) -> anyhow::Result<()> {
     let rt = runtime::require_runtime().await?;
     rt.pull_image(image).await
@@ -128,7 +128,7 @@ pub(crate) fn docker_mount_path(abs: &PathBuf) -> String {
     } else if let Some(rest) = s.strip_prefix("//?/") {
         s = rest.to_string();
     }
-    // Docker Desktop on Windows: C:\foo -> /c/foo
+    
     #[cfg(windows)]
     {
         let b = s.as_bytes();

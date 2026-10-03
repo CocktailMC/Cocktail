@@ -3,7 +3,7 @@ import { formatBytes, type DownloadProgress } from './api'
 type Props = {
   active: boolean
   label?: string
-  /** Non-blocking status strip (e.g. starting/stopping) */
+  
   statusHint?: string | null
   progress?: DownloadProgress | null
 }
@@ -16,7 +16,7 @@ const PHASE_LABEL: Record<string, string> = {
   done: '完成',
 }
 
-/** Top bar + optional blocking wait panel, with determinate download progress. */
+
 export default function BusyOverlay({ active, label, statusHint, progress }: Props) {
   const pct =
     progress?.pct != null && Number.isFinite(progress.pct)

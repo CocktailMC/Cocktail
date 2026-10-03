@@ -1,4 +1,4 @@
-//! Condition → action rules (TPS, players, crash, CPU).
+
 
 use std::time::{Duration, Instant};
 
@@ -263,6 +263,6 @@ pub async fn run_backup_hours(state: &SharedState) {
             hold.insert(stamp_key, Instant::now());
         }
         let _ = crate::instance::create_backup(state, &id).await;
-        let _ = keep;
+        let _ = crate::instance::prune_instance_backups(state, &id, keep).await;
     }
 }

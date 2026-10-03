@@ -1,4 +1,4 @@
-//! Cocktail Manager control plane library (shared with `cocktail-agent`).
+
 
 pub mod agent_runtime;
 mod api;
@@ -46,13 +46,13 @@ use crate::state::{AppState, SharedState};
 
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
-/// CLI 子命令:重置 super-admin 密码
-///
-/// 用法:`cocktail-control reset-password`
-///
-/// 适用于忘记密码、无法登录控制面的恢复场景。
-/// 直接读写 SQLite,不需要控制面进程运行,不需要当前密码。
-/// 注意:密码在终端会明文回显(单机本地场景风险可控)。
+
+
+
+
+
+
+
 pub fn run_reset_password() -> anyhow::Result<()> {
     use std::io::{self, Write};
 
@@ -103,8 +103,9 @@ pub async fn run_plane() -> anyhow::Result<()> {
         .init();
 
     let state = Arc::new(AppState::new());
+    crate::util::migrate_audit_jsonl();
 
-    // Detect and initialise the container runtime (Docker or Podman).
+    
     match instance::runtime::ContainerRuntime::detect().await {
         Ok(rt) => {
             let engine = rt.engine.as_str();
@@ -138,9 +139,20 @@ pub async fn run_plane() -> anyhow::Result<()> {
         .merge(api)
         .layer(
             CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
+                .allow_origin(cors_origins())
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::PUT,
+                    axum::http::Method::DELETE,
+                    axum::http::Method::OPTIONS,
+                ])
+                .allow_headers([
+                    axum::http::header::AUTHORIZATION,
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::HeaderName::from_static("x-cocktail-csrf"),
+                ])
+                .allow_credentials(true),
         )
         .layer(TraceLayer::new_for_http());
 
@@ -193,6 +205,79 @@ fn resolve_web_root() -> Option<PathBuf> {
     None
 }
 
+fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
+    let read = matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD);
+    if path.starts_with("/api/v1/users") {
+        return "users";
+    }
+    if path.starts_with("/api/v1/nodes") {
+        return "nodes";
+    }
+    if path.starts_with("/api/v1/netops") || path.starts_with("/api/v1/network") {
+        return if read { "view" } else { "network" };
+    }
+    if path.starts_with("/api/v1/audit")
+        || path.starts_with("/api/v1/settings")
+        || path.starts_with("/api/v1/extensions")
+        || path.starts_with("/api/v1/ext/")
+        || path.starts_with("/api/v1/java")
+        || path.starts_with("/api/v1/docker")
+        || path.starts_with("/api/v1/qqbot")
+    {
+        return if read { "view" } else { "settings" };
+    }
+    if path.starts_with("/api/v1/automations") || path.starts_with("/api/v1/schedules") {
+        return if read { "view" } else { "automations" };
+    }
+    if path.starts_with("/api/v1/fleet") {
+        return if read { "view" } else { "stop" };
+    }
+    if path.starts_with("/api/v1/cores") {
+        return if read { "view" } else { "plugins" };
+    }
+    if path.starts_with("/api/v1/instances") {
+        if path.ends_with("/start") {
+            return "start";
+        }
+        if path.ends_with("/stop") || path.ends_with("/restart") {
+            return "stop";
+        }
+        if path.contains("/files") {
+            return if read { "view" } else { "files" };
+        }
+        if path.contains("/plugins") {
+            return if read { "view" } else { "plugins" };
+        }
+        if path.contains("/modrinth")
+            || path.contains("/hangar")
+            || path.contains("/spiget")
+            || path.contains("/install")
+            || path.contains("/startup-jar")
+            || path.contains("/import-archive")
+        {
+            return if read { "view" } else { "plugins" };
+        }
+        if path.contains("/players") {
+            return if read { "view" } else { "players" };
+        }
+        if path.contains("/backups") || path.contains("/worlds") {
+            return if read { "view" } else { "backups" };
+        }
+        if path.contains("/command") || path.contains("/logs") {
+            return if read { "view" } else { "console" };
+        }
+        return if read { "view" } else { "settings" };
+    }
+    if read { "view" } else { "settings" }
+}
+
+fn is_mutation(method: &axum::http::Method) -> bool {
+    !matches!(
+        *method,
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    )
+}
+
 async fn auth_middleware(
     State(state): State<SharedState>,
     req: Request<Body>,
@@ -226,29 +311,150 @@ async fn auth_middleware(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(str::to_string);
-    let query_token = req.uri().query().and_then(|q| {
-        q.split('&').find_map(|pair| {
-            let mut kv = pair.splitn(2, '=');
-            if kv.next() == Some("token") {
-                kv.next().map(percent_decode)
-            } else {
-                None
-            }
+    let cookie_token = req
+        .headers()
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(cookie_value);
+    let query_token = if query_token_allowed(req.method(), req.uri().path()) {
+        req.uri().query().and_then(|q| {
+            q.split('&').find_map(|pair| {
+                let mut kv = pair.splitn(2, '=');
+                if kv.next() == Some("token") {
+                    kv.next().map(percent_decode)
+                } else {
+                    None
+                }
+            })
         })
-    });
-    let token = bearer.or(query_token);
+    } else {
+        None
+    };
+    let token = match bearer.or(cookie_token).or(query_token) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "未授权：请登录或提供有效 Token" })),
+            )
+                .into_response();
+        }
+    };
 
-    if let Some(token) = token {
-        if state.bearer_ok(&token).await {
-            return next.run(req).await;
+    let method = req.method().clone();
+    let is_machine = state
+        .env_api_token
+        .as_ref()
+        .is_some_and(|t| t == &token)
+        || (!state.plugin_token.is_empty() && state.plugin_token == token);
+    let (role, csrf, actor) = if is_machine {
+        let owner = {
+            let conn = state.db.lock().await;
+            crate::db::superadmin(&conn).ok().flatten()
+        };
+        match owner {
+            Some(a) => (a.role, String::new(), "machine".to_string()),
+            None => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "error": "机器 Token 无效" })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        let session = {
+            let conn = state.db.lock().await;
+            crate::db::session_lookup(&conn, &token).ok().flatten()
+        };
+        match session {
+            Some(s) => (s.admin.role, s.csrf_token, s.admin.username),
+            None => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "error": "登录已过期，请重新登录" })),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    if is_mutation(&method) && !is_machine && !csrf.is_empty() {
+        let provided = req
+            .headers()
+            .get("x-cocktail-csrf")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if provided != csrf {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "CSRF 校验失败，请刷新页面后重试" })),
+            )
+                .into_response();
         }
     }
 
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({ "error": "未授权：请登录或提供有效 Token" })),
-    )
-        .into_response()
+    let perm = required_perm(&method, &path);
+    if !crate::auth::can(&role, perm) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": format!("权限不足：需要 {perm} 权限（当前角色 {role}）"),
+                "code": "forbidden",
+                "required": perm,
+            })),
+        )
+            .into_response();
+    }
+
+    crate::util::with_actor(actor, next.run(req)).await
+}
+
+fn cors_origins() -> tower_http::cors::AllowOrigin {
+    let mut origins: Vec<axum::http::HeaderValue> = Vec::new();
+    if let Ok(raw) = std::env::var("COCKTAIL_CORS_ORIGINS") {
+        for part in raw.split(',') {
+            let trimmed = part.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(v) = axum::http::HeaderValue::from_str(trimmed) {
+                origins.push(v);
+            }
+        }
+    }
+    for fallback in [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:11011",
+        "http://localhost:11011",
+    ] {
+        if let Ok(v) = axum::http::HeaderValue::from_str(fallback) {
+            origins.push(v);
+        }
+    }
+    tower_http::cors::AllowOrigin::list(origins)
+}
+
+fn query_token_allowed(method: &axum::http::Method, path: &str) -> bool {
+    matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD)
+        && (path.ends_with("/files/download")
+            || path.ends_with("/worlds/download")
+            || path.contains("/worlds/")
+            || path.ends_with("/logs/ws")
+            || path.ends_with("/events/ws"))
+}
+
+fn cookie_value(raw: &str) -> Option<String> {
+    for pair in raw.split(';') {
+        let pair = pair.trim();
+        if let Some(v) = pair.strip_prefix("cocktail_token=") {
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn percent_decode(s: &str) -> String {

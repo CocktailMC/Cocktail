@@ -1,7 +1,7 @@
-/** Official Minecraft EULA snapshot for in-app acceptance.
- * Source of truth: https://www.minecraft.net/en-us/eula (aka.ms/MinecraftEULA)
- * Mojang/Microsoft may update the live document; always prefer the official URL.
- */
+
+
+
+
 
 export const EULA_OFFICIAL_URL = 'https://www.minecraft.net/en-us/eula'
 export const EULA_AKA_URL = 'https://aka.ms/MinecraftEULA'

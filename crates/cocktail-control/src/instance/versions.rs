@@ -1,4 +1,4 @@
-//! Server core listing + install (Paper/Folia, Vanilla, Fabric, Forge, hybrids, …).
+
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -243,7 +243,7 @@ async fn download_file(url: &str, dest: &Path, label: &str) -> anyhow::Result<u6
     Ok(n)
 }
 
-// --- Paper Fill (paper / folia) ---
+
 
 async fn list_fill_versions(project: &str) -> anyhow::Result<Vec<CoreVersion>> {
     let url = format!("https://fill.papermc.io/v3/projects/{project}");
@@ -299,7 +299,7 @@ async fn resolve_fill_download_url(project: &str, version: &str) -> anyhow::Resu
     chosen.ok_or_else(|| anyhow::anyhow!("no downloadable {project} build for {version}"))
 }
 
-// --- Vanilla ---
+
 
 async fn list_vanilla_versions() -> anyhow::Result<Vec<CoreVersion>> {
     let v = get_json("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json").await?;
@@ -351,7 +351,7 @@ async fn resolve_vanilla_download_url(version: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("vanilla server download missing for {version}"))
 }
 
-// --- Purpur / Leaves ---
+
 
 async fn list_purpur_versions() -> anyhow::Result<Vec<CoreVersion>> {
     let v = get_json("https://api.purpurmc.org/v2/purpur").await?;
@@ -414,7 +414,7 @@ async fn resolve_leaves_download_url(version: &str) -> anyhow::Result<String> {
     ))
 }
 
-// --- Fabric ---
+
 
 async fn list_fabric_game_versions() -> anyhow::Result<Vec<CoreVersion>> {
     let v = get_json("https://meta.fabricmc.net/v2/versions/game").await?;
@@ -509,7 +509,7 @@ async fn resolve_fabric_server_jar(mc: &str, loader: Option<&str>) -> anyhow::Re
     ))
 }
 
-// --- Quilt (installer) ---
+
 
 async fn list_quilt_game_versions() -> anyhow::Result<Vec<CoreVersion>> {
     let v = get_json("https://meta.quiltmc.org/v3/versions/game").await?;
@@ -623,7 +623,7 @@ async fn install_quilt(
     Ok(crate::util::java_jar_startup("quilt-server-launch.jar"))
 }
 
-// --- Forge ---
+
 
 async fn list_forge_versions() -> anyhow::Result<Vec<CoreVersion>> {
     let v = get_json("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")
@@ -761,7 +761,7 @@ async fn install_forge(
         .ok_or_else(|| anyhow::anyhow!("forge installer finished but no server launch files were found"))
 }
 
-// --- NeoForge ---
+
 
 fn neoforge_to_mc(ver: &str) -> Option<String> {
     let clean = ver.split('-').next().unwrap_or(ver);
@@ -1009,7 +1009,7 @@ async fn run_java_installer(
     Ok(())
 }
 
-// --- Mohist / Banner ---
+
 
 async fn list_mohist_project(project: &str) -> anyhow::Result<Vec<CoreVersion>> {
     let v = get_json(&format!("https://mohistmc.com/api/v2/projects/{project}")).await?;
@@ -1044,7 +1044,7 @@ async fn resolve_mohist_download_url(project: &str, version: &str) -> anyhow::Re
         .ok_or_else(|| anyhow::anyhow!("{project} download url missing"))
 }
 
-// --- Arclight ---
+
 
 const ARCLIGHT_ROOT: &str = "https://files.hypoglycemia.icu/v1/files";
 

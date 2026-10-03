@@ -1,4 +1,4 @@
-//! Cocktail Manager control plane — v0.1 (26Q3)
+
 
 fn main() {
     let mut args = std::env::args();

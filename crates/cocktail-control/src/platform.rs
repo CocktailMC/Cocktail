@@ -1,4 +1,4 @@
-//! Host platform detection for health / UI (distro + kernel + logos).
+
 
 use serde::Serialize;
 use std::fs;
@@ -10,15 +10,15 @@ pub struct PlatformInfo {
     pub arch: String,
     pub family: String,
     pub hostname: String,
-    /// Short id for logos: ubuntu, debian, windows, macos, linux, …
+    
     pub distro_id: String,
-    /// Human-readable name, e.g. "Ubuntu 24.04.1 LTS"
+    
     pub distro_name: String,
-    /// Distro version string when known
+    
     pub distro_version: String,
-    /// Kernel version (uname -r / Windows NT build)
+    
     pub kernel: String,
-    /// True when running under Windows Subsystem for Linux
+    
     pub wsl: bool,
 }
 
@@ -194,7 +194,7 @@ fn detect_wsl() -> bool {
 
 fn read_proc_version_short() -> Option<String> {
     let ver = fs::read_to_string("/proc/version").ok()?;
-    // "Linux version 5.15.0-xxx (build@) ..."
+    
     let mut parts = ver.split_whitespace();
     if parts.next()? != "Linux" {
         return None;

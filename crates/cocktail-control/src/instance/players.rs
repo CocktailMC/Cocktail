@@ -1,4 +1,4 @@
-//! Player join/leave, history, whitelist.
+
 
 use std::collections::HashMap;
 use std::path::Path;

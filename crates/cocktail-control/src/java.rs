@@ -1,4 +1,4 @@
-//! Adoptium (Eclipse Temurin) JDK/JRE manager: list, download, extract, auto-complete.
+
 
 use std::fs::{self, File};
 use std::io;
@@ -101,7 +101,7 @@ pub struct EnsureJavaRequest {
     pub major: Option<u32>,
     #[serde(default)]
     pub image_type: Option<String>,
-    /// If true, ignore system Java and keep a managed Temurin copy.
+    
     #[serde(default)]
     pub managed: bool,
 }
@@ -447,7 +447,7 @@ pub async fn inventory() -> JavaInventory {
     }
 }
 
-/// Relative JRE home under an instance file root.
+
 pub const INSTANCE_JRE_REL: &str = "runtime/jre";
 
 pub fn instance_jre_home(workdir: &Path) -> PathBuf {
@@ -456,7 +456,7 @@ pub fn instance_jre_home(workdir: &Path) -> PathBuf {
         .fold(workdir.to_path_buf(), |p, seg| p.join(seg))
 }
 
-/// Template cache in `data/java` (never used as a live JAVA_HOME for instances).
+
 pub async fn ensure_template(major: u32, image: ImageType) -> anyhow::Result<PathBuf> {
     if let Some(rt) = find_managed(major, Some(image)).or_else(|| find_managed(major, None)) {
         return Ok(PathBuf::from(rt.java_bin));
@@ -465,8 +465,8 @@ pub async fn ensure_template(major: u32, image: ImageType) -> anyhow::Result<Pat
     Ok(PathBuf::from(rt.java_bin))
 }
 
-/// Resolve a Java binary: managed Temurin, then system, then download JRE.
-/// Panel / pre-warm only. Instance processes must use [`ensure_instance_jre`].
+
+
 pub async fn ensure(major: u32, image: ImageType) -> anyhow::Result<PathBuf> {
     if let Some(rt) = find_managed(major, Some(image)).or_else(|| find_managed(major, None)) {
         return Ok(PathBuf::from(rt.java_bin));
@@ -488,7 +488,7 @@ pub async fn ensure_for_spec(
     ensure_instance_jre(workdir, java_major, mc_version).await
 }
 
-/// Copy a dedicated Temurin JRE into `{workdir}/runtime/jre`. Never uses system Java.
+
 pub async fn ensure_instance_jre(
     workdir: &str,
     java_major: Option<u32>,
@@ -599,7 +599,7 @@ fn write_instance_meta(home: &Path, major: u32, bin: &Path) -> anyhow::Result<()
     Ok(())
 }
 
-/// Always pin java launches to the instance JRE. Previous shared/system paths are discarded.
+
 pub fn rewrite_java_command(command: Option<String>, java_bin: &Path) -> Option<String> {
     let path = java_bin.to_string_lossy().into_owned();
     match command {
@@ -913,7 +913,7 @@ pub async fn ensure_api(req: EnsureJavaRequest) -> anyhow::Result<EnsureJavaResp
     })
 }
 
-/// Set JAVA_HOME on a command when `bin` is a managed/system java path.
+
 pub fn apply_java_home(cmd: &mut tokio::process::Command, bin: &str) {
     let path = Path::new(bin);
     if !crate::util::is_java_command(bin) {
@@ -934,7 +934,7 @@ pub fn apply_java_home(cmd: &mut tokio::process::Command, bin: &str) {
     }
 }
 
-/// Pin JAVA_HOME and JVM user.home/tmpdir to the instance file root.
+
 pub fn apply_isolated_env(cmd: &mut tokio::process::Command, java_bin: &str, workdir: &str) {
     apply_java_home(cmd, java_bin);
     let work = abs_workdir(workdir);

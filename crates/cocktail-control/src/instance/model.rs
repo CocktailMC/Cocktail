@@ -14,8 +14,8 @@ pub enum InstanceStatus {
 }
 
 impl InstanceStatus {
-    /// Whether an async `StatusChanged` may overwrite `current`.
-    /// Stale in-flight events must not resurrect Stopping/Starting after the process is gone.
+    
+    
     pub fn can_apply_over(self, current: Self) -> bool {
         use InstanceStatus::*;
         if self == current {
@@ -51,7 +51,7 @@ pub struct InstanceSpec {
     pub memory_mib: u32,
     #[serde(default = "default_core")]
     pub core: String,
-    /// Bound into server.properties as server-port.
+    
     #[serde(default = "default_port")]
     pub port: u16,
     #[serde(default)]
@@ -62,10 +62,10 @@ pub struct InstanceSpec {
     pub webhook_url: Option<String>,
     #[serde(default)]
     pub runtime: RuntimeKind,
-    /// Docker image when runtime=docker (default eclipse-temurin:21-jre).
+    
     #[serde(default)]
     pub docker_image: Option<String>,
-    /// Docker --cpus soft limit.
+    
     #[serde(default)]
     pub cpu_limit: Option<f32>,
     #[serde(default)]
@@ -80,10 +80,10 @@ pub struct InstanceSpec {
     pub backup_keep: u32,
     #[serde(default)]
     pub backup_hour: Option<u8>,
-    /// Explicit Temurin/Java major (8/17/21/…). None = pick from mc_version or 21.
+    
     #[serde(default)]
     pub java_major: Option<u32>,
-    /// Minecraft version last installed for this instance (used to pick Java).
+    
     #[serde(default)]
     pub mc_version: Option<String>,
 }
@@ -450,7 +450,7 @@ pub struct UpdateInstanceRequest {
     pub backup_keep: Option<u32>,
     #[serde(default)]
     pub backup_hour: Option<u8>,
-    /// 0 clears to auto.
+    
     #[serde(default)]
     pub java_major: Option<u32>,
 }
@@ -506,7 +506,7 @@ pub struct Schedule {
     pub id: String,
     pub instance_id: String,
     pub kind: ScheduleKind,
-    /// Interval in seconds.
+    
     pub every_secs: u64,
     #[serde(default)]
     pub command: Option<String>,
@@ -588,6 +588,58 @@ pub struct BulkActionRequest {
 pub struct BulkActionResult {
     pub ok: Vec<String>,
     pub failed: Vec<BulkFailure>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct CloneInstanceRequest {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub workdir: Option<String>,
+    #[serde(default)]
+    pub node_id: Option<String>,
+    #[serde(default)]
+    pub copy_data: Option<bool>,
+    #[serde(default)]
+    pub skip_logs: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PreflightReport {
+    pub instance_id: String,
+    pub warnings: Vec<String>,
+    pub free_bytes: Option<u64>,
+    pub used_bytes: u64,
+    pub port_busy: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorldDownloadInfo {
+    pub filename: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VersionCompare {
+    pub current: Option<String>,
+    pub latest: Option<String>,
+    pub behind: bool,
+    pub note: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RestorePreview {
+    pub backup_id: String,
+    pub size_bytes: u64,
+    pub created_at: String,
+    pub entries: u32,
+    pub world_size_bytes: u64,
+    pub plugin_count: u32,
+    pub has_server_properties: bool,
+    pub has_level_dat: bool,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
