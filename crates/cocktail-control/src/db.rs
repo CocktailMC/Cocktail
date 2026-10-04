@@ -1207,6 +1207,22 @@ pub fn set_admin_totp(conn: &Connection, id: i64, secret: Option<&str>) -> anyho
     Ok(())
 }
 
+pub fn set_admin_totp_pending(conn: &Connection, id: i64, secret: &str) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE admins SET totp_secret = ?1, totp_enabled = 0 WHERE id = ?2",
+        params![secret, id],
+    )?;
+    Ok(())
+}
+
+pub fn enable_admin_totp(conn: &Connection, id: i64) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE admins SET totp_enabled = 1 WHERE id = ?1 AND totp_secret IS NOT NULL",
+        params![id],
+    )?;
+    Ok(())
+}
+
 pub fn admin_2fa_enabled(conn: &Connection, id: i64) -> anyhow::Result<bool> {
     conn.query_row(
         "SELECT totp_enabled FROM admins WHERE id = ?1",

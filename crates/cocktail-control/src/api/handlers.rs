@@ -316,11 +316,12 @@ pub async fn login(
             .into_response();
     }
     let admin = found.expect("checked");
+    let totp_enabled = crate::db::admin_2fa_enabled(&conn, admin.id).unwrap_or(false);
     let totp_secret = crate::db::admin_totp_secret(&conn, admin.id)
         .ok()
         .flatten()
         .unwrap_or_default();
-    if !totp_secret.is_empty() {
+    if totp_enabled && !totp_secret.is_empty() {
         match body.totp_code {
             Some(code) if crate::totp::verify_code(&totp_secret, code) => {}
             Some(_) => {
@@ -334,6 +335,7 @@ pub async fn login(
                     .into_response();
             }
             None => {
+                crate::auth::login_failed(&rate_key);
                 return (
                     StatusCode::UNAUTHORIZED,
                     Json(ErrorBody {
@@ -2361,9 +2363,9 @@ pub async fn totp_setup(
             }),
         )
     })?;
-    let secret = crate::totp::generate_secret();
+    let secret = crate::totp::generate_secret().map_err(|e| bad_request(e.to_string()))?;
     let url = crate::totp::otpauth_url(&secret, &admin.username, "Cocktail Manager");
-    crate::db::set_admin_totp(&conn, admin.id, Some(&secret))
+    crate::db::set_admin_totp_pending(&conn, admin.id, &secret)
         .map_err(|e| bad_request(e.to_string()))?;
     Ok(Json(
         serde_json::json!({ "secret": secret, "otpauth_url": url }),
@@ -2411,8 +2413,7 @@ pub async fn totp_verify(
     if !crate::totp::verify_code(&secret, body.code) {
         return Err(bad_request("invalid 2FA code"));
     }
-    crate::db::set_admin_totp(&conn, admin.id, Some(&secret))
-        .map_err(|e| bad_request(e.to_string()))?;
+    crate::db::enable_admin_totp(&conn, admin.id).map_err(|e| bad_request(e.to_string()))?;
     util::audit(
         "auth.2fa_verify",
         None,
