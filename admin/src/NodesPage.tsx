@@ -123,6 +123,8 @@ cocktail-agent`}
                   <th>CPU</th>
                   <th>内存</th>
                   <th>网络</th>
+                  <th>协议</th>
+                  <th>TCP 状态</th>
                   <th>实例</th>
                   <th />
                 </tr>
@@ -154,6 +156,15 @@ cocktail-agent`}
                     <td className="meta">
                       {n.online
                         ? `↓ ${((n.rx_bps ?? 0) / 1024).toFixed(0)} KiB/s · ↑ ${((n.tx_bps ?? 0) / 1024).toFixed(0)} KiB/s`
+                        : '—'}
+                    </td>
+                    <td className="meta">
+                      {n.protocol_version ? `v${n.protocol_version}` : '—'}
+                      {n.last_seq ? ` · ack ${n.last_seq}` : ''}
+                    </td>
+                    <td className="meta">
+                      {n.online
+                        ? `est ${n.tcp_estab ?? 0} · syn ${n.tcp_syn_recv ?? 0} · tw ${n.tcp_time_wait ?? 0}`
                         : '—'}
                     </td>
                     <td>{n.instance_count ?? 0}</td>

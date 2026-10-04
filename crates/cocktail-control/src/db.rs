@@ -30,7 +30,9 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             username TEXT NOT NULL UNIQUE COLLATE NOCASE,
             password_hash TEXT NOT NULL,
             role TEXT NOT NULL DEFAULT 'superadmin',
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            totp_secret TEXT,
+            totp_enabled INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -57,7 +59,9 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             os TEXT,
             arch TEXT,
             last_seen TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            protocol_version INTEGER NOT NULL DEFAULT 1,
+            last_seq INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS instances (
@@ -136,6 +140,18 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     for (name, decl) in [("expires_at", "TEXT"), ("csrf_token", "TEXT")] {
         ensure_column(conn, "sessions", name, decl)?;
     }
+    for (name, decl) in [
+        ("totp_secret", "TEXT"),
+        ("totp_enabled", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "admins", name, decl)?;
+    }
+    for (name, decl) in [
+        ("protocol_version", "INTEGER NOT NULL DEFAULT 1"),
+        ("last_seq", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        ensure_column(conn, "nodes", name, decl)?;
+    }
     let _ = conn.execute("DELETE FROM sessions WHERE expires_at IS NULL", []);
     Ok(())
 }
@@ -164,6 +180,8 @@ pub struct NodeRow {
     pub arch: Option<String>,
     pub last_seen: Option<String>,
     pub created_at: String,
+    pub protocol_version: i64,
+    pub last_seq: i64,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -187,6 +205,22 @@ pub struct NodeView {
     pub tx_bps: f32,
     #[serde(default)]
     pub instance_count: usize,
+    #[serde(default = "default_proto_v")]
+    pub protocol_version: i64,
+    #[serde(default)]
+    pub last_seq: i64,
+    #[serde(default)]
+    pub nics: Vec<crate::proto::NicStat>,
+    #[serde(default)]
+    pub tcp_estab: u32,
+    #[serde(default)]
+    pub tcp_syn_recv: u32,
+    #[serde(default)]
+    pub tcp_time_wait: u32,
+}
+
+fn default_proto_v() -> i64 {
+    1
 }
 
 impl NodeRow {
@@ -206,6 +240,12 @@ impl NodeRow {
             rx_bps: 0.0,
             tx_bps: 0.0,
             instance_count: 0,
+            protocol_version: self.protocol_version,
+            last_seq: self.last_seq,
+            nics: Vec::new(),
+            tcp_estab: 0,
+            tcp_syn_recv: 0,
+            tcp_time_wait: 0,
         }
     }
 }
@@ -221,6 +261,8 @@ fn map_node(r: &rusqlite::Row<'_>) -> rusqlite::Result<NodeRow> {
         arch: r.get(6)?,
         last_seen: r.get(7)?,
         created_at: r.get(8)?,
+        protocol_version: r.get(9)?,
+        last_seq: r.get(10)?,
     })
 }
 
@@ -235,7 +277,7 @@ pub fn ensure_local_node(conn: &Connection) -> anyhow::Result<()> {
 
 pub fn list_nodes(conn: &Connection) -> anyhow::Result<Vec<NodeRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, kind, token_hash, hostname, os, arch, last_seen, created_at FROM nodes ORDER BY created_at",
+        "SELECT id, name, kind, token_hash, hostname, os, arch, last_seen, created_at, protocol_version, last_seq FROM nodes ORDER BY created_at",
     )?;
     let rows = stmt.query_map([], map_node)?;
     let mut out = Vec::new();
@@ -247,7 +289,7 @@ pub fn list_nodes(conn: &Connection) -> anyhow::Result<Vec<NodeRow>> {
 
 pub fn get_node(conn: &Connection, id: &str) -> anyhow::Result<Option<NodeRow>> {
     conn.query_row(
-        "SELECT id, name, kind, token_hash, hostname, os, arch, last_seen, created_at FROM nodes WHERE id = ?1",
+        "SELECT id, name, kind, token_hash, hostname, os, arch, last_seen, created_at, protocol_version, last_seq FROM nodes WHERE id = ?1",
         params![id],
         map_node,
     )
@@ -1143,4 +1185,73 @@ pub fn prune_audit(conn: &Connection, keep: usize) -> anyhow::Result<usize> {
         params![keep as i64],
     )?;
     Ok(n)
+}
+
+pub fn admin_totp_secret(conn: &Connection, id: i64) -> anyhow::Result<Option<String>> {
+    let row: Option<String> = conn
+        .query_row(
+            "SELECT totp_secret FROM admins WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(row)
+}
+
+pub fn set_admin_totp(conn: &Connection, id: i64, secret: Option<&str>) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE admins SET totp_secret = ?1, totp_enabled = ?2 WHERE id = ?3",
+        params![secret, secret.is_some() as i64, id],
+    )?;
+    Ok(())
+}
+
+pub fn admin_2fa_enabled(conn: &Connection, id: i64) -> anyhow::Result<bool> {
+    conn.query_row(
+        "SELECT totp_enabled FROM admins WHERE id = ?1",
+        params![id],
+        |r| Ok(r.get::<_, i64>(0)? != 0),
+    )
+    .optional()
+    .map(|v| v.unwrap_or(false))
+    .map_err(Into::into)
+}
+
+pub fn set_node_seq(conn: &Connection, id: &str, seq: i64) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE nodes SET last_seq = ?1 WHERE id = ?2",
+        params![seq, id],
+    )?;
+    Ok(())
+}
+
+pub fn node_last_seq(conn: &Connection, id: &str) -> anyhow::Result<i64> {
+    conn.query_row(
+        "SELECT last_seq FROM nodes WHERE id = ?1",
+        params![id],
+        |r| r.get::<_, i64>(0),
+    )
+    .optional()
+    .map(|v| v.unwrap_or(0))
+    .map_err(Into::into)
+}
+
+pub fn set_node_protocol(conn: &Connection, id: &str, version: i64) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE nodes SET protocol_version = ?1 WHERE id = ?2",
+        params![version, id],
+    )?;
+    Ok(())
+}
+
+pub fn node_protocol_version(conn: &Connection, id: &str) -> anyhow::Result<i64> {
+    conn.query_row(
+        "SELECT protocol_version FROM nodes WHERE id = ?1",
+        params![id],
+        |r| r.get::<_, i64>(0),
+    )
+    .optional()
+    .map(|v| v.unwrap_or(1))
+    .map_err(Into::into)
 }

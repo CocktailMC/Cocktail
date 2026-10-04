@@ -11,12 +11,13 @@ use serde::{Deserialize, Serialize};
 use crate::instance::{
     self, BulkActionRequest, CommandRequest, CreateInstanceRequest, CreateScheduleRequest,
     EulaRequest, HangarVersionsQuery, InstallHangarRequest, InstallModrinthRequest, InstallRequest,
-    InstallSpigetRequest, InstanceEvent, PlayerActionRequest, PropertiesUpdate,
-    UpdateInstanceRequest, WriteFileRequest,
+    InstallSpigetRequest, InstanceEvent, InstanceStatus, PlayerActionRequest, PlayerInfo,
+    PropertiesUpdate, UpdateInstanceRequest, WriteFileRequest,
 };
 use crate::instance::{ModrinthVersionsQuery, SearchQuery};
 use crate::platform;
 use crate::state::SharedState;
+use crate::util;
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -91,6 +92,8 @@ pub struct SetupRequest {
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
+    #[serde(default)]
+    pub totp_code: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -313,6 +316,34 @@ pub async fn login(
             .into_response();
     }
     let admin = found.expect("checked");
+    let totp_secret = crate::db::admin_totp_secret(&conn, admin.id)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    if !totp_secret.is_empty() {
+        match body.totp_code {
+            Some(code) if crate::totp::verify_code(&totp_secret, code) => {}
+            Some(_) => {
+                crate::auth::login_failed(&rate_key);
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorBody {
+                        error: "2FA 验证码不正确".into(),
+                    }),
+                )
+                    .into_response();
+            }
+            None => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorBody {
+                        error: "需要 2FA 验证码".into(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    }
     let _ = crate::db::clear_login_failures(&conn, &admin.username);
     crate::auth::login_succeeded(&rate_key);
     let (token, csrf) = match crate::auth::create_session(&conn, &admin) {
@@ -1999,4 +2030,461 @@ fn bad_request(msg: impl Into<String>) -> (StatusCode, Json<ErrorBody>) {
         StatusCode::BAD_REQUEST,
         Json(ErrorBody { error: msg.into() }),
     )
+}
+
+#[derive(Deserialize)]
+pub struct RconExecBody {
+    pub command: String,
+}
+
+pub async fn rcon_exec(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Json(body): Json<RconExecBody>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let view = instance::get_instance(&state, &id)
+        .await
+        .ok_or_else(|| not_found("instance not found"))?;
+    if view.status != InstanceStatus::Running {
+        return Err(bad_request("instance not running"));
+    }
+    let workdir = view.spec.workdir.clone();
+    let cmd = body.command.clone();
+    let result = tokio::task::spawn_blocking(move || crate::rcon::try_rcon(&workdir, &cmd))
+        .await
+        .map_err(|e| bad_request(e.to_string()))?;
+    match result {
+        Some(resp) => Ok(Json(serde_json::json!({ "ok": true, "response": resp }))),
+        None => {
+            instance::send_command(
+                &state,
+                &id,
+                instance::CommandRequest {
+                    command: body.command,
+                },
+            )
+            .await
+            .map_err(|e| bad_request(e.to_string()))?;
+            Ok(Json(
+                serde_json::json!({ "ok": false, "response": "rcon not enabled, sent via stdin" }),
+            ))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RconStatusBody {
+    #[serde(default)]
+    pub enable: bool,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub port: Option<u16>,
+}
+
+pub async fn rcon_status(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let view = instance::get_instance(&state, &id)
+        .await
+        .ok_or_else(|| not_found("instance not found"))?;
+    let workdir = view.spec.workdir.clone();
+    let cfg = tokio::task::spawn_blocking(move || crate::rcon::extract_rcon_config(&workdir))
+        .await
+        .map_err(|e| bad_request(e.to_string()))?;
+    Ok(Json(serde_json::json!({
+        "enabled": cfg.is_some(),
+        "port": cfg.as_ref().map(|c| c.port),
+        "host": cfg.as_ref().map(|c| c.host.clone()),
+    })))
+}
+
+pub async fn rcon_setup(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+    Json(body): Json<RconStatusBody>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let view = instance::get_instance(&state, &id)
+        .await
+        .ok_or_else(|| not_found("instance not found"))?;
+    if matches!(
+        view.status,
+        InstanceStatus::Running | InstanceStatus::Starting | InstanceStatus::Stopping
+    ) {
+        return Err(bad_request(
+            "stop the instance before changing rcon settings",
+        ));
+    }
+    let workdir = view.spec.workdir.clone();
+    let enable = body.enable;
+    let password = body
+        .password
+        .unwrap_or_else(|| format!("{}", uuid::Uuid::new_v4().simple()));
+    let port = body.port.unwrap_or(25575);
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let path = std::path::Path::new(&workdir).join("server.properties");
+        let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut lines: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
+        lines.retain(|l| {
+            !l.starts_with("enable-rcon=")
+                && !l.starts_with("rcon.port=")
+                && !l.starts_with("rcon.password=")
+        });
+        lines.push(format!(
+            "enable-rcon={}",
+            if enable { "true" } else { "false" }
+        ));
+        lines.push(format!("rcon.port={port}"));
+        lines.push(format!("rcon.password={password}"));
+        let mut out = lines.join("\n");
+        out.push('\n');
+        std::fs::write(path, out)?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| bad_request(e.to_string()))?
+    .map_err(|e| bad_request(e.to_string()))?;
+    util::audit(
+        "rcon.setup",
+        Some(&id),
+        serde_json::json!({ "enabled": enable, "port": port }),
+        "api",
+    );
+    Ok(Json(
+        serde_json::json!({ "ok": true, "enabled": enable, "port": port }),
+    ))
+}
+
+#[derive(Serialize)]
+pub struct PlayerDetailResponse {
+    pub info: PlayerInfo,
+    pub rcon_capabilities: Vec<String>,
+    pub whitelist: Vec<String>,
+    pub ops: Vec<String>,
+    pub banned_players: Vec<String>,
+    pub banned_ips: Vec<String>,
+}
+
+pub async fn player_detail(
+    State(state): State<SharedState>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let view = instance::get_instance(&state, &id)
+        .await
+        .ok_or_else(|| not_found("instance not found"))?;
+    let workdir = view.spec.workdir.clone();
+    let player_name = name.clone();
+    let detail = tokio::task::spawn_blocking(move || -> anyhow::Result<PlayerDetailResponse> {
+        let conn = state.db.blocking_lock();
+        let rows = crate::db::list_players(&conn, &id)?;
+        drop(conn);
+        let info = rows
+            .into_iter()
+            .find(|p| p.name.eq_ignore_ascii_case(&player_name))
+            .map(|r| PlayerInfo {
+                name: r.name,
+                uuid: r.uuid,
+                online: false,
+                ping_ms: r.last_ping_ms,
+                world: r.last_world,
+                session_secs: 0,
+                total_secs: r.total_secs,
+                first_seen: Some(r.first_seen),
+                last_seen: Some(r.last_seen),
+                ip: r.last_ip,
+            })
+            .unwrap_or(PlayerInfo {
+                name: player_name.clone(),
+                uuid: None,
+                online: false,
+                ping_ms: None,
+                world: None,
+                session_secs: 0,
+                total_secs: 0,
+                first_seen: None,
+                last_seen: None,
+                ip: None,
+            });
+        let whitelist = crate::instance::players::read_whitelist(&workdir);
+        let ops = read_ops_list(&workdir);
+        let banned_players = read_banned_players(&workdir);
+        let banned_ips = read_banned_ips(&workdir);
+        let mut caps = Vec::new();
+        if crate::rcon::extract_rcon_config(&workdir).is_some() {
+            caps.extend_from_slice(
+                &[
+                    "kick", "ban", "pardon", "op", "deop", "gamemode", "give", "teleport",
+                    "effect", "kill", "clear",
+                ]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+            );
+        }
+        Ok(PlayerDetailResponse {
+            info,
+            rcon_capabilities: caps,
+            whitelist,
+            ops,
+            banned_players,
+            banned_ips,
+        })
+    })
+    .await
+    .map_err(|e| bad_request(e.to_string()))?
+    .map_err(|e| bad_request(e.to_string()))?;
+    Ok(Json(detail))
+}
+
+fn read_ops_list(workdir: &str) -> Vec<String> {
+    let path = std::path::Path::new(workdir).join("ops.json");
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    x.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn read_banned_players(workdir: &str) -> Vec<String> {
+    let path = std::path::Path::new(workdir).join("banned-players.json");
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    x.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn read_banned_ips(workdir: &str) -> Vec<String> {
+    let path = std::path::Path::new(workdir).join("banned-ips.json");
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.get("ip").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[derive(Deserialize)]
+pub struct PlayerRconActionBody {
+    pub command: String,
+}
+
+pub async fn player_rcon_action(
+    State(state): State<SharedState>,
+    Path((id, name)): Path<(String, String)>,
+    Json(body): Json<PlayerRconActionBody>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let view = instance::get_instance(&state, &id)
+        .await
+        .ok_or_else(|| not_found("instance not found"))?;
+    if view.status != InstanceStatus::Running {
+        return Err(bad_request("instance not running"));
+    }
+    let workdir = view.spec.workdir.clone();
+    let cmd = format!("{} {}", body.command, name);
+    let result = tokio::task::spawn_blocking(move || crate::rcon::try_rcon(&workdir, &cmd))
+        .await
+        .map_err(|e| bad_request(e.to_string()))?;
+    util::audit(
+        "player.rcon",
+        Some(&id),
+        serde_json::json!({ "player": name, "command": body.command }),
+        "api",
+    );
+    match result {
+        Some(resp) => Ok(Json(serde_json::json!({ "ok": true, "response": resp }))),
+        None => Err(bad_request("rcon not enabled for this instance")),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TotpSetupResponse {
+    pub secret: String,
+    pub otpauth_url: String,
+}
+
+pub async fn totp_setup(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let token = bearer_from_headers(&headers).ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "未登录".into(),
+            }),
+        )
+    })?;
+    let conn = state.db.lock().await;
+    let admin = if state.env_api_token.as_ref().is_some_and(|t| t == &token) {
+        crate::db::superadmin(&conn).ok().flatten()
+    } else {
+        crate::db::session_admin(&conn, &token).ok().flatten()
+    };
+    let admin = admin.ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "未登录".into(),
+            }),
+        )
+    })?;
+    let secret = crate::totp::generate_secret();
+    let url = crate::totp::otpauth_url(&secret, &admin.username, "Cocktail Manager");
+    crate::db::set_admin_totp(&conn, admin.id, Some(&secret))
+        .map_err(|e| bad_request(e.to_string()))?;
+    Ok(Json(
+        serde_json::json!({ "secret": secret, "otpauth_url": url }),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct TotpVerifyBody {
+    pub code: u32,
+}
+
+pub async fn totp_verify(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(body): Json<TotpVerifyBody>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let token = bearer_from_headers(&headers).ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "未登录".into(),
+            }),
+        )
+    })?;
+    let conn = state.db.lock().await;
+    let admin = if state.env_api_token.as_ref().is_some_and(|t| t == &token) {
+        crate::db::superadmin(&conn).ok().flatten()
+    } else {
+        crate::db::session_admin(&conn, &token).ok().flatten()
+    };
+    let admin = admin.ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "未登录".into(),
+            }),
+        )
+    })?;
+    let secret = crate::db::admin_totp_secret(&conn, admin.id)
+        .map_err(|e| bad_request(e.to_string()))?
+        .unwrap_or_default();
+    if secret.is_empty() {
+        return Err(bad_request("2FA not set up"));
+    }
+    if !crate::totp::verify_code(&secret, body.code) {
+        return Err(bad_request("invalid 2FA code"));
+    }
+    crate::db::set_admin_totp(&conn, admin.id, Some(&secret))
+        .map_err(|e| bad_request(e.to_string()))?;
+    util::audit(
+        "auth.2fa_verify",
+        None,
+        serde_json::json!({ "username": admin.username }),
+        "api",
+    );
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+pub async fn totp_status(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let token = bearer_from_headers(&headers).ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "未登录".into(),
+            }),
+        )
+    })?;
+    let conn = state.db.lock().await;
+    let admin = if state.env_api_token.as_ref().is_some_and(|t| t == &token) {
+        crate::db::superadmin(&conn).ok().flatten()
+    } else {
+        crate::db::session_admin(&conn, &token).ok().flatten()
+    };
+    let admin = admin.ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "未登录".into(),
+            }),
+        )
+    })?;
+    let enabled =
+        crate::db::admin_2fa_enabled(&conn, admin.id).map_err(|e| bad_request(e.to_string()))?;
+    Ok(Json(serde_json::json!({ "enabled": enabled })))
+}
+
+pub async fn totp_disable(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    let token = bearer_from_headers(&headers).ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "未登录".into(),
+            }),
+        )
+    })?;
+    let conn = state.db.lock().await;
+    let admin = if state.env_api_token.as_ref().is_some_and(|t| t == &token) {
+        crate::db::superadmin(&conn).ok().flatten()
+    } else {
+        crate::db::session_admin(&conn, &token).ok().flatten()
+    };
+    let admin = admin.ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorBody {
+                error: "未登录".into(),
+            }),
+        )
+    })?;
+    crate::db::set_admin_totp(&conn, admin.id, None).map_err(|e| bad_request(e.to_string()))?;
+    util::audit(
+        "auth.2fa_disable",
+        None,
+        serde_json::json!({ "username": admin.username }),
+        "api",
+    );
+    Ok(Json(serde_json::json!({ "ok": true })))
 }

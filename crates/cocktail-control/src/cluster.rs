@@ -77,6 +77,7 @@ async fn run_session(state: SharedState, node_id: String, socket: WebSocket) {
     let welcome = AgentDown::Welcome {
         node_id: node_id.clone(),
         instances: snapshot,
+        protocol_version: crate::proto::PROTOCOL_VERSION,
     };
 
     if sink
@@ -91,9 +92,12 @@ async fn run_session(state: SharedState, node_id: String, socket: WebSocket) {
         return;
     }
 
+    let mut out_seq: u64 = 0;
     loop {
         tokio::select! {
             Some(down) = rx.recv() => {
+                out_seq += 1;
+                let down = down.with_seq(out_seq);
                 let Ok(text) = serde_json::to_string(&down) else { continue };
                 if sink.send(Message::Text(text.into())).await.is_err() {
                     break;
@@ -124,7 +128,22 @@ async fn run_session(state: SharedState, node_id: String, socket: WebSocket) {
 
 async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
     match up {
-        AgentUp::Hello { hostname, os, arch } => {
+        AgentUp::Hello {
+            hostname,
+            os,
+            arch,
+            protocol_version,
+        } => {
+            let conn = state.db.lock().await;
+            let _ = db::set_node_protocol(&conn, node_id, protocol_version as i64);
+            drop(conn);
+            state
+                .node_live
+                .write()
+                .await
+                .entry(node_id.to_string())
+                .or_default()
+                .protocol_version = protocol_version;
             let conn = state.db.lock().await;
             let _ = db::touch_node(&conn, node_id, Some(&hostname), Some(&os), Some(&arch));
         }
@@ -133,19 +152,22 @@ async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
             memory_mib,
             rx_bps,
             tx_bps,
+            nic_stats,
+            tcp_states,
         } => {
             let conn = state.db.lock().await;
             let _ = db::touch_node(&conn, node_id, None, None, None);
             drop(conn);
-            state.node_live.write().await.insert(
-                node_id.to_string(),
-                crate::state::NodeLive {
-                    cpu_pct,
-                    memory_mib,
-                    rx_bps,
-                    tx_bps,
-                },
-            );
+            let mut live = state.node_live.write().await;
+            let entry = live.entry(node_id.to_string()).or_default();
+            entry.cpu_pct = cpu_pct;
+            entry.memory_mib = memory_mib;
+            entry.rx_bps = rx_bps;
+            entry.tx_bps = tx_bps;
+            entry.nics = nic_stats;
+            entry.tcp_estab = tcp_states.estab;
+            entry.tcp_syn_recv = tcp_states.syn_recv;
+            entry.tcp_time_wait = tcp_states.time_wait;
         }
         AgentUp::Status {
             instance_id,
@@ -197,6 +219,14 @@ async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
                 });
             }
         }
+        AgentUp::Ack { seq } => {
+            let conn = state.db.lock().await;
+            let _ = db::set_node_seq(&conn, node_id, seq as i64);
+            drop(conn);
+            if let Some(entry) = state.node_live.write().await.get_mut(node_id) {
+                entry.last_ack_seq = seq;
+            }
+        }
     }
 }
 
@@ -237,6 +267,14 @@ pub async fn list_views(state: &crate::state::AppState) -> anyhow::Result<Vec<db
             v.memory_mib = s.memory_mib;
             v.rx_bps = s.rx_bps;
             v.tx_bps = s.tx_bps;
+            v.nics = s.nics.clone();
+            v.tcp_estab = s.tcp_estab;
+            v.tcp_syn_recv = s.tcp_syn_recv;
+            v.tcp_time_wait = s.tcp_time_wait;
+            if s.protocol_version > 0 {
+                v.protocol_version = s.protocol_version as i64;
+            }
+            v.last_seq = s.last_ack_seq as i64;
         }
         v.instance_count = inst_counts.get(&v.id).copied().unwrap_or(0);
         out.push(v);

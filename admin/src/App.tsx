@@ -38,6 +38,8 @@ import AuditPage from './AuditPage'
 import NetworkPage from './NetworkPage'
 import GlobalNetworkPage from './GlobalNetworkPage'
 import NodesPage from './NodesPage'
+import PlayerDetailPanel from './PlayerDetailPanel'
+import RconPanel from './RconPanel'
 import ExtensionsPage from './ExtensionsPage'
 import { parseHash, writeHash, type HomeTab } from './hashRoute'
 import AutomationsPage from './AutomationsPage'
@@ -190,6 +192,7 @@ export default function App() {
   const [installLoader, setInstallLoader] = useState('')
   const [players, setPlayers] = useState<PlayerInfo[]>([])
   const [playerHistory, setPlayerHistory] = useState<PlayerInfo[]>([])
+  const [detailPlayer, setDetailPlayer] = useState<string | null>(null)
   const [panelEvents, setPanelEvents] = useState<PanelEvent[]>([])
   const [metricHistory, setMetricHistory] = useState<MetricSample[]>([])
   const [worlds, setWorlds] = useState<WorldInfo[]>([])
@@ -1553,7 +1556,12 @@ export default function App() {
                       发送
                     </button>
                   </form>
-                </div>
+                
+                  <RconPanel
+                    instanceId={selected.id}
+                    running={selected.status === 'running'}
+                    onError={setError}
+                  /></div>
               )}
 
               {tab === 'version' && (
@@ -1818,6 +1826,13 @@ export default function App() {
                                 </td>
                                 <td>{formatDuration(p.session_secs)}</td>
                                 <td>
+                                  <button
+                                    type="button"
+                                    className="link-btn"
+                                    onClick={() => setDetailPlayer(p.name)}
+                                  >
+                                    详情
+                                  </button>
                                   {(
                                     [
                                       ['kick', '踢出'],
@@ -1851,6 +1866,15 @@ export default function App() {
                             ))}
                           </tbody>
                         </table>
+                      )}
+                      {detailPlayer && (
+                        <PlayerDetailPanel
+                          instanceId={selected.id}
+                          player={detailPlayer}
+                          running={selected.status === 'running'}
+                          onClose={() => setDetailPlayer(null)}
+                          onError={setError}
+                        />
                       )}
                       {playerHistory.length > 0 && (
                         <div style={{ marginTop: '1.25rem' }}>
