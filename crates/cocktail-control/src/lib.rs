@@ -16,6 +16,7 @@ mod java;
 mod metrics;
 mod netops;
 mod ops;
+mod ops_extra;
 mod platform;
 mod plugins;
 mod plugin_bridge;
