@@ -24,6 +24,7 @@ mod rcon;
 pub mod secrets;
 mod sevenz;
 mod state;
+mod storage;
 mod stdin_bridge;
 mod totp;
 mod util;
