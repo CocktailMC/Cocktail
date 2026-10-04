@@ -987,7 +987,7 @@ mod tests {
 
     #[tokio::test]
     async fn cached_instance_jre_returns_absolute_path() {
-        let work = PathBuf::from(format!(".java-path-test-{}", uuid::Uuid::new_v4()));
+        let work = std::env::temp_dir().join(format!("java-path-test-{}", uuid::Uuid::new_v4()));
         let home = instance_jre_home(&work);
         fs::create_dir_all(home.join("bin")).unwrap();
         fs::write(home.join("bin").join(java_exe()), b"").unwrap();
