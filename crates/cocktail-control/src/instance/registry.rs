@@ -291,7 +291,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
                 g.get(id).map(ApplyInstance::from)
             };
             if let Some(snap) = snap {
-                cluster::send_down(state, &node_id, AgentDown::Apply { instance: snap }).await?;
+                cluster::send_down(state, &node_id, AgentDown::Apply { instance: snap, seq: 0 }).await?;
             }
         }
         return Ok(view);
@@ -308,7 +308,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
         let view = instance.public_view();
         drop(guard);
         let _ = state.persist().await;
-        cluster::send_down(state, &node_id, AgentDown::Apply { instance: snap }).await?;
+        cluster::send_down(state, &node_id, AgentDown::Apply { instance: snap, seq: 0 }).await?;
         util::audit("instance.start", Some(&instance_id), json!({ "node": node_id }), "api");
         return Ok(view);
     }
@@ -584,6 +584,7 @@ pub async fn stop_instance(state: &AppState, id: &str) -> anyhow::Result<Instanc
             &node_id,
             AgentDown::Stop {
                 instance_id: snap_id.clone(),
+                seq: 0,
             },
         )
         .await?;
@@ -702,6 +703,7 @@ pub async fn send_command(
             AgentDown::Command {
                 instance_id: id.to_string(),
                 command: cmd.clone(),
+                seq: 0,
             },
         )
         .await?;
@@ -864,7 +866,7 @@ pub async fn apply_spec_body(state: &AppState, id: &str, body: &str) -> anyhow::
             stop_instance(state, id).await?;
         }
     } else {
-        cluster::send_down(state, &node_id, AgentDown::Apply { instance: snap }).await?;
+        cluster::send_down(state, &node_id, AgentDown::Apply { instance: snap, seq: 0 }).await?;
     }
     get_instance(state, id)
         .await

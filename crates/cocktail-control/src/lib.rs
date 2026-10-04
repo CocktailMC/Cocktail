@@ -4,6 +4,8 @@ pub mod agent_runtime;
 mod api;
 mod automations;
 mod auth;
+mod rcon;
+mod totp;
 mod cluster;
 mod db;
 mod hostnet;
@@ -211,10 +213,13 @@ fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
         return "users";
     }
     if path.starts_with("/api/v1/nodes") {
-        return "nodes";
+        return if read { "nodes" } else { "nodes.manage" };
     }
     if path.starts_with("/api/v1/netops") || path.starts_with("/api/v1/network") {
-        return if read { "view" } else { "network" };
+        return if read { "netops.view" } else { "netops.write" };
+    }
+    if path.starts_with("/api/v1/auth/2fa") {
+        return if read { "view" } else { "2fa.manage" };
     }
     if path.starts_with("/api/v1/audit")
         || path.starts_with("/api/v1/settings")
@@ -233,7 +238,7 @@ fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
         return if read { "view" } else { "stop" };
     }
     if path.starts_with("/api/v1/cores") {
-        return if read { "view" } else { "plugins" };
+        return if read { "view" } else { "plugins.install" };
     }
     if path.starts_with("/api/v1/instances") {
         if path.ends_with("/start") {
@@ -243,7 +248,7 @@ fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
             return "stop";
         }
         if path.contains("/files") {
-            return if read { "view" } else { "files" };
+            return if read { "files.read" } else { "files.write" };
         }
         if path.contains("/plugins") {
             return if read { "view" } else { "plugins" };
@@ -257,8 +262,41 @@ fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
         {
             return if read { "view" } else { "plugins" };
         }
+        if path.contains("/players/") {
+            if path.ends_with("/detail") {
+                return "players.detail";
+            }
+            if path.ends_with("/rcon") {
+                return "rcon";
+            }
+            if path.ends_with("/kick") {
+                return "players.kick";
+            }
+            if path.ends_with("/ban") {
+                return "players.ban";
+            }
+            if path.ends_with("/pardon") {
+                return "players.pardon";
+            }
+            if path.ends_with("/op") {
+                return "players.op";
+            }
+            if path.ends_with("/deop") {
+                return "players.deop";
+            }
+            if path.ends_with("/whitelist") || path.ends_with("/unwhitelist") {
+                return "players.whitelist";
+            }
+            return if read { "view" } else { "players" };
+        }
         if path.contains("/players") {
             return if read { "view" } else { "players" };
+        }
+        if path.contains("/rcon/") {
+            if path.ends_with("/setup") {
+                return "rcon.setup";
+            }
+            return "rcon";
         }
         if path.contains("/backups") || path.contains("/worlds") {
             return if read { "view" } else { "backups" };

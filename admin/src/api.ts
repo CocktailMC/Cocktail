@@ -670,6 +670,14 @@ export type NetopsStatus = {
   rules: NetopsRule[]
 }
 
+export type NodeNicStat = {
+  name: string
+  rx_bytes: number
+  tx_bytes: number
+  rx_pkts: number
+  tx_pkts: number
+}
+
 export type NodeInfo = {
   id: string
   name: string
@@ -685,6 +693,12 @@ export type NodeInfo = {
   rx_bps?: number
   tx_bps?: number
   instance_count?: number
+  protocol_version?: number
+  last_seq?: number
+  nics?: NodeNicStat[]
+  tcp_estab?: number
+  tcp_syn_recv?: number
+  tcp_time_wait?: number
 }
 
 export type CreatedNode = {
@@ -778,7 +792,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
-  login: (body: { username: string; password: string }) =>
+  login: (body: { username: string; password: string; totp_code?: number }) =>
     request<AuthSession>('/api/v1/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1391,6 +1405,49 @@ export const api = {
     }),
   deleteAutomation: (id: string) =>
     request<void>(`/api/v1/automations/${id}`, { method: 'DELETE' }),
+
+  rconExec: (id: string, command: string) =>
+    request<{ ok: boolean; response: string }>(`/api/v1/instances/${id}/rcon/exec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command }),
+    }),
+  rconStatus: (id: string) =>
+    request<{ enabled: boolean; port?: number; host?: string }>(`/api/v1/instances/${id}/rcon/status`),
+  rconSetup: (id: string, body: { enable: boolean; password?: string; port?: number }) =>
+    request<{ ok: boolean; enabled: boolean; port: number }>(`/api/v1/instances/${id}/rcon/setup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  playerDetail: (id: string, name: string) =>
+    request<{
+      info: PlayerInfo
+      rcon_capabilities: string[]
+      whitelist: string[]
+      ops: string[]
+      banned_players: string[]
+      banned_ips: string[]
+    }>(`/api/v1/instances/${id}/players/${encodeURIComponent(name)}/detail`),
+  playerRconAction: (id: string, name: string, command: string) =>
+    request<{ ok: boolean; response: string }>(`/api/v1/instances/${id}/players/${encodeURIComponent(name)}/rcon`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command }),
+    }),
+  totpSetup: () =>
+    request<{ secret: string; otpauth_url: string }>('/api/v1/auth/2fa/setup', { method: 'POST' }),
+  totpVerify: (code: number) =>
+    request<{ ok: boolean }>('/api/v1/auth/2fa/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    }),
+  totpStatus: () =>
+    request<{ enabled: boolean }>('/api/v1/auth/2fa/status'),
+  totpDisable: () =>
+    request<{ ok: boolean }>('/api/v1/auth/2fa/disable', { method: 'POST' }),
+
   listUsers: () => request<PanelUser[]>('/api/v1/users'),
   createUser: (body: { username: string; password: string; role: string }) =>
     request<void>('/api/v1/users', {

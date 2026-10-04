@@ -141,42 +141,43 @@ pub fn permissions(role: &str) -> Vec<&'static str> {
     match role {
         "observer" => vec!["view"],
         "support" => vec![
-            "view", "start", "stop", "console", "players", "backups", "network",
+            "view", "start", "stop", "console", "logs", "players", "players.detail",
+            "players.kick", "players.ban", "players.pardon", "players.whitelist",
+            "rcon", "backups", "netops.view",
         ],
-        "developer" => vec!["view", "console", "files", "plugins", "start", "stop"],
+        "developer" => vec![
+            "view", "console", "logs", "files", "files.read", "files.write",
+            "plugins", "plugins.install", "start", "stop", "rcon",
+        ],
         "admin" => vec![
-            "view",
-            "start",
-            "stop",
-            "console",
-            "files",
-            "plugins",
-            "players",
-            "backups",
-            "settings",
-            "automations",
-            "network",
-            "nodes",
+            "view", "start", "stop", "console", "logs", "files", "files.read",
+            "files.write", "plugins", "plugins.install", "players", "players.detail",
+            "players.kick", "players.ban", "players.pardon", "players.op",
+            "players.deop", "players.whitelist", "players.gamemode", "players.teleport",
+            "players.give", "players.effect", "players.kill", "players.clear",
+            "rcon", "rcon.setup", "backups", "settings", "automations",
+            "netops.view", "netops.write", "nodes",
         ],
         _ => vec![
-            "view",
-            "start",
-            "stop",
-            "console",
-            "files",
-            "plugins",
-            "players",
-            "backups",
-            "settings",
-            "automations",
-            "network",
-            "nodes",
-            "users",
+            "view", "start", "stop", "console", "logs", "files", "files.read",
+            "files.write", "plugins", "plugins.install", "players", "players.detail",
+            "players.kick", "players.ban", "players.pardon", "players.op",
+            "players.deop", "players.whitelist", "players.gamemode", "players.teleport",
+            "players.give", "players.effect", "players.kill", "players.clear",
+            "rcon", "rcon.setup", "backups", "settings", "automations",
+            "netops.view", "netops.write", "nodes", "nodes.manage", "users",
+            "2fa.manage",
         ],
     }
 }
 
 pub fn can(role: &str, perm: &str) -> bool {
+    if role == "superadmin" {
+        return true;
+    }
+    if perm.is_empty() || perm == "view" {
+        return true;
+    }
     permissions(role).iter().any(|p| *p == perm)
 }
 

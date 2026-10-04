@@ -161,6 +161,30 @@ pub fn router() -> Router<SharedState> {
             post(handlers::player_action),
         )
         .route(
+            "/api/v1/instances/{id}/players/{name}/detail",
+            get(handlers::player_detail),
+        )
+        .route(
+            "/api/v1/instances/{id}/players/{name}/rcon",
+            post(handlers::player_rcon_action),
+        )
+        .route(
+            "/api/v1/instances/{id}/rcon/exec",
+            post(handlers::rcon_exec),
+        )
+        .route(
+            "/api/v1/instances/{id}/rcon/status",
+            get(handlers::rcon_status),
+        )
+        .route(
+            "/api/v1/instances/{id}/rcon/setup",
+            post(handlers::rcon_setup),
+        )
+        .route("/api/v1/auth/2fa/setup", post(handlers::totp_setup))
+        .route("/api/v1/auth/2fa/verify", post(handlers::totp_verify))
+        .route("/api/v1/auth/2fa/status", get(handlers::totp_status))
+        .route("/api/v1/auth/2fa/disable", post(handlers::totp_disable))
+        .route(
             "/api/v1/instances/{id}/worlds",
             get(handlers::list_worlds),
         )

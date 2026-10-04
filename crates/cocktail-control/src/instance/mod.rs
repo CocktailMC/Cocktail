@@ -5,7 +5,7 @@ pub mod hangar;
 mod model;
 pub mod modrinth;
 mod netmon;
-mod players;
+pub mod players;
 pub(crate) mod process;
 mod registry;
 pub mod spiget;

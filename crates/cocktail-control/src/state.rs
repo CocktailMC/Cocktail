@@ -21,6 +21,12 @@ pub struct NodeLive {
     pub memory_mib: f32,
     pub rx_bps: f32,
     pub tx_bps: f32,
+    pub nics: Vec<crate::proto::NicStat>,
+    pub tcp_estab: u32,
+    pub tcp_syn_recv: u32,
+    pub tcp_time_wait: u32,
+    pub protocol_version: u32,
+    pub last_ack_seq: u64,
 }
 
 pub(crate) const LOG_BUFFER: usize = 500;

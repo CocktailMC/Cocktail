@@ -289,14 +289,35 @@ async fn sample_local_node(state: &SharedState) {
         .as_ref()
         .map(|s| (s.rx_bps, s.tx_bps))
         .unwrap_or((0.0, 0.0));
+    let nics = host
+        .as_ref()
+        .map(|s| {
+            s.nics
+                .iter()
+                .map(|n| crate::proto::NicStat {
+                    name: n.name.clone(),
+                    rx_bytes: n.rx_bytes,
+                    tx_bytes: n.tx_bytes,
+                    rx_pkts: 0,
+                    tx_pkts: 0,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let (tcp_estab, tcp_syn_recv, tcp_time_wait) = host
+        .as_ref()
+        .map(|s| (s.tcp_estab, s.syn_recv, s.time_wait))
+        .unwrap_or((0, 0, 0));
     drop(host);
-    state.node_live.write().await.insert(
-        "local".into(),
-        crate::state::NodeLive {
-            cpu_pct,
-            memory_mib,
-            rx_bps,
-            tx_bps,
-        },
-    );
+    let mut live = state.node_live.write().await;
+    let entry = live.entry("local".into()).or_default();
+    entry.cpu_pct = cpu_pct;
+    entry.memory_mib = memory_mib;
+    entry.rx_bps = rx_bps;
+    entry.tx_bps = tx_bps;
+    entry.nics = nics;
+    entry.tcp_estab = tcp_estab;
+    entry.tcp_syn_recv = tcp_syn_recv;
+    entry.tcp_time_wait = tcp_time_wait;
+    entry.protocol_version = crate::proto::PROTOCOL_VERSION;
 }
