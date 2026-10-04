@@ -4,6 +4,7 @@ mod auth;
 pub mod backup;
 mod automations;
 mod cluster;
+mod community;
 pub mod crypto;
 mod db;
 mod diagnostics;
