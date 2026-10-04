@@ -1,0 +1,5 @@
+[env]
+# On systems where `cc` resolves to ccache, keep its cache inside Cargo's
+# ignored build directory. This avoids relying on a user-global cache that may
+# be mounted read-only (for example in sandboxed or CI environments).
+CCACHE_DIR = { value = "target/ccache", relative = true }

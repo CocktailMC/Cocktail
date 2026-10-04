@@ -1,0 +1,52 @@
+name: Linux packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional package version override (defaults to Cargo.toml)
+        required: false
+        type: string
+
+concurrency:
+  group: package-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build DEB and RPM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build packages
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          set -eu
+          args=(python3 scripts/package_linux.py)
+          if [ -n "$PACKAGE_VERSION" ]; then
+            args+=(--version "$PACKAGE_VERSION")
+          fi
+          "${args[@]}"
+          tar -C dist/stage -czf dist/cocktail-linux-stage.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cocktail-linux-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/cocktail-linux-stage.tar.gz
+          if-no-files-found: error

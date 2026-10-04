@@ -102,8 +102,7 @@ data/
 ### Linux（deb / rpm）
 
 ```bash
-chmod +x scripts/package-linux.sh packaging/scripts/*.sh
-./scripts/package-linux.sh
+python3 scripts/package_linux.py
 
 sudo dpkg -i dist/cocktail_0.1.0_amd64.deb
 # 或

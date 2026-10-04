@@ -66,7 +66,7 @@ python3 scripts/release/cocktail_release.py plan \
 
 ## 制品
 
-Linux 走现有的 `scripts/package-linux.sh`，再打一个 stage 目录的 tar.gz。Windows 走 `scripts/package-windows.ps1` 的 zip。装了 WiX 时脚本仍会顺带打 MSI。文件名由 `rename-dist` 改成：
+Linux 走 `scripts/package_linux.py`，再打一个 stage 目录的 tar.gz。Windows 走 `scripts/package-windows.ps1` 的 zip。装了 WiX 时脚本仍会顺带打 MSI。文件名由 `rename-dist` 改成：
 
 ```text
 Cocktail.26Q4.01.DT.01+B12.Linux.x86_64.deb

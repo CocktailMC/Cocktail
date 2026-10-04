@@ -43,6 +43,7 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   checks:
@@ -125,8 +126,7 @@ jobs:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           set -eu
-          chmod +x scripts/package-linux.sh packaging/scripts/*.sh
-          ./scripts/package-linux.sh
+          python3 scripts/package_linux.py --version "$VERSION"
           tar -C dist/stage -czf dist/linux.tar.gz .
           python3 scripts/release/cocktail_release.py rename-dist \
             --version "$VERSION" \
