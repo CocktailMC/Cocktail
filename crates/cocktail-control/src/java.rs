@@ -495,8 +495,8 @@ pub async fn ensure_instance_jre(
     mc_version: Option<&str>,
 ) -> anyhow::Result<PathBuf> {
     let major = java_major.unwrap_or_else(|| recommended_java_major(mc_version));
-    // The child changes its working directory before executing Java on Unix.
-    // Resolve here so a relative instance path is not interpreted twice.
+    
+    
     let work = std::path::absolute(workdir)
         .with_context(|| format!("resolve instance directory {workdir}"))?;
     let dest = instance_jre_home(&work);
