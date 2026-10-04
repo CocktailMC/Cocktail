@@ -172,7 +172,6 @@ pub fn mkdir(workdir: &str, relative: &str) -> anyhow::Result<FileEntry> {
     })
 }
 
-
 pub fn jar_exists(workdir: &str, relative: &str) -> bool {
     resolve_in_workdir(workdir, relative)
         .map(|p| p.is_file())
@@ -219,7 +218,6 @@ fn lexical_normalize(p: &Path) -> PathBuf {
         out
     }
 }
-
 
 pub fn workdirs_conflict(a: &str, b: &str) -> bool {
     let a = comparable_workdir(a);
@@ -648,7 +646,15 @@ pub fn copy_instance_tree(
     }
     fs::create_dir_all(dst)?;
     let mut copied = 0u32;
-    copy_walk(src_root, Path::new(dst), src_root, copy_data, skip_logs, &mut copied, 0)?;
+    copy_walk(
+        src_root,
+        Path::new(dst),
+        src_root,
+        copy_data,
+        skip_logs,
+        &mut copied,
+        0,
+    )?;
     Ok(copied)
 }
 
@@ -705,7 +711,15 @@ fn copy_walk(
         let target = dst_root.join(path.strip_prefix(src_root)?);
         if path.is_dir() {
             fs::create_dir_all(&target)?;
-            copy_walk(&path, dst_root, src_root, copy_data, skip_logs, copied, depth + 1)?;
+            copy_walk(
+                &path,
+                dst_root,
+                src_root,
+                copy_data,
+                skip_logs,
+                copied,
+                depth + 1,
+            )?;
         } else {
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)?;
@@ -946,8 +960,10 @@ pub fn write_mc_version_marker(workdir: &str, version: &str) -> anyhow::Result<(
         .unwrap_or_default();
     lines.retain(|l| !l.trim_start().starts_with("cocktail-mc-version="));
     lines.push(format!("cocktail-mc-version={version}"));
-    let mut out = lines.join("
-");
+    let mut out = lines.join(
+        "
+",
+    );
     out.push('\n');
     fs::write(path, out)?;
     Ok(())

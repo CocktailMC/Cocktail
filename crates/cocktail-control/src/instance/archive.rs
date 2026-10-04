@@ -1,5 +1,3 @@
-
-
 use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -128,11 +126,9 @@ pub async fn import_archive(
     let archive = archive_path.to_path_buf();
     let dest = PathBuf::from(&workdir);
     let filename = opts.filename.clone();
-    let extract_out = tokio::task::spawn_blocking(move || {
-        extract_pack(&archive, &dest, &filename)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("解压任务失败：{e}"))??;
+    let extract_out = tokio::task::spawn_blocking(move || extract_pack(&archive, &dest, &filename))
+        .await
+        .map_err(|e| anyhow::anyhow!("解压任务失败：{e}"))??;
 
     job.emit("extract", 1, Some(1));
 
@@ -515,7 +511,11 @@ fn resolve_startup(
     workdir: &str,
     opts: &ImportArchiveOpts,
 ) -> anyhow::Result<(String, Option<String>, Vec<String>)> {
-    let override_cmd = opts.command.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let override_cmd = opts
+        .command
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     if let Some(line) = override_cmd {
         let (cmd, args) = if opts.args.is_empty() && line.contains(' ') {
             util::parse_command_line(line)?

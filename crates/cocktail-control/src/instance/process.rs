@@ -6,7 +6,7 @@ use chrono::Utc;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tracing::{error, info, warn};
 
 use crate::util::{self, ParsedGameStats};
@@ -31,7 +31,7 @@ pub struct ProcessHandle {
     pub reattached: bool,
     stop_tx: mpsc::Sender<StopMode>,
     cmd_tx: mpsc::Sender<String>,
-    
+
     pub(crate) container_name: Option<String>,
 }
 
@@ -39,7 +39,6 @@ impl ProcessHandle {
     pub async fn stop(self, mode: StopMode) {
         let _ = tokio::time::timeout(Duration::from_secs(5), self.stop_tx.send(mode)).await;
         if let Some(name) = self.container_name {
-            
             if let Some(rt) = super::runtime::runtime() {
                 rt.remove(&name).await;
             }
@@ -77,7 +76,6 @@ pub async fn spawn_instance(
     let child = build_command(bin, &args, &workdir, &instance_id)?;
     attach_child(instance_id, child, events, None, Some(workdir), false, port).await
 }
-
 
 pub async fn spawn_external_command(
     instance_id: String,
@@ -384,7 +382,12 @@ fn wrap_script_command(bin: &str, args: &[String]) -> (String, Vec<String>) {
     (bin.to_string(), args.to_vec())
 }
 
-fn build_command(bin: &str, args: &[String], workdir: &str, instance_id: &str) -> anyhow::Result<Child> {
+fn build_command(
+    bin: &str,
+    args: &[String],
+    workdir: &str,
+    instance_id: &str,
+) -> anyhow::Result<Child> {
     use std::process::Stdio;
 
     let log = open_console_log(instance_id)?;
@@ -540,7 +543,6 @@ async fn supervise(
     }
 }
 
-
 pub async fn adopt_running(
     instance_id: String,
     pid: u32,
@@ -563,7 +565,9 @@ pub async fn adopt_running(
     }));
     let (stop_logs_tx, stop_logs_rx) = mpsc::channel::<()>(1);
 
-    let fifo_file = open_cmd_fifo(&workdir).ok().map(|f| Arc::new(Mutex::new(f)));
+    let fifo_file = open_cmd_fifo(&workdir)
+        .ok()
+        .map(|f| Arc::new(Mutex::new(f)));
     let docker_name = container_name.clone();
     let id_for_cmd = instance_id.clone();
     let events_for_cmd = events.clone();
@@ -612,7 +616,9 @@ pub async fn adopt_running(
             stop_logs_rx,
         ));
     }
-    let latest = std::path::PathBuf::from(&workdir).join("logs").join("latest.log");
+    let latest = std::path::PathBuf::from(&workdir)
+        .join("logs")
+        .join("latest.log");
     let (stop_latest_tx, stop_latest_rx) = mpsc::channel::<()>(1);
     tokio::spawn(follow_file(
         latest,
@@ -761,7 +767,9 @@ async fn wait_pid_exit(pid: u32, timeout: Duration) -> bool {
 }
 
 fn fifo_path(workdir: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from(workdir).join(".cocktail").join("stdin")
+    std::path::PathBuf::from(workdir)
+        .join(".cocktail")
+        .join("stdin")
 }
 
 pub fn console_log_path(instance_id: &str) -> std::path::PathBuf {
@@ -800,7 +808,11 @@ fn ensure_fifo(path: &std::path::Path) -> anyhow::Result<()> {
     let cstr = std::ffi::CString::new(s)?;
     let rc = unsafe { libc::mkfifo(cstr.as_ptr(), 0o600) };
     if rc != 0 {
-        anyhow::bail!("mkfifo {}: {}", path.display(), std::io::Error::last_os_error());
+        anyhow::bail!(
+            "mkfifo {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        );
     }
     Ok(())
 }
@@ -916,7 +928,7 @@ async fn follow_docker_logs(
                         break;
                     }
                 };
-                
+
                 let text = String::from_utf8_lossy(&line);
                 for part in text.split_inclusive('\n') {
                     let trimmed = part.trim_end_matches(['\n', '\r']);

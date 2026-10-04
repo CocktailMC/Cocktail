@@ -1,17 +1,17 @@
+use axum::Json;
 use axum::body::Body;
 use axum::extract::multipart::Multipart;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::instance::{
     self, BulkActionRequest, CommandRequest, CreateInstanceRequest, CreateScheduleRequest,
-    EulaRequest, HangarVersionsQuery, InstallHangarRequest, InstallModrinthRequest,
-    InstallRequest, InstallSpigetRequest, InstanceEvent, PlayerActionRequest, PropertiesUpdate,
+    EulaRequest, HangarVersionsQuery, InstallHangarRequest, InstallModrinthRequest, InstallRequest,
+    InstallSpigetRequest, InstanceEvent, PlayerActionRequest, PropertiesUpdate,
     UpdateInstanceRequest, WriteFileRequest,
 };
 use crate::instance::{ModrinthVersionsQuery, SearchQuery};
@@ -236,8 +236,8 @@ pub async fn setup(
         Ok(t) => t,
         Err(e) => return bad_request(e.to_string()).into_response(),
     };
-    let expires_at = (chrono::Utc::now() + chrono::Duration::hours(crate::auth::SESSION_TTL_HOURS))
-        .to_rfc3339();
+    let expires_at =
+        (chrono::Utc::now() + chrono::Duration::hours(crate::auth::SESSION_TTL_HOURS)).to_rfc3339();
     let panel_name = panel_name_of(&conn);
     crate::util::audit(
         "auth.setup",
@@ -245,10 +245,7 @@ pub async fn setup(
         serde_json::json!({ "username": admin.username }),
         "setup",
     );
-    Json(session_payload(
-        token, csrf, expires_at, &admin, panel_name,
-    ))
-    .into_response()
+    Json(session_payload(token, csrf, expires_at, &admin, panel_name)).into_response()
 }
 
 pub async fn login(
@@ -286,7 +283,9 @@ pub async fn login(
         )
             .into_response();
     }
-    let found = crate::db::admin_by_username(&conn, &username).ok().flatten();
+    let found = crate::db::admin_by_username(&conn, &username)
+        .ok()
+        .flatten();
     let ok = found
         .as_ref()
         .map(|a| crate::auth::verify_password(&body.password, &a.password_hash))
@@ -320,8 +319,8 @@ pub async fn login(
         Ok(t) => t,
         Err(e) => return bad_request(e.to_string()).into_response(),
     };
-    let expires_at = (chrono::Utc::now() + chrono::Duration::hours(crate::auth::SESSION_TTL_HOURS))
-        .to_rfc3339();
+    let expires_at =
+        (chrono::Utc::now() + chrono::Duration::hours(crate::auth::SESSION_TTL_HOURS)).to_rfc3339();
     let panel_name = panel_name_of(&conn);
     crate::util::audit(
         "auth.login",
@@ -329,10 +328,7 @@ pub async fn login(
         serde_json::json!({ "username": admin.username, "role": admin.role }),
         &admin.username,
     );
-    Json(session_payload(
-        token, csrf, expires_at, &admin, panel_name,
-    ))
-    .into_response()
+    Json(session_payload(token, csrf, expires_at, &admin, panel_name)).into_response()
 }
 
 pub async fn logout(State(state): State<SharedState>, headers: HeaderMap) -> impl IntoResponse {
@@ -363,10 +359,7 @@ pub async fn me(State(state): State<SharedState>, headers: HeaderMap) -> Respons
     .into_response()
 }
 
-pub async fn get_settings(
-    State(state): State<SharedState>,
-    headers: HeaderMap,
-) -> Response {
+pub async fn get_settings(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     let admin = match current_admin(&state, &headers).await {
         Ok(a) => a,
         Err(resp) => return resp.into_response(),
@@ -424,13 +417,9 @@ pub async fn update_settings(
         qq_sandbox: body.qq_sandbox,
         qq_alerts: body.qq_alerts,
         qq_status_secs: body.qq_status_secs,
-        net_alert_rx_bps: body.net_alert_rx_mbps.map(|m| {
-            if m <= 0.0 {
-                0.0
-            } else {
-                m * 1024.0 * 1024.0
-            }
-        }),
+        net_alert_rx_bps: body
+            .net_alert_rx_mbps
+            .map(|m| if m <= 0.0 { 0.0 } else { m * 1024.0 * 1024.0 }),
     };
     if let Err(e) = crate::db::patch_panel(&conn, patch) {
         return bad_request(e.to_string()).into_response();
@@ -486,9 +475,9 @@ pub async fn change_password(
     }
     let _ = crate::db::delete_sessions_for_admin(&conn, admin.id);
     if let Ok((token, csrf)) = crate::auth::create_session(&conn, &admin) {
-        let expires_at =
-            (chrono::Utc::now() + chrono::Duration::hours(crate::auth::SESSION_TTL_HOURS))
-                .to_rfc3339();
+        let expires_at = (chrono::Utc::now()
+            + chrono::Duration::hours(crate::auth::SESSION_TTL_HOURS))
+        .to_rfc3339();
         let panel_name = panel_name_of(&conn);
         crate::util::audit(
             "auth.password",
@@ -496,10 +485,7 @@ pub async fn change_password(
             serde_json::json!({ "username": admin.username }),
             &admin.username,
         );
-        return Json(session_payload(
-            token, csrf, expires_at, &admin, panel_name,
-        ))
-        .into_response();
+        return Json(session_payload(token, csrf, expires_at, &admin, panel_name)).into_response();
     }
     StatusCode::NO_CONTENT.into_response()
 }
@@ -705,7 +691,11 @@ pub async fn kick_netops(
     State(state): State<SharedState>,
     Json(req): Json<crate::netops::KickRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
-    map_result(crate::netops::kick(&state, req).await.map(|_| serde_json::json!({ "ok": true })))
+    map_result(
+        crate::netops::kick(&state, req)
+            .await
+            .map(|_| serde_json::json!({ "ok": true })),
+    )
 }
 
 pub async fn resync_netops(
@@ -880,15 +870,8 @@ pub async fn install_jar(
     }
     let bytes = bytes.ok_or_else(|| bad_request("missing file field"))?;
     map_result(
-        instance::install_local_jar(
-            &state,
-            &id,
-            &q.path,
-            &bytes,
-            Some(q.core),
-            q.accept_eula,
-        )
-        .await,
+        instance::install_local_jar(&state, &id, &q.path, &bytes, Some(q.core), q.accept_eula)
+            .await,
     )
 }
 
@@ -912,9 +895,7 @@ pub async fn import_archive(
     Query(q): Query<ImportArchiveQuery>,
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
-    let tmp_root = std::path::PathBuf::from("data")
-        .join("tmp")
-        .join("imports");
+    let tmp_root = std::path::PathBuf::from("data").join("tmp").join("imports");
     tokio::fs::create_dir_all(&tmp_root)
         .await
         .map_err(|e| bad_request(e.to_string()))?;
@@ -984,7 +965,13 @@ async fn save_multipart_archive(
             .next()
             .unwrap_or("pack.bin")
             .chars()
-            .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+            .map(|c| {
+                if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                    '_'
+                } else {
+                    c
+                }
+            })
             .collect::<String>();
         if !crate::sevenz::is_supported_name(&safe) {
             anyhow::bail!("不支持的压缩格式：{safe}（支持 7z / zip / tar.gz / tar.xz）");
@@ -1215,9 +1202,7 @@ pub async fn spiget_versions(
     map_result(instance::spiget::list_versions(rid).await)
 }
 
-pub async fn spiget_icon(
-    Path(rid): Path<i64>,
-) -> Result<Response, (StatusCode, Json<ErrorBody>)> {
+pub async fn spiget_icon(Path(rid): Path<i64>) -> Result<Response, (StatusCode, Json<ErrorBody>)> {
     match instance::spiget::fetch_icon(rid).await {
         Ok((ctype, bytes)) => Ok(Response::builder()
             .status(StatusCode::OK)
@@ -1239,7 +1224,6 @@ pub async fn spiget_install(
 
 #[derive(Deserialize)]
 pub struct PlayersQuery {
-    
     #[serde(default)]
     pub probe: bool,
 }
@@ -1600,17 +1584,14 @@ pub async fn current_admin(
     })?;
     let conn = state.db.lock().await;
     if state.env_api_token.as_ref().is_some_and(|t| t == &token) {
-        return crate::db::superadmin(&conn)
-            .ok()
-            .flatten()
-            .ok_or_else(|| {
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(ErrorBody {
-                        error: "未登录".into(),
-                    }),
-                )
-            });
+        return crate::db::superadmin(&conn).ok().flatten().ok_or_else(|| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ErrorBody {
+                    error: "未登录".into(),
+                }),
+            )
+        });
     }
     let session = crate::db::session_lookup(&conn, &token).ok().flatten();
     drop(conn);
@@ -1667,13 +1648,15 @@ pub async fn create_user(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
     let admin = session_admin(&state, &headers).await?;
     require_perm(&admin, "users")?;
-    let username = crate::auth::validate_username(&body.username).map_err(|e| bad_request(e.to_string()))?;
+    let username =
+        crate::auth::validate_username(&body.username).map_err(|e| bad_request(e.to_string()))?;
     crate::auth::validate_password(&body.password).map_err(|e| bad_request(e.to_string()))?;
     let role = normalize_role(&body.role).map_err(|e| bad_request(e.to_string()))?;
     if role == "superadmin" && admin.role != "superadmin" {
         return Err(bad_request("只有 Owner 可以创建 Owner"));
     }
-    let hash = crate::auth::hash_password(&body.password).map_err(|e| bad_request(e.to_string()))?;
+    let hash =
+        crate::auth::hash_password(&body.password).map_err(|e| bad_request(e.to_string()))?;
     let now = chrono::Utc::now().to_rfc3339();
     let conn = state.db.lock().await;
     crate::db::insert_admin(&conn, &username, &hash, &role, &now)
@@ -2008,19 +1991,12 @@ fn map_result<T: Serialize>(
 }
 
 fn not_found(msg: impl Into<String>) -> (StatusCode, Json<ErrorBody>) {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ErrorBody {
-            error: msg.into(),
-        }),
-    )
+    (StatusCode::NOT_FOUND, Json(ErrorBody { error: msg.into() }))
 }
 
 fn bad_request(msg: impl Into<String>) -> (StatusCode, Json<ErrorBody>) {
     (
         StatusCode::BAD_REQUEST,
-        Json(ErrorBody {
-            error: msg.into(),
-        }),
+        Json(ErrorBody { error: msg.into() }),
     )
 }

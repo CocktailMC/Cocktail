@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 use axum::Router;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 
 use crate::automations::PanelEvent;
 use crate::db;
@@ -41,11 +41,9 @@ pub struct AppState {
     pub node_live: RwLock<HashMap<String, NodeLive>>,
     pub plugin_host: String,
     pub plugin_token: String,
-    
-    
+
     pub plugins: std::sync::Mutex<crate::plugin_bridge::PluginRegistry>,
-    
-    
+
     pub plane: OnceLock<Router>,
     pub env_api_token: Option<String>,
     pub env_webhook_url: Option<String>,
@@ -120,10 +118,7 @@ impl AppState {
         let conn = self.db.lock().await;
         let row = db::panel(&conn).ok();
         drop(conn);
-        if let Some(url) = row
-            .and_then(|r| r.webhook_url)
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(url) = row.and_then(|r| r.webhook_url).filter(|s| !s.is_empty()) {
             return Some(url);
         }
         self.env_webhook_url.clone()
@@ -141,10 +136,7 @@ impl AppState {
             return true;
         }
         let conn = self.db.lock().await;
-        db::session_lookup(&conn, token)
-            .ok()
-            .flatten()
-            .is_some()
+        db::session_lookup(&conn, token).ok().flatten().is_some()
     }
 
     pub async fn token_role(&self, token: &str) -> Option<(String, String)> {
@@ -184,11 +176,7 @@ impl AppState {
                 match rx.recv().await {
                     Ok(event) => {
                         instance::apply_event(&state, &event).await;
-                        if let InstanceEvent::Log {
-                            instance_id,
-                            line,
-                        } = &event
-                        {
+                        if let InstanceEvent::Log { instance_id, line } = &event {
                             let mut buffers = state.log_buffers.write().await;
                             let buf = buffers
                                 .entry(instance_id.clone())
@@ -273,9 +261,7 @@ impl AppState {
     }
 }
 
-fn hydrate_state(
-    db: &rusqlite::Connection,
-) -> (HashMap<String, Instance>, Vec<Schedule>) {
+fn hydrate_state(db: &rusqlite::Connection) -> (HashMap<String, Instance>, Vec<Schedule>) {
     let (json_map, schedules) = load_from_disk().unwrap_or_else(|e| {
         tracing::warn!(error = %e, "failed to load persisted state.json");
         (HashMap::new(), Vec::new())

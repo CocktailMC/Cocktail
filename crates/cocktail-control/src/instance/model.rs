@@ -14,8 +14,6 @@ pub enum InstanceStatus {
 }
 
 impl InstanceStatus {
-    
-    
     pub fn can_apply_over(self, current: Self) -> bool {
         use InstanceStatus::*;
         if self == current {
@@ -51,7 +49,7 @@ pub struct InstanceSpec {
     pub memory_mib: u32,
     #[serde(default = "default_core")]
     pub core: String,
-    
+
     #[serde(default = "default_port")]
     pub port: u16,
     #[serde(default)]
@@ -62,10 +60,10 @@ pub struct InstanceSpec {
     pub webhook_url: Option<String>,
     #[serde(default)]
     pub runtime: RuntimeKind,
-    
+
     #[serde(default)]
     pub docker_image: Option<String>,
-    
+
     #[serde(default)]
     pub cpu_limit: Option<f32>,
     #[serde(default)]
@@ -80,10 +78,10 @@ pub struct InstanceSpec {
     pub backup_keep: u32,
     #[serde(default)]
     pub backup_hour: Option<u8>,
-    
+
     #[serde(default)]
     pub java_major: Option<u32>,
-    
+
     #[serde(default)]
     pub mc_version: Option<String>,
 }
@@ -304,10 +302,7 @@ impl Instance {
                 .map(|p| p.child_id)
                 .filter(|p| *p > 0)
                 .or(self.last_pid),
-            reattached: self
-                .process
-                .as_ref()
-                .is_some_and(|p| p.reattached),
+            reattached: self.process.as_ref().is_some_and(|p| p.reattached),
             node_id: if self.spec.node_id.is_empty() {
                 "local".into()
             } else {
@@ -450,7 +445,7 @@ pub struct UpdateInstanceRequest {
     pub backup_keep: Option<u32>,
     #[serde(default)]
     pub backup_hour: Option<u8>,
-    
+
     #[serde(default)]
     pub java_major: Option<u32>,
 }
@@ -506,7 +501,7 @@ pub struct Schedule {
     pub id: String,
     pub instance_id: String,
     pub kind: ScheduleKind,
-    
+
     pub every_secs: u64,
     #[serde(default)]
     pub command: Option<String>,

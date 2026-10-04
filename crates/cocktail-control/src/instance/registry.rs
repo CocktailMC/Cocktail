@@ -11,12 +11,12 @@ use crate::util;
 
 use super::files;
 use super::model::{
-    is_local_node,
     BackupInfo, BulkActionRequest, BulkActionResult, BulkFailure, CloneInstanceRequest,
     CommandRequest, CreateInstanceRequest, CreateScheduleRequest, EulaRequest, FileContent,
     FileEntry, FleetSummary, GroupCount, Instance, InstanceEvent, InstanceSpec, InstanceStatus,
     InstanceView, PlayerInfo, PluginInfo, PreflightReport, PropertyEntry, RestorePreview,
     RuntimeCount, RuntimeKind, Schedule, ScheduleKind, UpdateInstanceRequest, VersionCompare,
+    is_local_node,
 };
 use super::process::{self, StopMode};
 
@@ -105,7 +105,12 @@ pub async fn create_instance(
     });
     let _ = state.persist().await;
     let _ = crate::netops::try_apply(state).await;
-    util::audit("instance.create", Some(&id), json!({ "name": view.spec.name }), "api");
+    util::audit(
+        "instance.create",
+        Some(&id),
+        json!({ "name": view.spec.name }),
+        "api",
+    );
 
     Ok(view)
 }
@@ -235,8 +240,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
 
         let needs_eula = instance.spec.command.is_some()
             || super::versions::core_needs_eula(&instance.spec.core);
-        let eula_ok =
-            instance.spec.eula_accepted || util::eula_is_accepted(&instance.spec.workdir);
+        let eula_ok = instance.spec.eula_accepted || util::eula_is_accepted(&instance.spec.workdir);
         let container = instance.docker_container.clone().or_else(|| {
             instance
                 .process
@@ -309,7 +313,12 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
         drop(guard);
         let _ = state.persist().await;
         cluster::send_down(state, &node_id, AgentDown::Apply { instance: snap }).await?;
-        util::audit("instance.start", Some(&instance_id), json!({ "node": node_id }), "api");
+        util::audit(
+            "instance.start",
+            Some(&instance_id),
+            json!({ "node": node_id }),
+            "api",
+        );
         return Ok(view);
     }
 
@@ -330,7 +339,6 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
     let mc_version = instance.spec.mc_version.clone();
     let events = state.events.clone();
 
-    
     if command.is_none() || (command.as_deref() == Some("java") && args.is_empty()) {
         if files::jar_exists(&workdir, "server.jar") {
             let (cmd, a) = util::java_jar_startup("server.jar");
@@ -342,8 +350,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
                 instance.spec.core = "custom".into();
             }
         } else if matches!(runtime, RuntimeKind::Docker | RuntimeKind::Podman)
-            || (instance.spec.core != "demo"
-                && super::versions::is_known_core(&instance.spec.core))
+            || (instance.spec.core != "demo" && super::versions::is_known_core(&instance.spec.core))
             || instance.spec.core == "custom"
             || instance.spec.core == "spigot"
         {
@@ -370,15 +377,14 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
         && (docker_image.is_empty() || docker_image.starts_with("eclipse-temurin:"))
     {
         crate::java::docker_image_for(
-            java_major.unwrap_or_else(|| crate::java::recommended_java_major(mc_version.as_deref())),
+            java_major
+                .unwrap_or_else(|| crate::java::recommended_java_major(mc_version.as_deref())),
         )
     } else {
         docker_image
     };
     let command = if runtime == RuntimeKind::Process
-        && command
-            .as_deref()
-            .is_some_and(util::is_java_command)
+        && command.as_deref().is_some_and(util::is_java_command)
     {
         match crate::java::ensure_for_spec(&workdir, java_major, mc_version.as_deref()).await {
             Ok(bin) => crate::java::rewrite_java_command(command, &bin),
@@ -587,7 +593,12 @@ pub async fn stop_instance(state: &AppState, id: &str) -> anyhow::Result<Instanc
             },
         )
         .await?;
-        util::audit("instance.stop", Some(&snap_id), json!({ "node": node_id }), "api");
+        util::audit(
+            "instance.stop",
+            Some(&snap_id),
+            json!({ "node": node_id }),
+            "api",
+        );
         return Ok(view);
     }
 
@@ -632,7 +643,12 @@ pub async fn stop_instance(state: &AppState, id: &str) -> anyhow::Result<Instanc
             let view = inst.public_view();
             drop(guard);
             let _ = state.persist().await;
-            util::audit("instance.stop", Some(id), json!({ "mode": "graceful" }), "api");
+            util::audit(
+                "instance.stop",
+                Some(id),
+                json!({ "mode": "graceful" }),
+                "api",
+            );
             return Ok(view);
         }
         anyhow::bail!("instance not found after stop");
@@ -672,11 +688,7 @@ pub async fn delete_instance(state: &AppState, id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn send_command(
-    state: &AppState,
-    id: &str,
-    req: CommandRequest,
-) -> anyhow::Result<()> {
+pub async fn send_command(state: &AppState, id: &str, req: CommandRequest) -> anyhow::Result<()> {
     let cmd = req.command.trim().to_string();
     if cmd.is_empty() {
         anyhow::bail!("command is empty");
@@ -705,7 +717,12 @@ pub async fn send_command(
             },
         )
         .await?;
-        util::audit("instance.command", Some(id), json!({ "command": cmd }), "api");
+        util::audit(
+            "instance.command",
+            Some(id),
+            json!({ "command": cmd }),
+            "api",
+        );
         return Ok(());
     }
     let _ = has_handle;
@@ -721,7 +738,12 @@ pub async fn send_command(
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("process handle missing"))?;
     handle.send_command(cmd.clone()).await?;
-    util::audit("instance.command", Some(id), json!({ "command": cmd }), "api");
+    util::audit(
+        "instance.command",
+        Some(id),
+        json!({ "command": cmd }),
+        "api",
+    );
     Ok(())
 }
 
@@ -773,8 +795,7 @@ async fn runtime_is_alive(pid: Option<u32>, container: Option<&str>) -> bool {
     if let Some(name) = container.filter(|s| !s.is_empty()) {
         return process::docker_container_running(name).await;
     }
-    pid.filter(|p| *p > 0)
-        .is_some_and(process::pid_is_alive)
+    pid.filter(|p| *p > 0).is_some_and(process::pid_is_alive)
 }
 
 async fn recover_stuck_stopping(state: &AppState, id: &str) {
@@ -784,11 +805,10 @@ async fn recover_stuck_stopping(state: &AppState, id: &str) {
         if inst.status != InstanceStatus::Stopping {
             return;
         }
-        let container = inst.docker_container.clone().or_else(|| {
-            inst.process
-                .as_ref()
-                .and_then(|h| h.container_name.clone())
-        });
+        let container = inst
+            .docker_container
+            .clone()
+            .or_else(|| inst.process.as_ref().and_then(|h| h.container_name.clone()));
         let pid = inst.process.as_ref().map(|h| h.child_id).or(inst.last_pid);
         (pid, container)
     };
@@ -796,7 +816,9 @@ async fn recover_stuck_stopping(state: &AppState, id: &str) {
         return;
     }
     let mut guard = state.instances.write().await;
-    let Some(inst) = guard.get_mut(id) else { return };
+    let Some(inst) = guard.get_mut(id) else {
+        return;
+    };
     if inst.status != InstanceStatus::Stopping || inst.spec.desired_running {
         return;
     }
@@ -826,7 +848,11 @@ pub async fn spec_yaml(state: &AppState, id: &str) -> anyhow::Result<String> {
         .map_err(|e| anyhow::anyhow!("yaml: {e}"))
 }
 
-pub async fn apply_spec_body(state: &AppState, id: &str, body: &str) -> anyhow::Result<InstanceView> {
+pub async fn apply_spec_body(
+    state: &AppState,
+    id: &str,
+    body: &str,
+) -> anyhow::Result<InstanceView> {
     let mut manifest = parse_manifest(id, body)?;
     if manifest.id.is_empty() {
         manifest.id = id.to_string();
@@ -855,7 +881,12 @@ pub async fn apply_spec_body(state: &AppState, id: &str, body: &str) -> anyhow::
     let view = instance.public_view();
     drop(guard);
     let _ = state.persist().await;
-    util::audit("instance.apply", Some(id), json!({ "generation": view.generation }), "api");
+    util::audit(
+        "instance.apply",
+        Some(id),
+        json!({ "generation": view.generation }),
+        "api",
+    );
 
     if is_local_node(&node_id) {
         if desired {
@@ -897,11 +928,7 @@ fn parse_manifest(id: &str, body: &str) -> anyhow::Result<InstanceManifest> {
     })
 }
 
-pub async fn list_files(
-    state: &AppState,
-    id: &str,
-    path: &str,
-) -> anyhow::Result<Vec<FileEntry>> {
+pub async fn list_files(state: &AppState, id: &str, path: &str) -> anyhow::Result<Vec<FileEntry>> {
     let workdir = workdir_of(state, id).await?;
     files::list_files(&workdir, path)
 }
@@ -911,7 +938,11 @@ pub async fn read_file(state: &AppState, id: &str, path: &str) -> anyhow::Result
     files::read_file(&workdir, path)
 }
 
-pub async fn read_bytes(state: &AppState, id: &str, path: &str) -> anyhow::Result<(String, Vec<u8>)> {
+pub async fn read_bytes(
+    state: &AppState,
+    id: &str,
+    path: &str,
+) -> anyhow::Result<(String, Vec<u8>)> {
     let workdir = workdir_of(state, id).await?;
     files::read_bytes(&workdir, path)
 }
@@ -958,7 +989,6 @@ pub async fn mkdir(state: &AppState, id: &str, path: &str) -> anyhow::Result<Fil
     util::audit("file.mkdir", Some(id), json!({ "path": path }), "api");
     Ok(out)
 }
-
 
 pub async fn install_local_jar(
     state: &AppState,
@@ -1020,7 +1050,6 @@ pub async fn install_local_jar(
     );
     Ok(out)
 }
-
 
 pub async fn set_startup_jar(
     state: &AppState,
@@ -1097,11 +1126,7 @@ pub async fn delete_backup(state: &AppState, id: &str, backup_id: &str) -> anyho
     Ok(())
 }
 
-pub async fn restore_backup(
-    state: &AppState,
-    id: &str,
-    backup_id: &str,
-) -> anyhow::Result<()> {
+pub async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> anyhow::Result<()> {
     let view = get_instance(state, id)
         .await
         .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
@@ -1112,7 +1137,12 @@ pub async fn restore_backup(
         anyhow::bail!("stop the instance before restore");
     }
     files::restore_backup(id, backup_id, &view.spec.workdir)?;
-    util::audit("backup.restore", Some(id), json!({ "id": backup_id }), "api");
+    util::audit(
+        "backup.restore",
+        Some(id),
+        json!({ "id": backup_id }),
+        "api",
+    );
     Ok(())
 }
 
@@ -1182,11 +1212,7 @@ pub async fn set_plugin_enabled(
     enabled: bool,
 ) -> anyhow::Result<PluginInfo> {
     let workdir = workdir_of(state, id).await?;
-    let base = name
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(name)
-        .to_string();
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name).to_string();
 
     let mut current = None;
     let mut folder = "plugins";
@@ -1237,11 +1263,8 @@ pub async fn install_modrinth(
         anyhow::bail!("no download URL");
     }
     let project_type = req.project_type.as_deref().unwrap_or("");
-    let target = super::modrinth::infer_target(
-        project_type,
-        &version.loaders,
-        req.target.as_deref(),
-    );
+    let target =
+        super::modrinth::infer_target(project_type, &version.loaders, req.target.as_deref());
     let filename = version.primary_filename.clone();
     let safe_name = filename
         .rsplit(['/', '\\'])
@@ -1416,10 +1439,7 @@ pub async fn apply_event(state: &std::sync::Arc<AppState>, event: &InstanceEvent
                     if *status == InstanceStatus::Crashed && inst.spec.auto_restart {
                         should_restart = true;
                     }
-                    if matches!(
-                        *status,
-                        InstanceStatus::Stopped | InstanceStatus::Crashed
-                    ) {
+                    if matches!(*status, InstanceStatus::Stopped | InstanceStatus::Crashed) {
                         inst.process = None;
                         inst.last_pid = None;
                         inst.last_start_time = None;
@@ -1492,10 +1512,7 @@ pub async fn apply_event(state: &std::sync::Arc<AppState>, event: &InstanceEvent
                 buf.pop_front();
             }
         }
-        InstanceEvent::Log {
-            instance_id,
-            line,
-        } => {
+        InstanceEvent::Log { instance_id, line } => {
             util::append_instance_log(instance_id, &line.stream, &line.line);
             super::players::ingest_line(state, instance_id, &line.line).await;
             if let Some(names) = super::players::parse_online_players(&line.line) {
@@ -1560,17 +1577,12 @@ pub async fn list_players(state: &AppState, id: &str) -> anyhow::Result<Vec<Play
     Ok(super::players::list_enriched(state, id, &view.last_players).await)
 }
 
-
 pub async fn probe_players(state: &AppState, id: &str) -> anyhow::Result<Vec<PlayerInfo>> {
     let view = get_instance(state, id)
         .await
         .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
     if view.status == InstanceStatus::Running
-        && view
-            .last_metrics
-            .as_ref()
-            .and_then(|m| m.tps)
-            .is_some()
+        && view.last_metrics.as_ref().and_then(|m| m.tps).is_some()
     {
         let _ = send_command(
             state,
@@ -1608,12 +1620,7 @@ pub async fn player_action(
         "unwhitelist" => format!("whitelist remove {name}"),
         other => anyhow::bail!("unknown action: {other}"),
     };
-    send_command(
-        state,
-        id,
-        CommandRequest { command: cmd },
-    )
-    .await?;
+    send_command(state, id, CommandRequest { command: cmd }).await?;
     util::audit(
         "player.action",
         Some(id),
@@ -1623,7 +1630,10 @@ pub async fn player_action(
     Ok(())
 }
 
-pub async fn list_worlds(state: &AppState, id: &str) -> anyhow::Result<Vec<super::worlds::WorldInfo>> {
+pub async fn list_worlds(
+    state: &AppState,
+    id: &str,
+) -> anyhow::Result<Vec<super::worlds::WorldInfo>> {
     let workdir = workdir_of(state, id).await?;
     super::worlds::list_worlds(&workdir)
 }
@@ -1643,11 +1653,7 @@ pub async fn reset_world(state: &AppState, id: &str, world: &str) -> anyhow::Res
     Ok(())
 }
 
-pub async fn export_world(
-    state: &AppState,
-    id: &str,
-    world: &str,
-) -> anyhow::Result<BackupInfo> {
+pub async fn export_world(state: &AppState, id: &str, world: &str) -> anyhow::Result<BackupInfo> {
     let workdir = workdir_of(state, id).await?;
     let bak = super::worlds::export_world(id, &workdir, world)?;
     util::audit("world.export", Some(id), json!({ "world": world }), "api");
@@ -1716,7 +1722,6 @@ async fn ensure_port_free(
             );
         }
         if inst.spec.port == port && except_id.is_some() {
-            
             continue;
         }
         if inst.spec.port == port {
@@ -1831,11 +1836,7 @@ pub async fn fleet_summary(state: &AppState) -> FleetSummary {
             InstanceStatus::Crashed => crashed += 1,
             InstanceStatus::Created | InstanceStatus::Stopped => stopped += 1,
         }
-        let g = inst
-            .spec
-            .group
-            .clone()
-            .unwrap_or_else(|| "default".into());
+        let g = inst.spec.group.clone().unwrap_or_else(|| "default".into());
         *groups.entry(g).or_default() += 1;
         let rt = match inst.spec.runtime {
             RuntimeKind::Docker => "docker",
@@ -1925,7 +1926,11 @@ pub async fn clone_instance(
     spec.desired_running = false;
     let instance = Instance::with_id(new_id.clone(), spec);
     let view = instance.public_view();
-    state.instances.write().await.insert(new_id.clone(), instance);
+    state
+        .instances
+        .write()
+        .await
+        .insert(new_id.clone(), instance);
     state.publish(InstanceEvent::StatusChanged {
         instance_id: new_id.clone(),
         status: InstanceStatus::Created,
@@ -1947,8 +1952,7 @@ async fn next_free_port(state: &AppState, node_id: &str, from: u16) -> anyhow::R
     let used: Vec<u16> = guard
         .values()
         .filter(|i| {
-            i.spec.node_id == node_id
-                || (is_local_node(&i.spec.node_id) && is_local_node(node_id))
+            i.spec.node_id == node_id || (is_local_node(&i.spec.node_id) && is_local_node(node_id))
         })
         .map(|i| i.spec.port)
         .collect();
@@ -1975,7 +1979,10 @@ pub fn free_disk_bytes(path: &str) -> Option<u64> {
     let probe = if target.exists() {
         target.to_path_buf()
     } else {
-        target.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."))
+        target
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
     };
     let out = std::process::Command::new("df")
         .arg("-Pk")
@@ -2043,11 +2050,10 @@ pub async fn preflight_start(state: &AppState, id: &str) -> anyhow::Result<Vec<S
     }
     let need = view.spec.memory_mib as u64 * 1024 * 1024;
     let workdir = view.spec.workdir.clone();
-    let (free, used) = tokio::task::spawn_blocking(move || {
-        (free_disk_bytes(&workdir), dir_size_bytes(&workdir))
-    })
-    .await
-    .unwrap_or((None, 0));
+    let (free, used) =
+        tokio::task::spawn_blocking(move || (free_disk_bytes(&workdir), dir_size_bytes(&workdir)))
+            .await
+            .unwrap_or((None, 0));
     if let Some(free) = free {
         if free < need {
             warnings.push(format!(
@@ -2100,11 +2106,10 @@ pub async fn preflight_report(state: &AppState, id: &str) -> anyhow::Result<Pref
         .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
     let warnings = preflight_start(state, id).await?;
     let workdir = view.spec.workdir.clone();
-    let (free, used) = tokio::task::spawn_blocking(move || {
-        (free_disk_bytes(&workdir), dir_size_bytes(&workdir))
-    })
-    .await
-    .unwrap_or((None, 0));
+    let (free, used) =
+        tokio::task::spawn_blocking(move || (free_disk_bytes(&workdir), dir_size_bytes(&workdir)))
+            .await
+            .unwrap_or((None, 0));
     let port_busy = view.spec.runtime == RuntimeKind::Process && port_in_use(view.spec.port);
     Ok(PreflightReport {
         instance_id: view.id,
@@ -2172,7 +2177,9 @@ pub async fn version_compare(state: &AppState, id: &str) -> anyhow::Result<Versi
             note: "自定义核心不参与版本比对".into(),
         });
     }
-    let versions = super::versions::list_versions(&core).await.unwrap_or_default();
+    let versions = super::versions::list_versions(&core)
+        .await
+        .unwrap_or_default();
     let latest = versions
         .iter()
         .find(|v| v.latest)
@@ -2210,11 +2217,15 @@ pub async fn world_download(
     }
     let safe = world
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
-    let dir = std::path::PathBuf::from("data")
-        .join("backups")
-        .join(id);
+    let dir = std::path::PathBuf::from("data").join("backups").join(id);
     let stamp = Utc::now().format("%Y%m%d-%H%M%S");
     let filename = format!("{safe}-{stamp}.zip");
     let dest = dir.join(&filename);
@@ -2254,9 +2265,10 @@ pub async fn world_upload(
     let workdir = view.spec.workdir.clone();
     let rel = world.to_string();
     let owned = bytes.to_vec();
-    let count = tokio::task::spawn_blocking(move || files::extract_zip_into(&workdir, &rel, &owned))
-        .await
-        .map_err(|e| anyhow::anyhow!("解压失败：{e}"))??;
+    let count =
+        tokio::task::spawn_blocking(move || files::extract_zip_into(&workdir, &rel, &owned))
+            .await
+            .map_err(|e| anyhow::anyhow!("解压失败：{e}"))??;
     util::audit(
         "world.upload",
         Some(id),
@@ -2279,17 +2291,18 @@ pub async fn rescan_version(state: &AppState, id: &str) -> anyhow::Result<Option
     Ok(found)
 }
 
-pub async fn prune_instance_backups(state: &AppState, id: &str, keep: u32) -> anyhow::Result<usize> {
+pub async fn prune_instance_backups(
+    state: &AppState,
+    id: &str,
+    keep: u32,
+) -> anyhow::Result<usize> {
     if get_instance(state, id).await.is_none() {
         anyhow::bail!("instance not found");
     }
     files::prune_backups(id, keep.max(1))
 }
 
-pub async fn bulk_action(
-    state: &AppState,
-    req: BulkActionRequest,
-) -> BulkActionResult {
+pub async fn bulk_action(state: &AppState, req: BulkActionRequest) -> BulkActionResult {
     let mut ok = Vec::new();
     let mut failed = Vec::new();
     for id in req.ids {

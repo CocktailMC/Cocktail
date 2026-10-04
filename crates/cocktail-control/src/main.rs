@@ -1,5 +1,3 @@
-
-
 fn main() {
     let mut args = std::env::args();
     let _exe = args.next();

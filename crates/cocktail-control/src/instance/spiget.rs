@@ -1,12 +1,8 @@
-
-
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const API: &str = "https://api.spiget.org/v2";
-const USER_AGENT: &str =
-    "Cocktail-Manager/0.1 (contact=dev@local; +https://spiget.org)";
+const USER_AGENT: &str = "Cocktail-Manager/0.1 (contact=dev@local; +https://spiget.org)";
 
 fn client() -> reqwest::Client {
     crate::http::builder()
@@ -82,8 +78,10 @@ pub async fn search(q: &SearchQuery) -> anyhow::Result<SearchResponse> {
     } else {
         q.query.trim().to_string()
     };
-    let mut url =
-        reqwest::Url::parse(&format!("{API}/search/resources/{}", urlencoding_path(&query)))?;
+    let mut url = reqwest::Url::parse(&format!(
+        "{API}/search/resources/{}",
+        urlencoding_path(&query)
+    ))?;
     {
         let mut qp = url.query_pairs_mut();
         qp.append_pair("size", &size.to_string());
@@ -138,7 +136,6 @@ pub async fn search(q: &SearchQuery) -> anyhow::Result<SearchResponse> {
 }
 
 fn resolve_icon(icon: Option<&Value>, resource_id: i64) -> Option<String> {
-    
     if let Some(data) = icon
         .and_then(|i| i.get("data"))
         .and_then(|s| s.as_str())
@@ -153,8 +150,7 @@ fn resolve_icon(icon: Option<&Value>, resource_id: i64) -> Option<String> {
         };
         return Some(format!("data:{mime};base64,{data}"));
     }
-    
-    
+
     let _rel = icon
         .and_then(|i| i.get("url"))
         .and_then(|s| s.as_str())
@@ -162,9 +158,7 @@ fn resolve_icon(icon: Option<&Value>, resource_id: i64) -> Option<String> {
     Some(format!("/api/v1/spiget/resources/{resource_id}/icon"))
 }
 
-
 pub async fn fetch_icon(resource_id: i64) -> anyhow::Result<(String, Vec<u8>)> {
-    
     let api_url = format!("{API}/resources/{resource_id}/icon");
     if let Ok(resp) = client().get(&api_url).send().await {
         if resp.status().is_success() {
@@ -181,7 +175,6 @@ pub async fn fetch_icon(resource_id: i64) -> anyhow::Result<(String, Vec<u8>)> {
         }
     }
 
-    
     let meta = resource_meta(resource_id).await?;
     if let Some(path) = meta
         .pointer("/icon/url")
@@ -206,7 +199,6 @@ pub async fn fetch_icon(resource_id: i64) -> anyhow::Result<(String, Vec<u8>)> {
         }
     }
 
-    
     if let Some(data) = meta
         .pointer("/icon/data")
         .and_then(|s| s.as_str())
@@ -230,7 +222,6 @@ pub async fn fetch_icon(resource_id: i64) -> anyhow::Result<(String, Vec<u8>)> {
 }
 
 fn urlencoding_path(s: &str) -> String {
-    
     s.chars()
         .map(|c| match c {
             'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
@@ -269,9 +260,14 @@ pub async fn list_versions(resource_id: i64) -> anyhow::Result<Vec<VersionInfo>>
 
 pub async fn resource_meta(resource_id: i64) -> anyhow::Result<Value> {
     let url = format!("{API}/resources/{resource_id}");
-    Ok(client().get(url).send().await?.error_for_status()?.json().await?)
+    Ok(client()
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?)
 }
-
 
 pub async fn download_resource(
     req: &InstallRequest,
@@ -296,13 +292,15 @@ pub async fn download_resource(
             .to_string()
     };
 
-    let external = meta.get("external").and_then(|b| b.as_bool()).unwrap_or(false);
+    let external = meta
+        .get("external")
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false);
     let file_type = meta
         .pointer("/file/type")
         .and_then(|s| s.as_str())
         .unwrap_or(".jar");
 
-    
     if external {
         if let Some(ext) = meta
             .pointer("/file/externalUrl")
@@ -310,9 +308,8 @@ pub async fn download_resource(
             .filter(|s| !s.is_empty())
         {
             let bytes = download_url(ext, &format!("Spiget {}", req.resource_id)).await?;
-            let name = filename_from_url(ext).unwrap_or_else(|| {
-                format!("spiget-{}.jar", req.resource_id)
-            });
+            let name =
+                filename_from_url(ext).unwrap_or_else(|| format!("spiget-{}.jar", req.resource_id));
             return Ok((bytes, name, version_id, version_name));
         }
         anyhow::bail!(
@@ -325,23 +322,28 @@ pub async fn download_resource(
     }
 
     let url = if let Some(vid) = version_id {
-        format!("{API}/resources/{}/versions/{}/download", req.resource_id, vid)
+        format!(
+            "{API}/resources/{}/versions/{}/download",
+            req.resource_id, vid
+        )
     } else {
         format!("{API}/resources/{}/download", req.resource_id)
     };
 
     let bytes = download_url(&url, &format!("Spiget {}", req.resource_id)).await?;
-    let name = format!(
-        "spiget-{}-{}.jar",
-        req.resource_id,
-        sanitize(&version_name)
-    );
+    let name = format!("spiget-{}-{}.jar", req.resource_id, sanitize(&version_name));
     Ok((bytes, name, version_id, version_name))
 }
 
 fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -361,7 +363,7 @@ async fn download_url(url: &str, label: &str) -> anyhow::Result<Vec<u8>> {
     if bytes.len() < 64 {
         anyhow::bail!("Spiget download empty (may be HTML / rate-limited)");
     }
-    
+
     if !bytes.starts_with(b"PK") {
         if bytes.starts_with(b"<!") || bytes.starts_with(b"<html") {
             anyhow::bail!(

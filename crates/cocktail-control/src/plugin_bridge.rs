@@ -1,5 +1,3 @@
-
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
@@ -8,9 +6,9 @@ use std::time::Duration;
 use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use extism::{host_fn, Manifest, Plugin, PluginBuilder, UserData, Wasm, PTR};
+use extism::{Manifest, PTR, Plugin, PluginBuilder, UserData, Wasm, host_fn};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::instance::InstanceEvent;
@@ -167,7 +165,9 @@ fn lock_plugins(state: &AppState) -> std::sync::MutexGuard<'_, PluginRegistry> {
     state.plugins.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn lock_instance(mutex: &std::sync::Mutex<Option<Plugin>>) -> std::sync::MutexGuard<'_, Option<Plugin>> {
+fn lock_instance(
+    mutex: &std::sync::Mutex<Option<Plugin>>,
+) -> std::sync::MutexGuard<'_, Option<Plugin>> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -191,12 +191,19 @@ fn multipart_body(filename: &str, bytes: &[u8]) -> (String, Vec<u8>) {
     let boundary = "----CocktailPluginBoundary";
     let safe: String = filename
         .chars()
-        .map(|c| if matches!(c, '"' | '\r' | '\n' | '\\') { '_' } else { c })
+        .map(|c| {
+            if matches!(c, '"' | '\r' | '\n' | '\\') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let mut body = Vec::new();
     body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(
-        format!("Content-Disposition: form-data; name=\"file\"; filename=\"{safe}\"\r\n").as_bytes(),
+        format!("Content-Disposition: form-data; name=\"file\"; filename=\"{safe}\"\r\n")
+            .as_bytes(),
     );
     body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
     body.extend_from_slice(bytes);
@@ -233,7 +240,10 @@ fn invoke_plane(
     }
     let req = builder.body(Body::from(body))?;
     join_host(rt, Duration::from_secs(60), async move {
-        let res = router.oneshot(req).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let res = router
+            .oneshot(req)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         let status = res.status().as_u16();
         let bytes = axum::body::to_bytes(res.into_body(), 32 * 1024 * 1024)
             .await
@@ -344,8 +354,7 @@ pub async fn proxy(
                     .unwrap_or("application/json");
                 let body = v.get("body").and_then(|s| s.as_str()).unwrap_or(&raw);
                 let mut response = Response::new(Body::from(body.to_string()));
-                *response.status_mut() =
-                    StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
+                *response.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
                 if let Ok(hv) = ct.parse() {
                     response
                         .headers_mut()
@@ -382,7 +391,13 @@ async fn dispatch_event(state: &Arc<AppState>, event: &InstanceEvent) -> anyhow:
         let reg = lock_plugins(state);
         reg.slots
             .values()
-            .filter(|s| s.running && s.manifest.permissions.iter().any(|p| p == "events.subscribe"))
+            .filter(|s| {
+                s.running
+                    && s.manifest
+                        .permissions
+                        .iter()
+                        .any(|p| p == "events.subscribe")
+            })
             .map(|s| s.manifest.id.clone())
             .collect()
     };
@@ -483,12 +498,8 @@ async fn reload_inner(state: &Arc<AppState>) -> anyhow::Result<()> {
 
 fn start_slot(state: &Arc<AppState>, slot: &mut PluginSlot) -> anyhow::Result<()> {
     stop_slot(slot);
-    let wasm_path = find_wasm(&slot.directory).ok_or_else(|| {
-        anyhow::anyhow!(
-            "no plugin.wasm in {}",
-            slot.directory.display()
-        )
-    })?;
+    let wasm_path = find_wasm(&slot.directory)
+        .ok_or_else(|| anyhow::anyhow!("no plugin.wasm in {}", slot.directory.display()))?;
     let ctx = HostCtx {
         state: Arc::downgrade(state),
         plugin_id: slot.manifest.id.clone(),
@@ -500,13 +511,7 @@ fn start_slot(state: &Arc<AppState>, slot: &mut PluginSlot) -> anyhow::Result<()
     let manifest = Manifest::new([Wasm::file(&wasm_path)]);
     let mut plugin = PluginBuilder::new(manifest)
         .with_wasi(true)
-        .with_function(
-            "cocktail_log",
-            [PTR, PTR],
-            [],
-            user.clone(),
-            cocktail_log,
-        )
+        .with_function("cocktail_log", [PTR, PTR], [], user.clone(), cocktail_log)
         .with_function(
             "cocktail_control",
             [PTR],
@@ -969,7 +974,10 @@ fn deny_control(perms: &[String], method: &str, path: &str) -> anyhow::Result<()
     } else if p.starts_with("/api/v1/nodes") && m == "GET" {
         "controlplane.nodes.read"
     } else if p.contains("/files") && m == "GET" {
-        return require_any(perms, &["controlplane.files.read", "controlplane.files.write"]);
+        return require_any(
+            perms,
+            &["controlplane.files.read", "controlplane.files.write"],
+        );
     } else if p.contains("/files")
         || p.contains("/modrinth/install")
         || p.contains("/hangar/install")
@@ -1023,28 +1031,34 @@ mod tests {
 
     #[test]
     fn cannot_call_extension_proxy() {
-        assert!(deny_control(
-            &["controlplane.instances.read".into()],
-            "GET",
-            "/api/v1/ext/watchdog/summary"
-        )
-        .is_err());
-        assert!(deny_control(
-            &["controlplane.instances.read".into()],
-            "GET",
-            "/api/v1/extensions"
-        )
-        .is_err());
+        assert!(
+            deny_control(
+                &["controlplane.instances.read".into()],
+                "GET",
+                "/api/v1/ext/watchdog/summary"
+            )
+            .is_err()
+        );
+        assert!(
+            deny_control(
+                &["controlplane.instances.read".into()],
+                "GET",
+                "/api/v1/extensions"
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn start_instance_needs_write() {
-        assert!(deny_control(
-            &["controlplane.instances.read".into()],
-            "POST",
-            "/api/v1/instances/abc/start"
-        )
-        .is_err());
+        assert!(
+            deny_control(
+                &["controlplane.instances.read".into()],
+                "POST",
+                "/api/v1/instances/abc/start"
+            )
+            .is_err()
+        );
         deny_control(
             &["controlplane.instances.write".into()],
             "POST",

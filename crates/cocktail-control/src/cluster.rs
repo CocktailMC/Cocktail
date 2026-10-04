@@ -124,11 +124,7 @@ async fn run_session(state: SharedState, node_id: String, socket: WebSocket) {
 
 async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
     match up {
-        AgentUp::Hello {
-            hostname,
-            os,
-            arch,
-        } => {
+        AgentUp::Hello { hostname, os, arch } => {
             let conn = state.db.lock().await;
             let _ = db::touch_node(&conn, node_id, Some(&hostname), Some(&os), Some(&arch));
         }
@@ -210,9 +206,9 @@ pub async fn send_down(
     msg: AgentDown,
 ) -> anyhow::Result<()> {
     let agents = state.agents.lock().await;
-    let tx = agents.get(node_id).ok_or_else(|| {
-        anyhow::anyhow!("节点 {node_id} 离线：请在该机器上运行 cocktail-agent")
-    })?;
+    let tx = agents
+        .get(node_id)
+        .ok_or_else(|| anyhow::anyhow!("节点 {node_id} 离线：请在该机器上运行 cocktail-agent"))?;
     tx.send(msg)
         .map_err(|_| anyhow::anyhow!("节点通道已关闭"))?;
     Ok(())
@@ -263,7 +259,12 @@ pub async fn create_node(
     db::insert_agent_node(&conn, &id, name, &hash)?;
     let row = db::get_node(&conn, &id)?.ok_or_else(|| anyhow::anyhow!("node insert failed"))?;
     drop(conn);
-    crate::util::audit("node.create", None, serde_json::json!({ "id": id, "name": name }), "api");
+    crate::util::audit(
+        "node.create",
+        None,
+        serde_json::json!({ "id": id, "name": name }),
+        "api",
+    );
     Ok((row.into_view(false), token))
 }
 

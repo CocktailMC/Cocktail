@@ -1,10 +1,10 @@
 use cocktail_plugin_sdk::{
-    b64_decode, control, control_json, control_upload, http, json_body, kv_get_json, kv_set_json,
-    log_info, path_tail, HostHttpReq, HttpReq, HttpResp,
+    HostHttpReq, HttpReq, HttpResp, b64_decode, control, control_json, control_upload, http,
+    json_body, kv_get_json, kv_set_json, log_info, path_tail,
 };
 use extism_pdk::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const CONFIG_PATH: &str = "config/esplus-common.toml";
 const DEFAULT_USER: &str = "admin";
@@ -107,12 +107,19 @@ fn summary() -> HttpResp {
     let instances: Vec<Value> = control_json("GET", "/api/v1/instances", None).unwrap_or_default();
     let mut rows = Vec::new();
     for inst in instances {
-        let id = inst.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let id = inst
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let spec = inst.get("spec").cloned().unwrap_or(json!({}));
         let secrets = c.instances.get(&id).cloned().unwrap_or_default();
-        let files: Vec<Value> =
-            control_json("GET", &format!("/api/v1/instances/{id}/files?path=mods"), None)
-                .unwrap_or_default();
+        let files: Vec<Value> = control_json(
+            "GET",
+            &format!("/api/v1/instances/{id}/files?path=mods"),
+            None,
+        )
+        .unwrap_or_default();
         let jar = files.iter().find_map(|e| {
             let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let dir = e.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -172,14 +179,11 @@ fn ensure_config(body: &InstanceAction) -> HttpResp {
         .collect();
     let toml = read_file(&body.instance_id, CONFIG_PATH);
     let secrets = c.instances.entry(body.instance_id.clone()).or_default();
-    let port = body
-        .panel_port
-        .or(secrets.panel_port)
-        .unwrap_or_else(|| {
-            toml.as_ref()
-                .map(|t| read_int(t, "panelPort", 8088))
-                .unwrap_or_else(|| suggest_port(&body.instance_id, &used))
-        });
+    let port = body.panel_port.or(secrets.panel_port).unwrap_or_else(|| {
+        toml.as_ref()
+            .map(|t| read_int(t, "panelPort", 8088))
+            .unwrap_or_else(|| suggest_port(&body.instance_id, &used))
+    });
     let username = body
         .username
         .clone()
@@ -256,7 +260,9 @@ fn install(body: &InstanceAction) -> HttpResp {
                 return HttpResp::bad(e);
             }
             let cfg = ensure_config(body);
-            HttpResp::ok_json(json!({ "ok": true, "jar": file_name, "config": serde_json::from_str::<Value>(&cfg.body).ok() }))
+            HttpResp::ok_json(
+                json!({ "ok": true, "jar": file_name, "config": serde_json::from_str::<Value>(&cfg.body).ok() }),
+            )
         }
         Err(e) => HttpResp::bad(e),
     }
@@ -291,13 +297,19 @@ fn resolve_jar() -> Result<(Vec<u8>, String), String> {
             .and_then(|a| a.first().cloned())
             .ok_or_else(|| format!("no GitHub releases on {repo}; set a local jar"))?
     };
-    let assets = root.get("assets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let asset = assets.iter().find(|a| {
-        a.get("name")
-            .and_then(|v| v.as_str())
-            .is_some_and(is_mod_jar)
-    })
-    .ok_or_else(|| "release has no esplus-*.jar asset".to_string())?;
+    let assets = root
+        .get("assets")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let asset = assets
+        .iter()
+        .find(|a| {
+            a.get("name")
+                .and_then(|v| v.as_str())
+                .is_some_and(is_mod_jar)
+        })
+        .ok_or_else(|| "release has no esplus-*.jar asset".to_string())?;
     let download = asset
         .get("browser_download_url")
         .and_then(|v| v.as_str())
@@ -350,7 +362,10 @@ fn panel_proxy(rest: &str) -> HttpResp {
         .unwrap_or_else(|| "127.0.0.1".into());
     let username = secrets
         .username
-        .or_else(|| toml.as_ref().map(|t| read_string(t, "panelUsername", DEFAULT_USER)))
+        .or_else(|| {
+            toml.as_ref()
+                .map(|t| read_string(t, "panelUsername", DEFAULT_USER))
+        })
         .unwrap_or_else(|| DEFAULT_USER.into());
     let password = secrets
         .password
@@ -436,7 +451,9 @@ fn read_file(id: &str, path: &str) -> Option<String> {
         return None;
     }
     let v: Value = serde_json::from_str(&resp.body).ok()?;
-    v.get("content").and_then(|x| x.as_str()).map(|s| s.to_string())
+    v.get("content")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
 }
 
 fn is_mod_jar(name: &str) -> bool {
@@ -478,7 +495,9 @@ fn upsert_line(toml: &str, key: &str, rendered: &str) -> String {
     let mut found = false;
     let mut out = String::new();
     for line in toml.lines() {
-        if line.trim_start().starts_with(&format!("{key} ")) || line.trim_start().starts_with(&format!("{key}=")) {
+        if line.trim_start().starts_with(&format!("{key} "))
+            || line.trim_start().starts_with(&format!("{key}="))
+        {
             out.push_str(rendered);
             out.push('\n');
             found = true;
@@ -497,18 +516,45 @@ fn upsert_line(toml: &str, key: &str, rendered: &str) -> String {
     out
 }
 
-fn apply_panel(toml: &str, port: u16, bind: &str, user: &str, password: &str, enabled: bool) -> String {
+fn apply_panel(
+    toml: &str,
+    port: u16,
+    bind: &str,
+    user: &str,
+    password: &str,
+    enabled: bool,
+) -> String {
     let mut next = if toml.trim().is_empty() {
         "# Written by Cocktail ESPlus adapter.\n".into()
     } else {
         toml.to_string()
     };
-    next = upsert_line(&next, "panelEnabled", &format!("panelEnabled = {}", if enabled { "true" } else { "false" }));
+    next = upsert_line(
+        &next,
+        "panelEnabled",
+        &format!("panelEnabled = {}", if enabled { "true" } else { "false" }),
+    );
     next = upsert_line(&next, "panelPort", &format!("panelPort = {port}"));
-    next = upsert_line(&next, "panelBindAddress", &format!("panelBindAddress = \"{bind}\""));
-    next = upsert_line(&next, "panelUsername", &format!("panelUsername = \"{user}\""));
-    next = upsert_line(&next, "panelPassword", &format!("panelPassword = \"{password}\""));
-    upsert_line(&next, "panelAllowDefaultPassword", "panelAllowDefaultPassword = false")
+    next = upsert_line(
+        &next,
+        "panelBindAddress",
+        &format!("panelBindAddress = \"{bind}\""),
+    );
+    next = upsert_line(
+        &next,
+        "panelUsername",
+        &format!("panelUsername = \"{user}\""),
+    );
+    next = upsert_line(
+        &next,
+        "panelPassword",
+        &format!("panelPassword = \"{password}\""),
+    );
+    upsert_line(
+        &next,
+        "panelAllowDefaultPassword",
+        "panelAllowDefaultPassword = false",
+    )
 }
 
 fn suggest_port(instance_id: &str, used: &[u16]) -> u16 {

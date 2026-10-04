@@ -1,5 +1,3 @@
-
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -30,7 +28,6 @@ pub fn is_java_command(command: &str) -> bool {
         .to_ascii_lowercase();
     base == "java" || base == "java.exe" || base.starts_with("java")
 }
-
 
 pub fn parse_command_line(line: &str) -> anyhow::Result<(String, Vec<String>)> {
     let parts = split_command_line(line);
@@ -65,13 +62,12 @@ fn split_command_line(line: &str) -> Vec<String> {
     out
 }
 
-
 pub fn java_jar_startup(jar_rel: &str) -> (String, Vec<String>) {
-    let jar = jar_rel.replace('\\', "/").trim_start_matches('/').to_string();
-    (
-        "java".into(),
-        vec!["-jar".into(), jar, "nogui".into()],
-    )
+    let jar = jar_rel
+        .replace('\\', "/")
+        .trim_start_matches('/')
+        .to_string();
+    ("java".into(), vec!["-jar".into(), jar, "nogui".into()])
 }
 
 pub fn set_property_file(path: &Path, key: &str, value: &str) -> anyhow::Result<()> {
@@ -214,33 +210,28 @@ pub fn parse_game_stats(line: &str) -> ParsedGameStats {
     static HEAP: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     static GC: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
 
-    let tps_from = TPS_FROM.get_or_init(|| {
-        Regex::new(r"(?i)TPS from last[^:]+:\s*([0-9]+(?:\.[0-9]+)?)").unwrap()
-    });
-    let tps_eq = TPS_EQ.get_or_init(|| {
-        Regex::new(r"(?i)\bTPS[=:\s]+([0-9]+(?:\.[0-9]+)?)").unwrap()
-    });
+    let tps_from = TPS_FROM
+        .get_or_init(|| Regex::new(r"(?i)TPS from last[^:]+:\s*([0-9]+(?:\.[0-9]+)?)").unwrap());
+    let tps_eq =
+        TPS_EQ.get_or_init(|| Regex::new(r"(?i)\bTPS[=:\s]+([0-9]+(?:\.[0-9]+)?)").unwrap());
     let mspt = MSPT.get_or_init(|| {
-        Regex::new(r"(?i)(?:MSPT|mean tick(?: time)?|tick time)[=:\s]+([0-9]+(?:\.[0-9]+)?)").unwrap()
+        Regex::new(r"(?i)(?:MSPT|mean tick(?: time)?|tick time)[=:\s]+([0-9]+(?:\.[0-9]+)?)")
+            .unwrap()
     });
     let list = LIST.get_or_init(|| {
         Regex::new(r"(?i)There are ([0-9]+) of a max(?:imum)? of ([0-9]+)").unwrap()
     });
-    let players = PLAYERS.get_or_init(|| {
-        Regex::new(r"(?i)\bplayers[=:\s]+([0-9]+)").unwrap()
-    });
+    let players = PLAYERS.get_or_init(|| Regex::new(r"(?i)\bplayers[=:\s]+([0-9]+)").unwrap());
     let ent = ENT.get_or_init(|| {
         Regex::new(r"(?i)(?:living )?entit(?:y|ies)(?: count)?[=:\s]+([0-9]+)").unwrap()
     });
-    let chunk = CHUNK.get_or_init(|| {
-        Regex::new(r"(?i)chunks?(?: loaded)?[=:\s]+([0-9]+)").unwrap()
-    });
+    let chunk =
+        CHUNK.get_or_init(|| Regex::new(r"(?i)chunks?(?: loaded)?[=:\s]+([0-9]+)").unwrap());
     let heap = HEAP.get_or_init(|| {
         Regex::new(r"(?i)heap(?: memory)?[:\s]+([0-9]+(?:\.[0-9]+)?)\s*([MG])i?B?(?:\s*/\s*([0-9]+(?:\.[0-9]+)?)\s*([MG])i?B?)?").unwrap()
     });
-    let gc = GC.get_or_init(|| {
-        Regex::new(r"(?i)\[(?:full )?gc|pause \(g1|garbage.?collect").unwrap()
-    });
+    let gc =
+        GC.get_or_init(|| Regex::new(r"(?i)\[(?:full )?gc|pause \(g1|garbage.?collect").unwrap());
 
     let mut stats = ParsedGameStats::default();
     if let Some(c) = tps_from.captures(line).or_else(|| tps_eq.captures(line)) {
@@ -280,7 +271,6 @@ pub fn parse_game_stats(line: &str) -> ParsedGameStats {
     }
     stats
 }
-
 
 pub fn minecraft_ready(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
@@ -346,18 +336,14 @@ pub fn health_report(
 }
 
 pub fn append_instance_log(instance_id: &str, stream: &str, line: &str) {
-    let path = Path::new("data").join("logs").join(format!("{instance_id}.log"));
+    let path = Path::new("data")
+        .join("logs")
+        .join(format!("{instance_id}.log"));
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(
-            f,
-            "{} [{}] {}",
-            Utc::now().to_rfc3339(),
-            stream,
-            line
-        );
+        let _ = writeln!(f, "{} [{}] {}", Utc::now().to_rfc3339(), stream, line);
     }
 }
 
@@ -537,7 +523,9 @@ where
 }
 
 pub fn current_actor(fallback: &str) -> String {
-    ACTOR.try_with(|a| a.clone()).unwrap_or_else(|_| fallback.to_string())
+    ACTOR
+        .try_with(|a| a.clone())
+        .unwrap_or_else(|_| fallback.to_string())
 }
 
 pub fn audit(action: &str, instance_id: Option<&str>, detail: serde_json::Value, actor: &str) {

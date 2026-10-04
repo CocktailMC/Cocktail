@@ -1,9 +1,7 @@
-
-
 pub mod agent_runtime;
 mod api;
-mod automations;
 mod auth;
+mod automations;
 mod cluster;
 mod db;
 mod hostnet;
@@ -29,13 +27,13 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::Json;
+use axum::Router;
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
-use axum::Router;
 use serde_json::json;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
@@ -45,13 +43,6 @@ use tracing_subscriber::EnvFilter;
 use crate::state::{AppState, SharedState};
 
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
-
-
-
-
-
-
-
 
 pub fn run_reset_password() -> anyhow::Result<()> {
     use std::io::{self, Write};
@@ -81,7 +72,10 @@ pub fn run_reset_password() -> anyhow::Result<()> {
         "cli",
     );
 
-    println!("\n✓ 用户 [{}] 的密码已重置,可使用新密码登录控制面", admin.username);
+    println!(
+        "\n✓ 用户 [{}] 的密码已重置,可使用新密码登录控制面",
+        admin.username
+    );
     Ok(())
 }
 
@@ -97,15 +91,15 @@ fn read_password_line(prompt: &str) -> anyhow::Result<String> {
 pub async fn run_plane() -> anyhow::Result<()> {
     crate::wincompat::enable_utf8_console();
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("cocktail_control=info,tower_http=info")
-        }))
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("cocktail_control=info,tower_http=info")),
+        )
         .init();
 
     let state = Arc::new(AppState::new());
     crate::util::migrate_audit_jsonl();
 
-    
     match instance::runtime::ContainerRuntime::detect().await {
         Ok(rt) => {
             let engine = rt.engine.as_str();
@@ -342,10 +336,7 @@ async fn auth_middleware(
     };
 
     let method = req.method().clone();
-    let is_machine = state
-        .env_api_token
-        .as_ref()
-        .is_some_and(|t| t == &token)
+    let is_machine = state.env_api_token.as_ref().is_some_and(|t| t == &token)
         || (!state.plugin_token.is_empty() && state.plugin_token == token);
     let (role, csrf, actor) = if is_machine {
         let owner = {

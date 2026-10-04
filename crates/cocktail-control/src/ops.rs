@@ -1,5 +1,3 @@
-
-
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -62,8 +60,8 @@ async fn tick(state: &SharedState) -> anyhow::Result<()> {
     };
     let prev = state.ops.prev.lock().await.clone();
     let thresh = cfg.net_alert_rx_bps;
-    let (mut sample, next) = tokio::task::spawn_blocking(move || hostnet::sample(&prev, thresh))
-        .await?;
+    let (mut sample, next) =
+        tokio::task::spawn_blocking(move || hostnet::sample(&prev, thresh)).await?;
     *state.ops.prev.lock().await = next;
 
     let instances = {
@@ -75,8 +73,16 @@ async fn tick(state: &SharedState) -> anyhow::Result<()> {
                 name: inst.spec.name.clone(),
                 status: status_slug(inst.status),
                 port: inst.spec.port,
-                rx_bps: inst.last_metrics.as_ref().map(|m| m.net_rx_bps).unwrap_or(0.0),
-                tx_bps: inst.last_metrics.as_ref().map(|m| m.net_tx_bps).unwrap_or(0.0),
+                rx_bps: inst
+                    .last_metrics
+                    .as_ref()
+                    .map(|m| m.net_rx_bps)
+                    .unwrap_or(0.0),
+                tx_bps: inst
+                    .last_metrics
+                    .as_ref()
+                    .map(|m| m.net_tx_bps)
+                    .unwrap_or(0.0),
                 connections: inst
                     .last_metrics
                     .as_ref()
