@@ -30,6 +30,7 @@ mod totp;
 mod util;
 mod wincompat;
 mod winnet;
+mod workflow;
 
 pub use stdin_bridge::run_stdin_bridge;
 
