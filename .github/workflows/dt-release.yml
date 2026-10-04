@@ -1,0 +1,208 @@
+name: DT release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 发行阶段
+        type: choice
+        options:
+          - DT
+          - DP
+          - AT-D
+          - AT
+          - BT-D
+          - BT
+          - RC-D
+          - RC
+          - GA
+          - HF
+          - LTS
+        default: DP
+      bump:
+        description: major 开新的主版本；minor 只加小版本
+        type: choice
+        options:
+          - major
+          - minor
+        default: major
+      minor:
+        description: major bump 时的小版本，两位以内的整数
+        type: string
+        default: "1"
+      confirm:
+        description: 输入 release 才会真正发布
+        type: string
+        required: true
+
+concurrency:
+  group: cocktail-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  plan:
+    name: Plan
+    needs: checks
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+      full: ${{ steps.plan.outputs.full }}
+      tag: ${{ steps.plan.outputs.tag }}
+      build: ${{ steps.plan.outputs.build }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
+      title: ${{ steps.plan.outputs.title }}
+      reason: ${{ steps.plan.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Require manual confirmation
+        if: github.event_name == 'workflow_dispatch'
+        run: test "${{ github.event.inputs.confirm }}" = "release"
+      - name: Plan release
+        id: plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          mkdir -p dist
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            MODE=manual
+          else
+            MODE=auto
+          fi
+          args=(
+            python3 scripts/release/cocktail_release.py plan
+            --mode "$MODE"
+            --build-id "${{ github.run_number }}"
+            --repo "${{ github.repository }}"
+            --commit "${{ github.sha }}"
+            --notes-file dist/notes.md
+            --github-output "$GITHUB_OUTPUT"
+          )
+          if [ "$MODE" = "manual" ]; then
+            args+=(--stage "${{ github.event.inputs.stage }}")
+            args+=(--bump "${{ github.event.inputs.bump }}")
+            args+=(--minor "${{ github.event.inputs.minor }}")
+          fi
+          "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.release == 'true'
+        with:
+          name: release-notes
+          path: dist/notes.md
+
+  package-linux:
+    name: Linux packages
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Package deb, rpm, and tar.gz
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -eu
+          chmod +x scripts/package-linux.sh packaging/scripts/*.sh
+          ./scripts/package-linux.sh
+          tar -C dist/stage -czf dist/linux.tar.gz .
+          python3 scripts/release/cocktail_release.py rename-dist \
+            --version "$VERSION" \
+            --build "${{ needs.plan.outputs.build }}" \
+            --dist dist \
+            --require deb,rpm,tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: dist/Cocktail.*
+          if-no-files-found: error
+
+  package-windows:
+    name: Windows zip
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Package zip
+        shell: pwsh
+        run: |
+          ./scripts/package-windows.ps1 -Version "${{ needs.plan.outputs.version }}"
+          python scripts/release/cocktail_release.py rename-dist `
+            --version "${{ needs.plan.outputs.version }}" `
+            --build "${{ needs.plan.outputs.build }}" `
+            --dist dist `
+            --require zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: dist/Cocktail.*
+          if-no-files-found: error
+
+  publish:
+    name: GitHub Release
+    needs: [plan, package-linux, package-windows]
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*-packages"
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: dist
+      - name: Checksums and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          TITLE: ${{ needs.plan.outputs.title }}
+          PRERELEASE: ${{ needs.plan.outputs.prerelease }}
+        run: |
+          set -eu
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "tag $TAG already exists; refusing to replace it"
+            exit 1
+          fi
+          (cd dist && sha256sum Cocktail.* > SHA256SUMS)
+          args=(release create "$TAG" --title "$TITLE" --notes-file dist/notes.md)
+          if [ "$PRERELEASE" = "true" ]; then
+            args+=(--prerelease)
+          fi
+          gh "${args[@]}" dist/Cocktail.* dist/SHA256SUMS

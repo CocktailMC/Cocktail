@@ -1,0 +1,55 @@
+name: Checks
+
+on:
+  workflow_call:
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy -p cocktail-control --all-targets
+      - name: test
+        run: cargo test -p cocktail-control
+
+  wasm:
+    name: WASM plugins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: build plugins
+        run: |
+          cargo build --target wasm32-unknown-unknown \
+            -p cocktail-plugin-watchdog \
+            -p cocktail-plugin-speclint \
+            -p cocktail-plugin-gameops \
+            -p cocktail-plugin-esplus
+
+  admin:
+    name: Admin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - name: lint and build
+        working-directory: admin
+        run: |
+          npm ci
+          npm run lint
+          npm run build

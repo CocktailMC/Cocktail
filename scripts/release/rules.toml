@@ -1,0 +1,68 @@
+# Cocktail 发版规则。
+# 版本字符串的定义在 CocktailMC/docs 的 versioning.md。
+# 流水线只读本文件：门槛、不计数的改动、制品名。
+
+[version]
+format = "YYQn.MAJOR.STAGE.MINOR+BUILD"
+tag_prefix = "v"
+build_prefix = "B"
+major_width = 2
+minor_width = 2
+
+[stages]
+order = ["DT", "DP", "AT-D", "AT", "BT-D", "BT", "RC-D", "RC", "GA"]
+maintenance = ["HF", "LTS"]
+# 只有这些阶段可以由 push 到 main 自动发布。
+automatic = ["DT"]
+prerelease = ["DT", "DP", "AT-D", "AT", "BT-D", "BT", "RC-D", "RC"]
+
+[dt]
+base_branch = "main"
+merged_prs = 2
+stage = "DT"
+minor = 1
+# 一次 main 流水线最多发布一个版本，并把计数窗口推进到这次提交。
+one_release_per_run = true
+
+[dt.skip_labels]
+labels = ["release:skip", "dt:skip"]
+
+# 一个 PR 的全部文件都落在这些模式里时，不计入 DT。
+[dt.non_counting]
+globs = [
+  "**/*.md",
+  "design/**",
+  "docs/**",
+  ".github/**",
+  "logo.png",
+  "logo.ai",
+]
+
+[ci]
+fmt = true
+test_package = "cocktail-control"
+clippy_package = "cocktail-control"
+# 现有代码仍有 clippy 警告。打开后，警告会使 CI 失败。
+clippy_deny_warnings = false
+wasm_target = "wasm32-unknown-unknown"
+wasm_packages = [
+  "cocktail-plugin-watchdog",
+  "cocktail-plugin-speclint",
+  "cocktail-plugin-gameops",
+  "cocktail-plugin-esplus",
+]
+node = "22"
+frontend_dir = "admin"
+
+[assets]
+name_prefix = "Cocktail"
+linux_required = ["deb", "rpm", "tar.gz"]
+windows_required = ["zip"]
+windows_optional = ["msi"]
+
+[assets.suffix]
+deb = "Linux.x86_64.deb"
+rpm = "Linux.x86_64.rpm"
+"tar.gz" = "Linux.x86_64.tar.gz"
+zip = "Windows.x86_64.zip"
+msi = "Windows.x86_64.msi"
