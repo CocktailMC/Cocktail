@@ -17,6 +17,7 @@ mod metrics;
 mod netops;
 mod ops;
 mod platform;
+mod plugins;
 mod plugin_bridge;
 mod proto;
 mod qqbot;
