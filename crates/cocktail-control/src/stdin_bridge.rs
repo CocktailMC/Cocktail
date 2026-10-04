@@ -1,9 +1,3 @@
-//! Windows stdin broker so console commands survive control-plane restart.
-//!
-//! Linux uses a filesystem FIFO. Windows has no equivalent, so a helper process
-//! owns Java's stdin and accepts writers on a named pipe. After the control
-//! plane restarts it reconnects to the same pipe.
-
 use std::path::{Path, PathBuf};
 
 pub fn pipe_name_path(workdir: &str) -> PathBuf {
@@ -14,10 +8,7 @@ pub fn pipe_name_path(workdir: &str) -> PathBuf {
 pub fn spawn_bridge(workdir: &str) -> anyhow::Result<std::process::ChildStdout> {
     use std::process::{Command, Stdio};
 
-    let pipe = format!(
-        r"\\.\pipe\cocktail-stdin-{}",
-        uuid::Uuid::new_v4().simple()
-    );
+    let pipe = format!(r"\\.\pipe\cocktail-stdin-{}", uuid::Uuid::new_v4().simple());
     let dir = Path::new(workdir).join(".cocktail");
     std::fs::create_dir_all(&dir)?;
     std::fs::write(pipe_name_path(workdir), &pipe)?;
@@ -35,7 +26,7 @@ pub fn spawn_bridge(workdir: &str) -> anyhow::Result<std::process::ChildStdout> 
         .take()
         .ok_or_else(|| anyhow::anyhow!("stdin bridge has no stdout"))?;
     std::mem::forget(child);
-    // Give ConnectNamedPipe a moment before the first client attaches.
+
     std::thread::sleep(std::time::Duration::from_millis(80));
     Ok(stdout)
 }
@@ -64,7 +55,8 @@ pub fn open_pipe_writer(workdir: &str) -> anyhow::Result<std::fs::File> {
     }
     Err(anyhow::anyhow!(
         "open stdin pipe: {}",
-        last.map(|e| e.to_string()).unwrap_or_else(|| "timeout".into())
+        last.map(|e| e.to_string())
+            .unwrap_or_else(|| "timeout".into())
     ))
 }
 
@@ -73,7 +65,6 @@ pub fn open_pipe_writer(_workdir: &str) -> anyhow::Result<std::fs::File> {
     anyhow::bail!("stdin bridge is Windows-only")
 }
 
-/// Blocking helper: named-pipe server → stdout (Java stdin).
 pub fn run_stdin_bridge(pipe_name: &str) -> anyhow::Result<()> {
     #[cfg(not(windows))]
     {
@@ -161,7 +152,7 @@ fn run_windows_bridge(pipe_name: &str) -> anyhow::Result<()> {
                 Err(_) => break,
             }
         }
-        // Do not close the pipe handle; reuse it for the next control-plane client.
+
         std::mem::forget(file);
         let _ = unsafe { DisconnectNamedPipe(handle) };
     }

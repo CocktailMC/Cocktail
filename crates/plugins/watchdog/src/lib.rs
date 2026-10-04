@@ -1,9 +1,9 @@
 use cocktail_plugin_sdk::{
-    control, json_body, kv_get_json, kv_set_json, log_info, log_warn, HttpReq, HttpResp,
+    HttpReq, HttpResp, control, json_body, kv_get_json, kv_set_json, log_info, log_warn,
 };
 use extism_pdk::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Default, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -117,7 +117,11 @@ pub fn on_event(Json(ev): Json<Value>) -> FnResult<()> {
     save_incidents(items, c.max_incidents);
     log_warn(format!("crash recorded for {instance_id}"));
     if c.auto_start_on_crash {
-        match control("POST", &format!("/api/v1/instances/{instance_id}/start"), None) {
+        match control(
+            "POST",
+            &format!("/api/v1/instances/{instance_id}/start"),
+            None,
+        ) {
             Ok(resp) if resp.ok => log_info(format!("requested start after crash: {instance_id}")),
             Ok(resp) => log_warn(format!("auto-start failed: {}", resp.body)),
             Err(e) => log_warn(format!("auto-start failed: {e}")),

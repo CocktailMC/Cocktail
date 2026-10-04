@@ -1,6 +1,3 @@
-//! Modrinth API client — https://docs.modrinth.com/api/
-//! Search/read need no token; a uniquely-identifying User-Agent is required.
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -19,7 +16,7 @@ fn client() -> reqwest::Client {
 pub struct SearchQuery {
     #[serde(default)]
     pub query: String,
-    /// plugin | mod | datapack | modpack
+
     #[serde(default = "default_project_type")]
     pub project_type: String,
     #[serde(default)]
@@ -90,7 +87,7 @@ pub struct InstallModrinthRequest {
     pub project_id: String,
     #[serde(default)]
     pub version_id: Option<String>,
-    /// plugins | mods
+
     #[serde(default)]
     pub target: Option<String>,
     #[serde(default)]

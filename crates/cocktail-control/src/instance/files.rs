@@ -172,7 +172,6 @@ pub fn mkdir(workdir: &str, relative: &str) -> anyhow::Result<FileEntry> {
     })
 }
 
-/// True if a relative path looks like a server/plugin jar under workdir.
 pub fn jar_exists(workdir: &str, relative: &str) -> bool {
     resolve_in_workdir(workdir, relative)
         .map(|p| p.is_file())
@@ -220,7 +219,6 @@ fn lexical_normalize(p: &Path) -> PathBuf {
     }
 }
 
-/// True when two workdirs are the same tree or one nests inside the other.
 pub fn workdirs_conflict(a: &str, b: &str) -> bool {
     let a = comparable_workdir(a);
     let b = comparable_workdir(b);
@@ -297,6 +295,137 @@ pub fn prune_backups(instance_id: &str, keep: u32) -> anyhow::Result<usize> {
         n += 1;
     }
     Ok(n)
+}
+
+pub fn backup_path(instance_id: &str, backup_id: &str) -> anyhow::Result<PathBuf> {
+    let safe = Path::new(backup_id)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| anyhow::anyhow!("非法备份名"))?;
+    if safe != backup_id || safe.contains("..") {
+        anyhow::bail!("非法备份名");
+    }
+    let path = PathBuf::from("data")
+        .join("backups")
+        .join(instance_id)
+        .join(&safe);
+    if !path.exists() {
+        anyhow::bail!("backup not found");
+    }
+    Ok(path)
+}
+
+pub fn backup_meta(instance_id: &str, backup_id: &str) -> anyhow::Result<BackupInfo> {
+    let path = backup_path(instance_id, backup_id)?;
+    let meta = fs::metadata(&path)?;
+    let size = if meta.is_dir() {
+        dir_size(&path).unwrap_or(0)
+    } else {
+        meta.len()
+    };
+    Ok(BackupInfo {
+        id: backup_id.to_string(),
+        created_at: file_created_at(&path).unwrap_or_else(Utc::now),
+        path: path.to_string_lossy().replace('\\', "/"),
+        size_bytes: size,
+    })
+}
+
+pub struct BackupScan {
+    pub entries: u32,
+    pub size_bytes: u64,
+    pub world_bytes: u64,
+    pub plugin_count: u32,
+    pub has_server_properties: bool,
+    pub has_level_dat: bool,
+}
+
+impl Default for BackupScan {
+    fn default() -> Self {
+        Self {
+            entries: 0,
+            size_bytes: 0,
+            world_bytes: 0,
+            plugin_count: 0,
+            has_server_properties: false,
+            has_level_dat: false,
+        }
+    }
+}
+
+pub fn inspect_backup_zip(path: &Path) -> anyhow::Result<BackupScan> {
+    if path.is_dir() {
+        let mut scan = BackupScan {
+            entries: 0,
+            size_bytes: dir_size(path).unwrap_or(0),
+            world_bytes: 0,
+            plugin_count: 0,
+            has_server_properties: path.join("server.properties").is_file(),
+            has_level_dat: path.join("world").join("level.dat").is_file(),
+            ..Default::default()
+        };
+        let mut stack = vec![path.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for ent in entries.flatten() {
+                let p = ent.path();
+                if p.is_symlink() {
+                    continue;
+                }
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                scan.entries += 1;
+                let rel = p
+                    .strip_prefix(path)
+                    .map(|r| r.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                if rel.starts_with("world/") {
+                    scan.world_bytes += p.metadata().map(|m| m.len()).unwrap_or(0);
+                }
+                if rel.starts_with("plugins/") && rel.ends_with(".jar") {
+                    scan.plugin_count += 1;
+                }
+            }
+        }
+        return Ok(scan);
+    }
+    let file = File::open(path)?;
+    let mut zip = ZipArchive::new(file)?;
+    let mut scan = BackupScan {
+        entries: 0,
+        size_bytes: fs::metadata(path)?.len(),
+        world_bytes: 0,
+        plugin_count: 0,
+        has_server_properties: false,
+        has_level_dat: false,
+    };
+    for i in 0..zip.len() {
+        let Ok(entry) = zip.by_index(i) else {
+            continue;
+        };
+        let name = entry.name().to_string();
+        if name.ends_with('/') {
+            continue;
+        }
+        scan.entries += 1;
+        if name == "server.properties" {
+            scan.has_server_properties = true;
+        }
+        if name == "world/level.dat" {
+            scan.has_level_dat = true;
+        }
+        if name.starts_with("world/") {
+            scan.world_bytes += entry.size();
+        }
+        if name.starts_with("plugins/") && name.ends_with(".jar") {
+            scan.plugin_count += 1;
+        }
+    }
+    Ok(scan)
 }
 
 pub fn list_backups(instance_id: &str) -> anyhow::Result<Vec<BackupInfo>> {
@@ -503,6 +632,366 @@ fn skip_backup_rel(name: &str) -> bool {
         || n.starts_with("runtime/")
         || n.starts_with(".cocktail/tmp/")
         || n.starts_with(".cocktail/appdata/")
+}
+
+pub fn copy_instance_tree(
+    src: &str,
+    dst: &str,
+    copy_data: bool,
+    skip_logs: bool,
+) -> anyhow::Result<u32> {
+    let src_root = Path::new(src);
+    if !src_root.is_dir() {
+        anyhow::bail!("源目录不存在：{src}");
+    }
+    fs::create_dir_all(dst)?;
+    let mut copied = 0u32;
+    copy_walk(
+        src_root,
+        Path::new(dst),
+        src_root,
+        copy_data,
+        skip_logs,
+        &mut copied,
+        0,
+    )?;
+    Ok(copied)
+}
+
+fn copy_skip(name: &str, copy_data: bool, skip_logs: bool) -> bool {
+    let n = name.trim_end_matches('/');
+    if matches!(n, ".cocktail/tmp" | ".cocktail/appdata") {
+        return true;
+    }
+    if n.starts_with(".cocktail/tmp/") || n.starts_with(".cocktail/appdata/") {
+        return true;
+    }
+    if skip_logs && (n == "logs" || n.starts_with("logs/")) {
+        return true;
+    }
+    if skip_logs && (n == "crash-reports" || n.starts_with("crash-reports/")) {
+        return true;
+    }
+    if !copy_data {
+        if n == "world" || n.starts_with("world/") {
+            return true;
+        }
+        if n.starts_with("world_") {
+            return true;
+        }
+    }
+    false
+}
+
+fn copy_walk(
+    current: &Path,
+    dst_root: &Path,
+    src_root: &Path,
+    copy_data: bool,
+    skip_logs: bool,
+    copied: &mut u32,
+    depth: u32,
+) -> anyhow::Result<()> {
+    if depth > 32 {
+        return Ok(());
+    }
+    for ent in fs::read_dir(current)? {
+        let ent = ent?;
+        let path = ent.path();
+        if path.is_symlink() {
+            continue;
+        }
+        let rel = path
+            .strip_prefix(src_root)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if copy_skip(&rel, copy_data, skip_logs) {
+            continue;
+        }
+        let target = dst_root.join(path.strip_prefix(src_root)?);
+        if path.is_dir() {
+            fs::create_dir_all(&target)?;
+            copy_walk(
+                &path,
+                dst_root,
+                src_root,
+                copy_data,
+                skip_logs,
+                copied,
+                depth + 1,
+            )?;
+        } else {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&path, &target)?;
+            *copied += 1;
+        }
+    }
+    Ok(())
+}
+
+pub fn pack_subdir_zip(workdir: &str, relative: &str, dest: &Path) -> anyhow::Result<u64> {
+    let root = resolve_in_workdir(workdir, relative)?;
+    if !root.is_dir() {
+        anyhow::bail!("目录不存在：{relative}");
+    }
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    zip_dir(&root, dest)?;
+    Ok(fs::metadata(dest)?.len())
+}
+
+pub fn extract_zip_into(workdir: &str, relative: &str, bytes: &[u8]) -> anyhow::Result<u32> {
+    let dest = resolve_in_workdir(workdir, relative)?;
+    fs::create_dir_all(&dest)?;
+    let staging = PathBuf::from(workdir)
+        .join(".cocktail")
+        .join("tmp")
+        .join(format!("world-{}", uuid::Uuid::new_v4()));
+    let _ = fs::remove_dir_all(&staging);
+    fs::create_dir_all(&staging)?;
+    let tmp_zip = PathBuf::from(workdir)
+        .join(".cocktail")
+        .join("tmp")
+        .join(format!("world-{}.zip", uuid::Uuid::new_v4()));
+    fs::write(&tmp_zip, bytes)?;
+    let result = (|| -> anyhow::Result<u32> {
+        unzip_archive(&tmp_zip, &staging)?;
+        let inner = single_child_dir(&staging)?;
+        let files = count_files(&inner)?;
+        merge_into(&inner, &dest)?;
+        Ok(files)
+    })();
+    let _ = fs::remove_file(&tmp_zip);
+    let _ = fs::remove_dir_all(&staging);
+    result
+}
+
+fn single_child_dir(root: &Path) -> anyhow::Result<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    for ent in fs::read_dir(root)? {
+        let path = ent?.path();
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if name == "__MACOSX" || name.starts_with("._") || name == ".DS_Store" {
+            continue;
+        }
+        if path.is_dir() {
+            dirs.push(path);
+        } else {
+            files.push(path);
+        }
+    }
+    if dirs.len() == 1 && files.is_empty() {
+        let inner = &dirs[0];
+        let has_level = inner.join("level.dat").is_file()
+            || inner.join("region").is_dir()
+            || inner.join("DIM1").is_dir();
+        if has_level {
+            return Ok(inner.clone());
+        }
+    }
+    Ok(root.to_path_buf())
+}
+
+fn count_files(root: &Path) -> anyhow::Result<u32> {
+    let mut n = 0u32;
+    fn walk(dir: &Path, n: &mut u32, depth: u32) {
+        if depth > 32 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_symlink() {
+                continue;
+            }
+            if p.is_dir() {
+                walk(&p, n, depth + 1);
+            } else {
+                *n += 1;
+            }
+        }
+    }
+    walk(root, &mut n, 0);
+    Ok(n)
+}
+
+fn merge_into(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(dst)?;
+    for ent in fs::read_dir(src)? {
+        let ent = ent?;
+        let from = ent.path();
+        if from.is_symlink() {
+            continue;
+        }
+        let to = dst.join(ent.file_name());
+        if from.is_dir() {
+            merge_into(&from, &to)?;
+        } else {
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn guess_mc_version(workdir: &str) -> Option<String> {
+    if let Some(v) = guess_version_from_properties(workdir) {
+        return Some(v);
+    }
+    if let Some(v) = guess_version_from_jars(workdir) {
+        return Some(v);
+    }
+    guess_version_from_logs(workdir)
+}
+
+fn guess_version_from_properties(workdir: &str) -> Option<String> {
+    let path = Path::new(workdir).join("server.properties");
+    let raw = fs::read_to_string(path).ok()?;
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.starts_with("version=") || line.starts_with("level-name=") {
+            continue;
+        }
+        if let Some(v) = line.strip_prefix("cocktail-mc-version=") {
+            let v = v.trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn guess_version_from_jars(workdir: &str) -> Option<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut roots = vec![PathBuf::from(workdir)];
+    roots.push(Path::new(workdir).join("versions"));
+    for root in roots {
+        let Ok(entries) = fs::read_dir(&root) else {
+            continue;
+        };
+        for ent in entries.flatten() {
+            let name = ent.file_name().to_string_lossy().to_string();
+            if name.to_ascii_lowercase().ends_with(".jar") {
+                names.push(name);
+            }
+        }
+    }
+    for name in names {
+        if let Some(v) = extract_semver(&name) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+fn extract_semver(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    if !(lower.contains("paper")
+        || lower.contains("purpur")
+        || lower.contains("folia")
+        || lower.contains("leaves")
+        || lower.contains("server")
+        || lower.contains("vanilla")
+        || lower.contains("fabric")
+        || lower.contains("forge")
+        || lower.contains("quilt"))
+    {
+        return None;
+    }
+    let bytes: Vec<char> = name.chars().collect();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            let mut dots = 0;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == '.') {
+                if bytes[i] == '.' {
+                    dots += 1;
+                }
+                i += 1;
+            }
+            let candidate: String = bytes[start..i].iter().collect();
+            let candidate = candidate.trim_matches('.').to_string();
+            if dots >= 1 && candidate.len() >= 3 && candidate.len() <= 12 {
+                return Some(candidate);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+fn guess_version_from_logs(workdir: &str) -> Option<String> {
+    let path = Path::new(workdir).join("logs").join("latest.log");
+    let meta = fs::metadata(&path).ok()?;
+    if meta.len() > 4 * 1024 * 1024 {
+        return None;
+    }
+    let raw = fs::read_to_string(&path).ok()?;
+    for line in raw.lines().take(200) {
+        if let Some(idx) = line.find("Starting minecraft server version") {
+            let tail = &line[idx + "Starting minecraft server version".len()..];
+            let v = tail.trim().trim_end_matches(['.', ',', '!']).trim();
+            if !v.is_empty() && v.len() <= 24 {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+pub fn write_mc_version_marker(workdir: &str, version: &str) -> anyhow::Result<()> {
+    let path = Path::new(workdir).join("server.properties");
+    let mut lines: Vec<String> = fs::read_to_string(&path)
+        .map(|s| s.lines().map(|l| l.to_string()).collect())
+        .unwrap_or_default();
+    lines.retain(|l| !l.trim_start().starts_with("cocktail-mc-version="));
+    lines.push(format!("cocktail-mc-version={version}"));
+    let mut out = lines.join(
+        "
+",
+    );
+    out.push('\n');
+    fs::write(path, out)?;
+    Ok(())
+}
+
+pub fn total_dir_bytes(path: &str) -> u64 {
+    let mut total = 0u64;
+    fn walk(dir: &Path, total: &mut u64, depth: u32) {
+        if depth > 32 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_symlink() {
+                continue;
+            }
+            if p.is_dir() {
+                walk(&p, total, depth + 1);
+            } else if let Ok(meta) = p.metadata() {
+                *total += meta.len();
+            }
+        }
+    }
+    walk(Path::new(path), &mut total, 0);
+    total
 }
 
 #[cfg(test)]

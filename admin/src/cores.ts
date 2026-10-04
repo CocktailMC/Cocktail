@@ -3,7 +3,7 @@ export type CoreGroup = {
   items: { id: string; label: string }[]
 }
 
-/** 可在线安装的核心（与控制面 versions.rs 对齐）。 */
+
 export const INSTALLABLE_CORE_GROUPS: CoreGroup[] = [
   {
     label: '插件端',

@@ -1,14 +1,14 @@
-/** Brand assets from Simple Icons + m3-Markdown-Badges. */
+
 
 const SI = 'https://cdn.jsdelivr.net/npm/simple-icons@v13/icons'
 const M3 = 'https://ziadoua.github.io/m3-Markdown-Badges/badges'
 
-/** Monochrome SVG from Simple Icons (https://simpleicons.org/). */
+
 export function simpleIcon(slug: string) {
   return `${SI}/${slug}.svg`
 }
 
-/** Material You badge from m3-Markdown-Badges. */
+
 export function m3Badge(folder: string, file: string) {
   return `${M3}/${folder}/${file}.svg`
 }
@@ -27,10 +27,10 @@ export const BRAND = {
   apple: simpleIcon('apple'),
 } as const
 
-/** Project logo served from admin/public. */
+
 export const PROJECT_LOGO = '/logo.png'
 
-/** Distro / OS id → Simple Icons slug (https://simpleicons.org/). */
+
 const DISTRO_SLUGS: Record<string, string> = {
   windows: 'windows',
   macos: 'apple',
@@ -99,7 +99,7 @@ export function osLabel(os?: string) {
   }
 }
 
-/** Prefer distro-specific logo; fall back to generic OS logo. */
+
 export function distroIcon(distroId?: string, os?: string) {
   const id = (distroId || '').toLowerCase()
   const slug = DISTRO_SLUGS[id]
@@ -143,7 +143,7 @@ export function BrandImg({ src, alt, className, height = 18 }: BrandImgProps) {
       decoding="async"
       referrerPolicy="no-referrer"
       onError={(e) => {
-        // Unknown distro slug → fall back to generic Linux/Windows glyph
+        
         const el = e.currentTarget
         if (el.dataset.fallback === '1') return
         el.dataset.fallback = '1'

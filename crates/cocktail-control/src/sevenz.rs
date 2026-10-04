@@ -1,5 +1,3 @@
-//! Bundled 7-Zip CLI (`7za` / `7zzs`) for archive extraction.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -19,18 +17,12 @@ const EMBEDDED: Option<(&[u8], &str)> = Some((
 ));
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const EMBEDDED: Option<(&[u8], &str)> = Some((
-    include_bytes!("../vendor/7z/linux-x64/7zzs"),
-    "7zzs",
-));
+const EMBEDDED: Option<(&[u8], &str)> =
+    Some((include_bytes!("../vendor/7z/linux-x64/7zzs"), "7zzs"));
 
-#[cfg(not(any(
-    windows,
-    all(target_os = "linux", target_arch = "x86_64")
-)))]
+#[cfg(not(any(windows, all(target_os = "linux", target_arch = "x86_64"))))]
 const EMBEDDED: Option<(&[u8], &str)> = None;
 
-/// Ensure the bundled (or PATH) 7-Zip binary exists and return its path.
 pub fn ensure_bin() -> anyhow::Result<PathBuf> {
     if let Some((bytes, name)) = EMBEDDED {
         let dir = PathBuf::from(RUNTIME_DIR);
@@ -52,9 +44,7 @@ pub fn ensure_bin() -> anyhow::Result<PathBuf> {
         }
         return Ok(dest);
     }
-    which_system().ok_or_else(|| {
-        anyhow::anyhow!("当前平台未内置 7z，且 PATH 中找不到 7za/7zz/7z")
-    })
+    which_system().ok_or_else(|| anyhow::anyhow!("当前平台未内置 7z，且 PATH 中找不到 7za/7zz/7z"))
 }
 
 fn which_system() -> Option<PathBuf> {
@@ -75,7 +65,6 @@ fn which_system() -> Option<PathBuf> {
     None
 }
 
-/// Extract `archive` into `dest` with the bundled 7-Zip CLI.
 pub fn extract(archive: &Path, dest: &Path) -> anyhow::Result<()> {
     let bin = ensure_bin()?;
     fs::create_dir_all(dest)?;
@@ -145,9 +134,15 @@ mod tests {
             String::from_utf8_lossy(&out.stderr)
         );
         extract(&pack, &dest).unwrap();
-        let found = dest.join("server.jar").is_file()
-            || dest.join("src").join("server.jar").is_file();
-        assert!(found, "extracted tree: {:?}", fs::read_dir(&dest).map(|d| d.flat_map(|e| e.ok().map(|x| x.file_name())).collect::<Vec<_>>()));
+        let found =
+            dest.join("server.jar").is_file() || dest.join("src").join("server.jar").is_file();
+        assert!(
+            found,
+            "extracted tree: {:?}",
+            fs::read_dir(&dest).map(|d| d
+                .flat_map(|e| e.ok().map(|x| x.file_name()))
+                .collect::<Vec<_>>())
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

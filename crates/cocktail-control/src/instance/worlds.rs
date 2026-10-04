@@ -1,5 +1,3 @@
-//! World folder helpers.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -28,7 +26,7 @@ pub fn list_worlds(workdir: &str) -> anyhow::Result<Vec<WorldInfo>> {
             continue;
         }
         let name = ent.file_name().to_string_lossy().into_owned();
-        // skip common non-world dirs
+
         if matches!(
             name.as_str(),
             "plugins" | "mods" | "libraries" | "versions" | "logs" | "cache" | "config"
@@ -74,7 +72,7 @@ pub fn export_world(instance_id: &str, workdir: &str, world: &str) -> anyhow::Re
     if !src.is_dir() {
         anyhow::bail!("world not found");
     }
-    // Reuse zip by temporarily creating a single-world backup directory layout.
+
     let stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
     let staging = PathBuf::from("data")
         .join("tmp")
@@ -111,7 +109,7 @@ pub fn import_world(workdir: &str, world: &str, zip_bytes: &[u8]) -> anyhow::Res
     fs::write(&tmp_zip, zip_bytes)?;
     let extract_to = PathBuf::from(workdir).join(format!(".import-{world}"));
     files::unzip_archive(&tmp_zip, &extract_to)?;
-    // If zip contains a single top-level dir, use it; else move extract_to -> dest
+
     let entries: Vec<_> = fs::read_dir(&extract_to)?.filter_map(|e| e.ok()).collect();
     if entries.len() == 1 && entries[0].path().is_dir() {
         fs::rename(entries[0].path(), &dest)?;

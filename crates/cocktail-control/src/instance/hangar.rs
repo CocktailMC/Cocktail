@@ -1,6 +1,3 @@
-//! Hangar API client — https://hangar.papermc.io/api-docs
-//! Paper / Velocity / Waterfall plugin repository (HangarMC/Hangar).
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -24,7 +21,7 @@ pub struct SearchQuery {
     pub limit: u32,
     #[serde(default)]
     pub offset: u32,
-    /// PAPER | VELOCITY | WATERFALL
+
     #[serde(default = "default_platform")]
     pub platform: String,
 }
@@ -222,7 +219,6 @@ pub async fn list_versions(slug: &str, q: &VersionsQuery) -> anyhow::Result<Vec<
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .or_else(|| {
-                // Fallback official download route
                 let name = ver.get("name")?.as_str()?;
                 Some(format!(
                     "{API}/projects/{slug}/versions/{name}/{platform}/download"
@@ -287,7 +283,11 @@ pub async fn pick_version(req: &InstallRequest) -> anyhow::Result<VersionInfo> {
     if versions.is_empty() {
         anyhow::bail!("no Hangar versions for {} / {}", req.slug, platform);
     }
-    if let Some(want) = req.version.as_ref().filter(|s| !s.is_empty() && *s != "latest") {
+    if let Some(want) = req
+        .version
+        .as_ref()
+        .filter(|s| !s.is_empty() && *s != "latest")
+    {
         return versions
             .into_iter()
             .find(|v| v.name == *want || v.id.to_string() == *want)

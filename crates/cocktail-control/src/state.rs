@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 use axum::Router;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
 
 use crate::automations::PanelEvent;
 use crate::db;
@@ -21,6 +21,12 @@ pub struct NodeLive {
     pub memory_mib: f32,
     pub rx_bps: f32,
     pub tx_bps: f32,
+    pub nics: Vec<crate::proto::NicStat>,
+    pub tcp_estab: u32,
+    pub tcp_syn_recv: u32,
+    pub tcp_time_wait: u32,
+    pub protocol_version: u32,
+    pub last_ack_seq: u64,
 }
 
 pub(crate) const LOG_BUFFER: usize = 500;
@@ -41,11 +47,9 @@ pub struct AppState {
     pub node_live: RwLock<HashMap<String, NodeLive>>,
     pub plugin_host: String,
     pub plugin_token: String,
-    /// Std mutex: WASM calls run on `spawn_blocking`; host functions must not
-    /// `block_on` the same runtime (nested runtime / worker deadlock).
+
     pub plugins: std::sync::Mutex<crate::plugin_bridge::PluginRegistry>,
-    /// In-process clone of the API router so plugins never HTTP-loopback
-    /// through the system proxy.
+
     pub plane: OnceLock<Router>,
     pub env_api_token: Option<String>,
     pub env_webhook_url: Option<String>,
@@ -120,10 +124,7 @@ impl AppState {
         let conn = self.db.lock().await;
         let row = db::panel(&conn).ok();
         drop(conn);
-        if let Some(url) = row
-            .and_then(|r| r.webhook_url)
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(url) = row.and_then(|r| r.webhook_url).filter(|s| !s.is_empty()) {
             return Some(url);
         }
         self.env_webhook_url.clone()
@@ -141,10 +142,32 @@ impl AppState {
             return true;
         }
         let conn = self.db.lock().await;
-        db::session_admin(&conn, token)
+        db::session_lookup(&conn, token).ok().flatten().is_some()
+    }
+
+    pub async fn token_role(&self, token: &str) -> Option<(String, String)> {
+        if self
+            .env_api_token
+            .as_ref()
+            .is_some_and(|expected| expected == token)
+            || (!self.plugin_token.is_empty() && self.plugin_token == token)
+        {
+            let conn = self.db.lock().await;
+            return db::superadmin(&conn)
+                .ok()
+                .flatten()
+                .map(|a| (a.role, String::new()));
+        }
+        let conn = self.db.lock().await;
+        db::session_lookup(&conn, token)
             .ok()
             .flatten()
-            .is_some()
+            .map(|s| (s.admin.role, s.csrf_token))
+    }
+
+    pub async fn purge_sessions(&self) {
+        let conn = self.db.lock().await;
+        let _ = db::purge_expired_sessions(&conn);
     }
 
     pub fn publish(&self, event: InstanceEvent) {
@@ -159,11 +182,7 @@ impl AppState {
                 match rx.recv().await {
                     Ok(event) => {
                         instance::apply_event(&state, &event).await;
-                        if let InstanceEvent::Log {
-                            instance_id,
-                            line,
-                        } = &event
-                        {
+                        if let InstanceEvent::Log { instance_id, line } = &event {
                             let mut buffers = state.log_buffers.write().await;
                             let buf = buffers
                                 .entry(instance_id.clone())
@@ -248,9 +267,7 @@ impl AppState {
     }
 }
 
-fn hydrate_state(
-    db: &rusqlite::Connection,
-) -> (HashMap<String, Instance>, Vec<Schedule>) {
+fn hydrate_state(db: &rusqlite::Connection) -> (HashMap<String, Instance>, Vec<Schedule>) {
     let (json_map, schedules) = load_from_disk().unwrap_or_else(|e| {
         tracing::warn!(error = %e, "failed to load persisted state.json");
         (HashMap::new(), Vec::new())

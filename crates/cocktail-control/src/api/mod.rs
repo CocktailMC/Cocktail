@@ -1,7 +1,7 @@
 mod handlers;
 
-use axum::routing::{any, delete, get, post, put};
 use axum::Router;
+use axum::routing::{any, delete, get, post, put};
 
 use crate::state::SharedState;
 
@@ -12,7 +12,10 @@ pub fn router() -> Router<SharedState> {
         .route("/api/v1/auth/login", post(handlers::login))
         .route("/api/v1/auth/logout", post(handlers::logout))
         .route("/api/v1/auth/me", get(handlers::me))
-        .route("/api/v1/auth/password", axum::routing::put(handlers::change_password))
+        .route(
+            "/api/v1/auth/password",
+            axum::routing::put(handlers::change_password),
+        )
         .route(
             "/api/v1/settings",
             get(handlers::get_settings).put(handlers::update_settings),
@@ -28,7 +31,10 @@ pub fn router() -> Router<SharedState> {
                 .put(handlers::update_instance)
                 .delete(handlers::delete_instance),
         )
-        .route("/api/v1/instances/{id}/start", post(handlers::start_instance))
+        .route(
+            "/api/v1/instances/{id}/start",
+            post(handlers::start_instance),
+        )
         .route("/api/v1/instances/{id}/stop", post(handlers::stop_instance))
         .route(
             "/api/v1/instances/{id}/restart",
@@ -61,10 +67,7 @@ pub fn router() -> Router<SharedState> {
             "/api/v1/instances/{id}/files/upload",
             post(handlers::upload_file),
         )
-        .route(
-            "/api/v1/instances/{id}/files/mkdir",
-            post(handlers::mkdir),
-        )
+        .route("/api/v1/instances/{id}/files/mkdir", post(handlers::mkdir))
         .route(
             "/api/v1/instances/{id}/install-jar",
             post(handlers::install_jar),
@@ -161,9 +164,30 @@ pub fn router() -> Router<SharedState> {
             post(handlers::player_action),
         )
         .route(
-            "/api/v1/instances/{id}/worlds",
-            get(handlers::list_worlds),
+            "/api/v1/instances/{id}/players/{name}/detail",
+            get(handlers::player_detail),
         )
+        .route(
+            "/api/v1/instances/{id}/players/{name}/rcon",
+            post(handlers::player_rcon_action),
+        )
+        .route(
+            "/api/v1/instances/{id}/rcon/exec",
+            post(handlers::rcon_exec),
+        )
+        .route(
+            "/api/v1/instances/{id}/rcon/status",
+            get(handlers::rcon_status),
+        )
+        .route(
+            "/api/v1/instances/{id}/rcon/setup",
+            post(handlers::rcon_setup),
+        )
+        .route("/api/v1/auth/2fa/setup", post(handlers::totp_setup))
+        .route("/api/v1/auth/2fa/verify", post(handlers::totp_verify))
+        .route("/api/v1/auth/2fa/status", get(handlers::totp_status))
+        .route("/api/v1/auth/2fa/disable", post(handlers::totp_disable))
+        .route("/api/v1/instances/{id}/worlds", get(handlers::list_worlds))
         .route(
             "/api/v1/instances/{id}/worlds/{world}/reset",
             post(handlers::reset_world),
@@ -177,13 +201,41 @@ pub fn router() -> Router<SharedState> {
             post(handlers::import_world),
         )
         .route(
+            "/api/v1/instances/{id}/worlds/{world}/download",
+            get(handlers::world_download),
+        )
+        .route(
+            "/api/v1/instances/{id}/worlds/{world}/upload",
+            post(handlers::world_upload),
+        )
+        .route(
+            "/api/v1/instances/{id}/clone",
+            post(handlers::clone_instance),
+        )
+        .route("/api/v1/instances/{id}/preflight", get(handlers::preflight))
+        .route(
+            "/api/v1/instances/{id}/version-compare",
+            get(handlers::version_compare),
+        )
+        .route(
+            "/api/v1/instances/{id}/version-rescan",
+            post(handlers::rescan_version),
+        )
+        .route(
+            "/api/v1/instances/{id}/backups/{backup_id}/preview",
+            get(handlers::backup_preview),
+        )
+        .route(
             "/api/v1/schedules",
             get(handlers::list_schedules).post(handlers::create_schedule),
         )
         .route("/api/v1/schedules/{id}", delete(handlers::delete_schedule))
         .route("/api/v1/fleet/summary", get(handlers::fleet_summary))
         .route("/api/v1/network", get(handlers::host_network))
-        .route("/api/v1/netops", get(handlers::list_netops).post(handlers::create_netops))
+        .route(
+            "/api/v1/netops",
+            get(handlers::list_netops).post(handlers::create_netops),
+        )
         .route("/api/v1/netops/kick", post(handlers::kick_netops))
         .route("/api/v1/netops/resync", post(handlers::resync_netops))
         .route("/api/v1/netops/{id}", delete(handlers::delete_netops))
@@ -193,10 +245,19 @@ pub fn router() -> Router<SharedState> {
             "/api/v1/automations",
             get(handlers::list_automations).post(handlers::create_automation),
         )
-        .route("/api/v1/automations/{id}", delete(handlers::delete_automation))
-        .route("/api/v1/users", get(handlers::list_users).post(handlers::create_user))
-        .route("/api/v1/users/{id}", delete(handlers::delete_user))
-        .route("/api/v1/fleet/bulk", post(handlers::fleet_bulk))
+        .route(
+            "/api/v1/automations/{id}",
+            delete(handlers::delete_automation),
+        )
+        .route(
+            "/api/v1/users",
+            get(handlers::list_users).post(handlers::create_user),
+        )
+        .route(
+            "/api/v1/users/{id}",
+            delete(handlers::delete_user).put(handlers::update_user),
+        )
+        .route("/api/v1/fleet/bulk", post(handlers::bulk_action))
         .route("/api/v1/docker/status", get(handlers::docker_status))
         .route("/api/v1/docker/images", get(handlers::docker_images))
         .route("/api/v1/docker/images/pull", post(handlers::docker_pull))
@@ -217,12 +278,18 @@ pub fn router() -> Router<SharedState> {
             get(handlers::get_instance_spec).put(handlers::apply_instance_spec),
         )
         .route("/api/v1/extensions", get(handlers::list_extensions))
-        .route("/api/v1/extensions/reload", post(handlers::reload_extensions))
+        .route(
+            "/api/v1/extensions/reload",
+            post(handlers::reload_extensions),
+        )
         .route(
             "/api/v1/extensions/{id}",
             put(handlers::set_extension_enabled),
         )
-        .route("/api/v1/ext/{plugin_id}", any(handlers::proxy_extension_root))
+        .route(
+            "/api/v1/ext/{plugin_id}",
+            any(handlers::proxy_extension_root),
+        )
         .route(
             "/api/v1/ext/{plugin_id}/{*rest}",
             any(handlers::proxy_extension),

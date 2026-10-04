@@ -1,9 +1,9 @@
 use cocktail_plugin_sdk::{
-    control, control_json, fs, json_body, log_info, log_warn, path_tail, FsReq, HttpReq, HttpResp,
+    FsReq, HttpReq, HttpResp, control, control_json, fs, json_body, log_info, log_warn, path_tail,
 };
 use extism_pdk::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const EXAMPLE: &str = r#"apiVersion: cocktail.gameops/v1
 kind: World
@@ -134,7 +134,12 @@ fn put_object(obj: &StoredObject) {
     });
 }
 
-fn upsert(kind: &str, name: &str, spec: Value, labels: Option<Value>) -> Result<StoredObject, String> {
+fn upsert(
+    kind: &str,
+    name: &str,
+    spec: Value,
+    labels: Option<Value>,
+) -> Result<StoredObject, String> {
     let kind = OWNED
         .iter()
         .find(|k| k.eq_ignore_ascii_case(kind))
@@ -145,7 +150,9 @@ fn upsert(kind: &str, name: &str, spec: Value, labels: Option<Value>) -> Result<
         api_version: api_ver(),
         kind: kind.into(),
         name: name.into(),
-        labels: labels.or_else(|| existing.as_ref().map(|e| e.labels.clone())).unwrap_or(json!({})),
+        labels: labels
+            .or_else(|| existing.as_ref().map(|e| e.labels.clone()))
+            .unwrap_or(json!({})),
         spec,
         status: existing
             .as_ref()
@@ -187,7 +194,8 @@ pub fn http_handle(Json(req): Json<HttpReq>) -> FnResult<Json<HttpResp>> {
     let resp = match (method.as_str(), path.as_str()) {
         ("GET", "/summary") => {
             let nodes: Value = control_json("GET", "/api/v1/nodes", None).unwrap_or(json!([]));
-            let instances: Value = control_json("GET", "/api/v1/instances", None).unwrap_or(json!([]));
+            let instances: Value =
+                control_json("GET", "/api/v1/instances", None).unwrap_or(json!([]));
             HttpResp::ok_json(json!({
                 "apiVersion": "cocktail.gameops/v1",
                 "owned": OWNED,
@@ -205,7 +213,9 @@ pub fn http_handle(Json(req): Json<HttpReq>) -> FnResult<Json<HttpResp>> {
             HttpResp::ok_json(json!({ "ok": true, "items": list_objects(None) }))
         }
         _ if path.starts_with("/objects/") => objects_route(&method, &path, &req),
-        _ if method == "POST" && path.starts_with("/worlds/") => snapshot_world(path_tail(&path, "/worlds")),
+        _ if method == "POST" && path.starts_with("/worlds/") => {
+            snapshot_world(path_tail(&path, "/worlds"))
+        }
         _ => HttpResp::not_found(format!("no route {method} {path}")),
     };
     Ok(Json(resp))
@@ -283,8 +293,16 @@ fn snapshot_world(name: &str) -> HttpResp {
     let Some(obj) = get_object("World", name) else {
         return HttpResp::bad("world not found");
     };
-    let folder = obj.spec.get("folder").and_then(|v| v.as_str()).unwrap_or("world");
-    let retain = obj.spec.get("retainSnapshots").and_then(|v| v.as_u64()).unwrap_or(5);
+    let folder = obj
+        .spec
+        .get("folder")
+        .and_then(|v| v.as_str())
+        .unwrap_or("world");
+    let retain = obj
+        .spec
+        .get("retainSnapshots")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5);
     let src = world_path(name, &obj.spec);
     let dest = format!("{src}/.snapshots/{}", now_stamp());
     let _ = fs(&FsReq {
@@ -329,7 +347,11 @@ fn parse_json(json_text: &str) -> Result<Vec<StoredObject>, String> {
 }
 
 fn from_element(el: &Value) -> Result<StoredObject, String> {
-    let kind = el.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let kind = el
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let meta = el.get("metadata").cloned().unwrap_or(json!({}));
     let name = meta
         .get("name")
@@ -359,7 +381,11 @@ fn reconcile_all() {
     for obj in list_objects(None) {
         if let Err(e) = reconcile_one(&obj) {
             log_warn(format!("reconcile {}/{} failed: {e}", obj.kind, obj.name));
-            put_status(&obj.kind, &obj.name, json!({ "ready": false, "message": e }));
+            put_status(
+                &obj.kind,
+                &obj.name,
+                json!({ "ready": false, "message": e }),
+            );
         }
     }
 }
@@ -436,7 +462,12 @@ fn reconcile_pluginset(obj: &StoredObject) -> Result<(), String> {
                 .collect()
         })
         .unwrap_or_default();
-    let items = obj.spec.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let items = obj
+        .spec
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut drift = Vec::new();
     for inst in instances {
         let spec = inst.get("spec").cloned().unwrap_or(json!({}));
@@ -454,22 +485,36 @@ fn reconcile_pluginset(obj: &StoredObject) -> Result<(), String> {
             continue;
         }
         let have: Vec<Value> =
-            control_json("GET", &format!("/api/v1/instances/{id}/plugins"), None).unwrap_or_default();
+            control_json("GET", &format!("/api/v1/instances/{id}/plugins"), None)
+                .unwrap_or_default();
         for item in &items {
             let want = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let enabled = item.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-            let source = item.get("source").and_then(|v| v.as_str()).unwrap_or("local");
+            let enabled = item
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let source = item
+                .get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("local");
             let found = have.iter().find(|p| {
                 let n = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 n.eq_ignore_ascii_case(want)
-                    || n.trim_end_matches(".jar").eq_ignore_ascii_case(want.trim_end_matches(".jar"))
+                    || n.trim_end_matches(".jar")
+                        .eq_ignore_ascii_case(want.trim_end_matches(".jar"))
             });
             if found.is_none() {
                 if source.eq_ignore_ascii_case("modrinth") {
                     if let Some(project) = item.get("project").and_then(|v| v.as_str()) {
                         let body = json!({ "project_id": project, "version_id": item.get("version"), "target": "plugin" }).to_string();
-                        let _ = control("POST", &format!("/api/v1/instances/{id}/modrinth/install"), Some(&body));
-                        drift.push(json!({ "instanceId": id, "plugin": want, "action": "installed" }));
+                        let _ = control(
+                            "POST",
+                            &format!("/api/v1/instances/{id}/modrinth/install"),
+                            Some(&body),
+                        );
+                        drift.push(
+                            json!({ "instanceId": id, "plugin": want, "action": "installed" }),
+                        );
                         continue;
                     }
                 }
@@ -502,23 +547,39 @@ fn reconcile_pluginset(obj: &StoredObject) -> Result<(), String> {
 }
 
 fn reconcile_proxy(obj: &StoredObject) -> Result<(), String> {
-    let mut instances: Vec<Value> = control_json("GET", "/api/v1/instances", None).unwrap_or_default();
+    let mut instances: Vec<Value> =
+        control_json("GET", "/api/v1/instances", None).unwrap_or_default();
     let name = obj
         .spec
         .get("instanceName")
         .and_then(|v| v.as_str())
         .unwrap_or(&obj.name)
         .to_string();
-    let listen = obj.spec.get("listenPort").and_then(|v| v.as_u64()).unwrap_or(25577);
+    let listen = obj
+        .spec
+        .get("listenPort")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(25577);
     let group = obj.spec.get("group").and_then(|v| v.as_str()).unwrap_or("");
-    let create = obj.spec.get("createIfMissing").and_then(|v| v.as_bool()).unwrap_or(true);
-    let desired = obj.spec.get("desiredRunning").and_then(|v| v.as_bool()).unwrap_or(true);
-    let mut proxy = instances.iter().find(|i| {
-        i.get("spec")
-            .and_then(|s| s.get("name"))
-            .and_then(|v| v.as_str())
-            .is_some_and(|n| n.eq_ignore_ascii_case(&name))
-    }).cloned();
+    let create = obj
+        .spec
+        .get("createIfMissing")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let desired = obj
+        .spec
+        .get("desiredRunning")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let mut proxy = instances
+        .iter()
+        .find(|i| {
+            i.get("spec")
+                .and_then(|s| s.get("name"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case(&name))
+        })
+        .cloned();
     if proxy.is_none() && create {
         let body = json!({
             "name": name,
@@ -537,11 +598,19 @@ fn reconcile_proxy(obj: &StoredObject) -> Result<(), String> {
         }
     }
     let Some(proxy) = proxy else {
-        put_status(&obj.kind, &obj.name, json!({ "ready": false, "message": format!("proxy instance {name} missing") }));
+        put_status(
+            &obj.kind,
+            &obj.name,
+            json!({ "ready": false, "message": format!("proxy instance {name} missing") }),
+        );
         return Ok(());
     };
     let pid = proxy.get("id").and_then(|v| v.as_str()).unwrap_or("");
-    let motd = obj.spec.get("motd").and_then(|v| v.as_str()).unwrap_or("Cocktail GameOps");
+    let motd = obj
+        .spec
+        .get("motd")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Cocktail GameOps");
     let mut toml = format!("bind = \"0.0.0.0:{listen}\"\nmotd = \"{motd}\"\n[servers]\n");
     let mut backends = Vec::new();
     for inst in &instances {
@@ -556,13 +625,20 @@ fn reconcile_proxy(obj: &StoredObject) -> Result<(), String> {
         }
         let n = spec.get("name").and_then(|v| v.as_str()).unwrap_or(id);
         let port = spec.get("port").and_then(|v| v.as_u64()).unwrap_or(25565);
-        let safe: String = n.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+        let safe: String = n
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
         toml.push_str(&format!("{safe} = \"127.0.0.1:{port}\"\n"));
         backends.push(json!({ "name": n, "instanceId": id }));
     }
     toml.push_str("[forced-hosts]\n");
     let body = json!({ "path": "velocity.toml", "content": toml }).to_string();
-    let _ = control("PUT", &format!("/api/v1/instances/{pid}/files/content"), Some(&body));
+    let _ = control(
+        "PUT",
+        &format!("/api/v1/instances/{pid}/files/content"),
+        Some(&body),
+    );
     let st = proxy.get("status").and_then(|v| v.as_str()).unwrap_or("");
     if desired && matches!(st, "stopped" | "created" | "crashed") {
         let _ = control("POST", &format!("/api/v1/instances/{pid}/start"), None);
@@ -585,18 +661,31 @@ fn reconcile_network(obj: &StoredObject) -> Result<(), String> {
             }
         }
     }
-    let mut instances: Vec<Value> = control_json("GET", "/api/v1/instances", None).unwrap_or_default();
+    let mut instances: Vec<Value> =
+        control_json("GET", "/api/v1/instances", None).unwrap_or_default();
     let mut ids = Vec::new();
-    let servers = obj.spec.get("servers").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let desired = obj.spec.get("desiredRunning").and_then(|v| v.as_bool()).unwrap_or(true);
+    let servers = obj
+        .spec
+        .get("servers")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let desired = obj
+        .spec
+        .get("desiredRunning")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     for server in servers {
         let name = server.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let mut inst = instances.iter().find(|i| {
-            i.get("spec")
-                .and_then(|s| s.get("name"))
-                .and_then(|v| v.as_str())
-                .is_some_and(|n| n.eq_ignore_ascii_case(name))
-        }).cloned();
+        let mut inst = instances
+            .iter()
+            .find(|i| {
+                i.get("spec")
+                    .and_then(|s| s.get("name"))
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|n| n.eq_ignore_ascii_case(name))
+            })
+            .cloned();
         if inst.is_none() {
             let body = json!({
                 "name": name,
@@ -616,7 +705,11 @@ fn reconcile_network(obj: &StoredObject) -> Result<(), String> {
             }
         }
         if let Some(inst) = inst {
-            let id = inst.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let id = inst
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             ids.push(id.clone());
             if let Some(world_name) = server.get("world").and_then(|v| v.as_str()) {
                 if let Some(world) = get_object("World", world_name) {
@@ -653,7 +746,11 @@ fn attach_world(inst: &Value, world: &StoredObject) {
     if workdir.is_empty() {
         return;
     }
-    let folder = world.spec.get("folder").and_then(|v| v.as_str()).unwrap_or("world");
+    let folder = world
+        .spec
+        .get("folder")
+        .and_then(|v| v.as_str())
+        .unwrap_or("world");
     let src = world_path(&world.name, &world.spec);
     let dest = format!("{workdir}/{folder}");
     let _ = fs(&FsReq {
@@ -666,6 +763,5 @@ fn attach_world(inst: &Value, world: &StoredObject) {
 }
 
 fn now_stamp() -> String {
-    // Guest has no chrono; host tick is frequent enough that a coarse stamp is fine.
     format!("{}", (core::time::Duration::from_millis(1).as_millis()))
 }

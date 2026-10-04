@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { api, type HealthInfo, type PanelSettings } from './api'
+import { api, setSession, type AuthSession, type HealthInfo, type PanelSettings } from './api'
 import { BrandImg, BRAND } from './brandIcons'
 import EnvBrandBar from './EnvBrandBar'
 import JavaRuntimePanel from './JavaRuntimePanel'
+import TwoFactorPanel from './TwoFactorPanel'
 
 type Props = {
   health: string
@@ -114,14 +115,17 @@ export default function HomeSettings({
     onError(null)
     setSaved(null)
     try {
-      await api.changePassword({
+      const rotated = await api.changePassword({
         current_password: currentPw,
         new_password: newPw,
       })
+      if (rotated && typeof rotated === 'object' && 'token' in rotated) {
+        setSession(rotated as AuthSession)
+      }
       setCurrentPw('')
       setNewPw('')
       setConfirmPw('')
-      setSaved('最高管理员密码已更新')
+      setSaved('密码已更新，本会话已自动续期')
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -437,6 +441,7 @@ export default function HomeSettings({
 
       <div className="mt-6">
         <JavaRuntimePanel busy={busy} onBusy={onBusy} onError={onError} />
+        <TwoFactorPanel onError={onError} />
       </div>
     </div>
   )

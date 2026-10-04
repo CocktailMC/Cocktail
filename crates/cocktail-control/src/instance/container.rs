@@ -1,8 +1,3 @@
-//! Container instance runtime — backed by the Bollard SDK (Docker/Podman).
-//!
-//! This module is a thin façade over `crate::instance::runtime`, keeping the
-//! public API used by `registry.rs` and `handlers.rs` stable.
-
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -61,9 +56,7 @@ pub async fn spawn_docker_instance(
     let bin = command.unwrap_or_else(|| "java".into());
     if crate::util::is_java_command(&bin) {
         if !args.iter().any(|a| a == "-jar") {
-            anyhow::bail!(
-                "Docker 启动缺少 -jar:请先导入 server.jar 或设置启动命令"
-            );
+            anyhow::bail!("Docker 启动缺少 -jar:请先导入 server.jar 或设置启动命令");
         }
         crate::util::inject_jvm_memory(&mut args, memory_mib);
     }
@@ -115,7 +108,6 @@ pub async fn list_images() -> anyhow::Result<Vec<DockerImage>> {
         .collect())
 }
 
-/// Pull an image by reference (used by the install/pull API).
 pub async fn pull_image(image: &str) -> anyhow::Result<()> {
     let rt = runtime::require_runtime().await?;
     rt.pull_image(image).await
@@ -128,7 +120,7 @@ pub(crate) fn docker_mount_path(abs: &PathBuf) -> String {
     } else if let Some(rest) = s.strip_prefix("//?/") {
         s = rest.to_string();
     }
-    // Docker Desktop on Windows: C:\foo -> /c/foo
+
     #[cfg(windows)]
     {
         let b = s.as_bytes();

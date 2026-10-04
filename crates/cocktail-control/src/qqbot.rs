@@ -1,6 +1,3 @@
-//! QQ Bot OpenAPI v2: access token + proactive text messages.
-//! Docs: https://bot.q.qq.com/wiki/develop/api-v2/
-
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -94,11 +91,7 @@ impl QqClient {
         }
     }
 
-    async fn access_token(
-        &self,
-        http: &reqwest::Client,
-        cfg: &QqConfig,
-    ) -> anyhow::Result<String> {
+    async fn access_token(&self, http: &reqwest::Client, cfg: &QqConfig) -> anyhow::Result<String> {
         if let Some((tok, exp)) = self.token.lock().await.as_ref() {
             if Instant::now() + Duration::from_secs(90) < *exp {
                 return Ok(tok.clone());
@@ -136,8 +129,10 @@ impl QqClient {
                         continue;
                     }
                     let ttl = expires_secs(&parsed.expires_in);
-                    *self.token.lock().await =
-                        Some((parsed.access_token.clone(), Instant::now() + Duration::from_secs(ttl)));
+                    *self.token.lock().await = Some((
+                        parsed.access_token.clone(),
+                        Instant::now() + Duration::from_secs(ttl),
+                    ));
                     return Ok(parsed.access_token);
                 }
                 Err(e) => last = e.into(),

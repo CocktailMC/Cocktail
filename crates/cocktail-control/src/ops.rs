@@ -1,5 +1,3 @@
-//! Host network ticker, QQ alerts, and periodic status digest.
-
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -44,6 +42,7 @@ pub fn spawn(state: &SharedState) {
         loop {
             interval.tick().await;
             let _ = crate::netops::expire_now(&state).await;
+            state.purge_sessions().await;
             crate::automations::tick(&state).await;
             crate::automations::run_backup_hours(&state).await;
             sample_local_node(&state).await;
@@ -61,8 +60,8 @@ async fn tick(state: &SharedState) -> anyhow::Result<()> {
     };
     let prev = state.ops.prev.lock().await.clone();
     let thresh = cfg.net_alert_rx_bps;
-    let (mut sample, next) = tokio::task::spawn_blocking(move || hostnet::sample(&prev, thresh))
-        .await?;
+    let (mut sample, next) =
+        tokio::task::spawn_blocking(move || hostnet::sample(&prev, thresh)).await?;
     *state.ops.prev.lock().await = next;
 
     let instances = {
@@ -74,8 +73,16 @@ async fn tick(state: &SharedState) -> anyhow::Result<()> {
                 name: inst.spec.name.clone(),
                 status: status_slug(inst.status),
                 port: inst.spec.port,
-                rx_bps: inst.last_metrics.as_ref().map(|m| m.net_rx_bps).unwrap_or(0.0),
-                tx_bps: inst.last_metrics.as_ref().map(|m| m.net_tx_bps).unwrap_or(0.0),
+                rx_bps: inst
+                    .last_metrics
+                    .as_ref()
+                    .map(|m| m.net_rx_bps)
+                    .unwrap_or(0.0),
+                tx_bps: inst
+                    .last_metrics
+                    .as_ref()
+                    .map(|m| m.net_tx_bps)
+                    .unwrap_or(0.0),
                 connections: inst
                     .last_metrics
                     .as_ref()
@@ -288,14 +295,35 @@ async fn sample_local_node(state: &SharedState) {
         .as_ref()
         .map(|s| (s.rx_bps, s.tx_bps))
         .unwrap_or((0.0, 0.0));
+    let nics = host
+        .as_ref()
+        .map(|s| {
+            s.nics
+                .iter()
+                .map(|n| crate::proto::NicStat {
+                    name: n.name.clone(),
+                    rx_bytes: n.rx_bytes,
+                    tx_bytes: n.tx_bytes,
+                    rx_pkts: 0,
+                    tx_pkts: 0,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let (tcp_estab, tcp_syn_recv, tcp_time_wait) = host
+        .as_ref()
+        .map(|s| (s.tcp_estab, s.syn_recv, s.time_wait))
+        .unwrap_or((0, 0, 0));
     drop(host);
-    state.node_live.write().await.insert(
-        "local".into(),
-        crate::state::NodeLive {
-            cpu_pct,
-            memory_mib,
-            rx_bps,
-            tx_bps,
-        },
-    );
+    let mut live = state.node_live.write().await;
+    let entry = live.entry("local".into()).or_default();
+    entry.cpu_pct = cpu_pct;
+    entry.memory_mib = memory_mib;
+    entry.rx_bps = rx_bps;
+    entry.tx_bps = tx_bps;
+    entry.nics = nics;
+    entry.tcp_estab = tcp_estab;
+    entry.tcp_syn_recv = tcp_syn_recv;
+    entry.tcp_time_wait = tcp_time_wait;
+    entry.protocol_version = crate::proto::PROTOCOL_VERSION;
 }

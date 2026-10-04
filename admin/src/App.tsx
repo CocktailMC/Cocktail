@@ -5,7 +5,10 @@ import {
   eventsWsUrl,
   getToken,
   logsWsUrl,
-  setToken,
+  clearSession,
+  can,
+  sessionExpired,
+  setUnauthorizedHandler,
   formatBps,
   formatDuration,
   type BackupInfo,
@@ -35,6 +38,8 @@ import AuditPage from './AuditPage'
 import NetworkPage from './NetworkPage'
 import GlobalNetworkPage from './GlobalNetworkPage'
 import NodesPage from './NodesPage'
+import PlayerDetailPanel from './PlayerDetailPanel'
+import RconPanel from './RconPanel'
 import ExtensionsPage from './ExtensionsPage'
 import { parseHash, writeHash, type HomeTab } from './hashRoute'
 import AutomationsPage from './AutomationsPage'
@@ -91,27 +96,27 @@ const PRIMARY_TABS: { id: Tab; label: string }[] = [
   { id: 'control', label: '控制' },
 ]
 
-const MORE_TABS: { id: Tab; label: string }[] = [
-  { id: 'automations', label: '自动化' },
-  { id: 'properties', label: '服务端配置' },
-  { id: 'plugins', label: '插件/模组' },
-  { id: 'files', label: '文件' },
-  { id: 'worlds', label: '世界' },
-  { id: 'backups', label: '备份' },
-  { id: 'schedules', label: '计划任务' },
-  { id: 'version', label: '版本 / 导入' },
-  { id: 'settings', label: '系统设置' },
+const MORE_TABS: { id: Tab; label: string; perm?: string }[] = [
+  { id: 'automations', label: '自动化', perm: 'automations' },
+  { id: 'properties', label: '服务端配置', perm: 'settings' },
+  { id: 'plugins', label: '插件/模组', perm: 'plugins' },
+  { id: 'files', label: '文件', perm: 'files' },
+  { id: 'worlds', label: '世界', perm: 'backups' },
+  { id: 'backups', label: '备份', perm: 'backups' },
+  { id: 'schedules', label: '计划任务', perm: 'automations' },
+  { id: 'version', label: '版本 / 导入', perm: 'plugins' },
+  { id: 'settings', label: '系统设置', perm: 'settings' },
 ]
 
-const PLANE_LINKS: { tab: HomeTab; label: string }[] = [
+const PLANE_LINKS: { tab: HomeTab; label: string; perm?: string }[] = [
   { tab: 'overview', label: '机群总览' },
-  { tab: 'network', label: '全局网络' },
+  { tab: 'network', label: '全局网络', perm: 'network' },
   { tab: 'events', label: '事件中心' },
-  { tab: 'users', label: '用户权限' },
-  { tab: 'settings', label: '服务器设置' },
-  { tab: 'nodes', label: '节点 / Agent' },
-  { tab: 'extensions', label: '扩展中心' },
-  { tab: 'audit', label: '审计日志' },
+  { tab: 'users', label: '用户权限', perm: 'users' },
+  { tab: 'settings', label: '服务器设置', perm: 'settings' },
+  { tab: 'nodes', label: '节点 / Agent', perm: 'nodes' },
+  { tab: 'extensions', label: '扩展中心', perm: 'settings' },
+  { tab: 'audit', label: '审计日志', perm: 'settings' },
 ]
 
 function closeDetails(el: HTMLElement) {
@@ -146,6 +151,7 @@ export default function App() {
   const [busyLabel, setBusyLabel] = useState('处理中…')
   const [dlProgress, setDlProgress] = useState<DownloadProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [health, setHealth] = useState<string>('…')
   const [envInfo, setEnvInfo] = useState<HealthInfo | null>(null)
   const [tab, setTab] = useState<Tab>('console')
@@ -186,6 +192,7 @@ export default function App() {
   const [installLoader, setInstallLoader] = useState('')
   const [players, setPlayers] = useState<PlayerInfo[]>([])
   const [playerHistory, setPlayerHistory] = useState<PlayerInfo[]>([])
+  const [detailPlayer, setDetailPlayer] = useState<string | null>(null)
   const [panelEvents, setPanelEvents] = useState<PanelEvent[]>([])
   const [metricHistory, setMetricHistory] = useState<MetricSample[]>([])
   const [worlds, setWorlds] = useState<WorldInfo[]>([])
@@ -245,7 +252,8 @@ export default function App() {
         setGate('setup')
         return
       }
-      if (!getToken()) {
+      if (!getToken() || sessionExpired()) {
+        clearSession()
         setGate('login')
         return
       }
@@ -268,6 +276,27 @@ export default function App() {
   useEffect(() => {
     boot().catch(() => setGate('offline'))
   }, [])
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      clearSession()
+      setGate('login')
+      setError('登录已过期，请重新登录')
+    })
+    return () => setUnauthorizedHandler(null)
+  }, [])
+
+  useEffect(() => {
+    if (gate !== 'app') return
+    const timer = setInterval(() => {
+      if (sessionExpired()) {
+        clearSession()
+        setGate('login')
+        setError('登录已过期，请重新登录')
+      }
+    }, 60000)
+    return () => clearInterval(timer)
+  }, [gate])
 
   useEffect(() => {
     if (gate !== 'app') return
@@ -300,7 +329,7 @@ export default function App() {
           }
           line?: LogLine
         }
-        // Logs already stream on logs WS — never re-list for them.
+        
         if (msg.type === 'log') return
         if (msg.type === 'download_progress') {
           const next: DownloadProgress = {
@@ -367,7 +396,7 @@ export default function App() {
               }),
             )
           }
-          // Debounce: one list+fleet after start/stop bursts, not per log line.
+          
           if (statusTimer) clearTimeout(statusTimer)
           statusTimer = setTimeout(() => {
             refresh().catch(() => undefined)
@@ -375,7 +404,7 @@ export default function App() {
           return
         }
       } catch {
-        /* ignore malformed */
+        
       }
     }
     return () => {
@@ -445,7 +474,7 @@ export default function App() {
         const line = JSON.parse(String(ev.data)) as LogLine
         setLogs((prev) => [...prev.slice(-400), line])
       } catch {
-        /* ignore */
+        
       }
     }
     return () => ws.close()
@@ -859,7 +888,7 @@ export default function App() {
           <details className="plane-menu">
             <summary>设置</summary>
             <div className="plane-menu-list">
-              {PLANE_LINKS.map((link) => (
+              {PLANE_LINKS.filter((link) => !link.perm || can(link.perm)).map((link) => (
                 <button
                   key={link.tab}
                   type="button"
@@ -900,7 +929,7 @@ export default function App() {
             type="button"
             onClick={() => {
               api.logout().finally(() => {
-                setToken('')
+                clearSession()
                 setGate('login')
               })
             }}
@@ -1087,7 +1116,7 @@ export default function App() {
                   >
                     <summary>更多</summary>
                     <div className="subnav-more-list">
-                      {MORE_TABS.map((item) => (
+                      {MORE_TABS.filter((item) => !item.perm || can(item.perm)).map((item) => (
                         <button
                           key={item.id}
                           type="button"
@@ -1323,6 +1352,16 @@ export default function App() {
                   </button>
                 </div>
               )}
+              {notice && (
+                <div className="error-banner" role="status">
+                  <span>
+                    <i className="fa fa-info-circle" /> {notice}
+                  </span>
+                  <button type="button" aria-label="关闭" onClick={() => setNotice(null)}>
+                    ×
+                  </button>
+                </div>
+              )}
               {tab === 'dashboard' && (
                 <DashPane
                   selected={selected}
@@ -1338,24 +1377,52 @@ export default function App() {
                   <div className="power-row">
                     <button
                       type="button"
-                      className="power primary"
-                      disabled={
-                        busy ||
-                        selected.status === 'running' ||
-                        selected.status === 'starting'
+                      className="power"
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          const report = await api.preflight(selected.id)
+                          if (report.warnings.length) {
+                            const go = window.confirm(
+                              `启动前检查发现：\n\n- ${report.warnings.join('\n- ')}\n\n仍要继续启动吗？`,
+                            )
+                            if (!go) return
+                          }
+                          await api.startInstance(selected.id)
+                        }, '启动服务器…')
                       }
-                      onClick={() => {
-                        if (
-                          !selected.spec.eula_accepted &&
-                          selected.spec.core !== 'demo'
-                        ) {
-                          setView('eula')
-                          return
-                        }
-                        run(() => api.startInstance(selected.id), '启动服务器…')
-                      }}
                     >
                       启动
+                    </button>
+                    <button
+                      type="button"
+                      className="power"
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          const v = await api.versionCompare(selected.id)
+                          setNotice(v.note)
+                          await api.rescanVersion(selected.id)
+                        }, '检查版本…')
+                      }
+                    >
+                      版本检查
+                    </button>
+                    <button
+                      type="button"
+                      className="power"
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          const next = await api.cloneInstance(selected.id)
+                          setSelectedId(next.id)
+                          setNotice(
+                            `已克隆为「${next.spec.name}」，端口 ${next.spec.port}`,
+                          )
+                        }, '克隆实例…')
+                      }
+                    >
+                      克隆
                     </button>
                     <button
                       type="button"
@@ -1489,7 +1556,12 @@ export default function App() {
                       发送
                     </button>
                   </form>
-                </div>
+                
+                  <RconPanel
+                    instanceId={selected.id}
+                    running={selected.status === 'running'}
+                    onError={setError}
+                  /></div>
               )}
 
               {tab === 'version' && (
@@ -1754,6 +1826,13 @@ export default function App() {
                                 </td>
                                 <td>{formatDuration(p.session_secs)}</td>
                                 <td>
+                                  <button
+                                    type="button"
+                                    className="link-btn"
+                                    onClick={() => setDetailPlayer(p.name)}
+                                  >
+                                    详情
+                                  </button>
                                   {(
                                     [
                                       ['kick', '踢出'],
@@ -1787,6 +1866,15 @@ export default function App() {
                             ))}
                           </tbody>
                         </table>
+                      )}
+                      {detailPlayer && (
+                        <PlayerDetailPanel
+                          instanceId={selected.id}
+                          player={detailPlayer}
+                          running={selected.status === 'running'}
+                          onClose={() => setDetailPlayer(null)}
+                          onError={setError}
+                        />
                       )}
                       {playerHistory.length > 0 && (
                         <div style={{ marginTop: '1.25rem' }}>
@@ -1905,6 +1993,54 @@ export default function App() {
                             >
                               导出
                             </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost"
+                              disabled={busy}
+                              onClick={() =>
+                                run(async () => {
+                                  const blob = await api.worldDownload(
+                                    selected.id,
+                                    w.name,
+                                  )
+                                  const url = URL.createObjectURL(blob)
+                                  const a = document.createElement('a')
+                                  a.href = url
+                                  a.download = `${w.name}.zip`
+                                  document.body.appendChild(a)
+                                  a.click()
+                                  a.remove()
+                                  URL.revokeObjectURL(url)
+                                })
+                              }
+                            >
+                              下载 zip
+                            </button>
+                            <label className="upload-btn">
+                              上传 zip
+                              <input
+                                type="file"
+                                accept=".zip"
+                                hidden
+                                disabled={busy}
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0]
+                                  if (!file) return
+                                  run(async () => {
+                                    const res = await api.worldUpload(
+                                      selected.id,
+                                      w.name,
+                                      file,
+                                    )
+                                    setWorlds(await api.listWorlds(selected.id))
+                                    setNotice(
+                                      `已导入 ${res.files} 个文件到 ${w.name}`,
+                                    )
+                                  })
+                                  e.target.value = ''
+                                }}
+                              />
+                            </label>
                             <button
                               type="button"
                               className="btn btn-danger"
@@ -2398,12 +2534,44 @@ export default function App() {
                             <button
                               type="button"
                               className="btn btn-ghost"
-                              disabled={busy || selected.status === 'running'}
+                              disabled={busy}
                               onClick={() =>
+                                run(async () => {
+                                  const p = await api.previewBackup(
+                                    selected.id,
+                                    b.id,
+                                  )
+                                  const lines = [
+                                    `备份 ${p.backup_id}`,
+                                    `条目 ${p.entries} · 世界 ${(p.world_size_bytes / 1024 / 1024).toFixed(1)} MiB · 插件 ${p.plugin_count}`,
+                                    `server.properties: ${p.has_server_properties ? '有' : '无'}`,
+                                    `level.dat: ${p.has_level_dat ? '有' : '无'}`,
+                                  ]
+                                  if (p.warnings.length) {
+                                    lines.push('', ...p.warnings.map((w) => `! ${w}`))
+                                  }
+                                  setNotice(lines.join('\n'))
+                                }, '检查备份…')
+                              }
+                            >
+                              检查
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost"
+                              disabled={busy || selected.status === 'running'}
+                              onClick={() => {
+                                if (
+                                  !window.confirm(
+                                    `恢复备份 ${b.id}？当前工作目录会被覆盖。`,
+                                  )
+                                ) {
+                                  return
+                                }
                                 run(async () => {
                                   await api.restoreBackup(selected.id, b.id)
                                 })
-                              }
+                              }}
                             >
                               恢复
                             </button>

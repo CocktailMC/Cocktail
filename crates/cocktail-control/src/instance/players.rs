@@ -1,5 +1,3 @@
-//! Player join/leave, history, whitelist.
-
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -47,12 +45,10 @@ pub async fn ingest_line(state: &AppState, instance_id: &str, line: &str) {
 
     let join = JOIN.get_or_init(|| Regex::new(r"(?i)(\S+) joined the game").unwrap());
     let left = LEFT.get_or_init(|| Regex::new(r"(?i)(\S+) left the game").unwrap());
-    let uuid = UUID.get_or_init(|| {
-        Regex::new(r"(?i)UUID of player (\S+) is ([0-9a-fA-F-]{32,36})").unwrap()
-    });
-    let login = LOGIN.get_or_init(|| {
-        Regex::new(r"(?i)(\S+)\[/([0-9a-fA-F.:]+)(?::\d+)?\] logged in").unwrap()
-    });
+    let uuid = UUID
+        .get_or_init(|| Regex::new(r"(?i)UUID of player (\S+) is ([0-9a-fA-F-]{32,36})").unwrap());
+    let login = LOGIN
+        .get_or_init(|| Regex::new(r"(?i)(\S+)\[/([0-9a-fA-F.:]+)(?::\d+)?\] logged in").unwrap());
     let ping = PING.get_or_init(|| Regex::new(r"(?i)(\S+)'s ping:\s*([0-9]+)").unwrap());
 
     let now = Utc::now().to_rfc3339();
@@ -99,7 +95,18 @@ pub async fn ingest_line(state: &AppState, instance_id: &str, line: &str) {
         if let Ok(mut g) = sessions().lock() {
             g.insert(key(instance_id, name), Utc::now());
         }
-        let _ = db::upsert_player(&conn, instance_id, name, None, None, None, None, &now, false, 0);
+        let _ = db::upsert_player(
+            &conn,
+            instance_id,
+            name,
+            None,
+            None,
+            None,
+            None,
+            &now,
+            false,
+            0,
+        );
     }
     if let Some(c) = left.captures(line) {
         let name = &c[1];
@@ -178,7 +185,11 @@ pub async fn list_enriched(
             ip: row.and_then(|r| r.last_ip.clone()),
         });
     }
-    out.sort_by(|a, b| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()));
+    out.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+    });
     out
 }
 
@@ -228,7 +239,11 @@ pub fn read_whitelist(workdir: &str) -> Vec<String> {
     v.as_array()
         .map(|a| {
             a.iter()
-                .filter_map(|x| x.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                .filter_map(|x| {
+                    x.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect()
         })
         .unwrap_or_default()

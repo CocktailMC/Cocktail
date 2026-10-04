@@ -1,12 +1,3 @@
-//! Guest helpers for Cocktail WASM plugins.
-//!
-//! Host functions live in the Extism default namespace (`ExtismHost`).
-//! Plugins export `start`, `http_handle`, and optionally `on_event` / `tick` / `stop`.
-//!
-//! `cocktail_control` is answered **in-process** by the control-plane router.
-//! Do not assume it is an HTTP round-trip to `127.0.0.1`; the host never
-//! sends plugin traffic through the system proxy.
-
 use extism_pdk::*;
 use serde::{Deserialize, Serialize};
 
@@ -86,11 +77,7 @@ pub fn log_error(msg: impl AsRef<str>) {
 
 pub fn kv_get(key: &str) -> Option<String> {
     let raw = unsafe { cocktail_kv_get(key.to_string()) }.ok()?;
-    if raw.is_empty() {
-        None
-    } else {
-        Some(raw)
-    }
+    if raw.is_empty() { None } else { Some(raw) }
 }
 
 pub fn kv_set(key: &str, val: &str) {
@@ -156,7 +143,12 @@ pub fn control_json<T: for<'de> Deserialize<'de>>(
     serde_json::from_str(&resp.body).map_err(|e| e.to_string())
 }
 
-pub fn control_upload(instance_id: &str, dest: &str, filename: &str, bytes: &[u8]) -> Result<(), String> {
+pub fn control_upload(
+    instance_id: &str,
+    dest: &str,
+    filename: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
     let req = ControlReq {
         method: "POST".into(),
         path: format!(

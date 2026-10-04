@@ -1,6 +1,6 @@
-use cocktail_plugin_sdk::{control_json, log_info, HttpReq, HttpResp};
+use cocktail_plugin_sdk::{HttpReq, HttpResp, control_json, log_info};
 use extism_pdk::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[plugin_fn]
 pub fn start(_: ()) -> FnResult<String> {
@@ -32,7 +32,14 @@ pub fn http_handle(Json(req): Json<HttpReq>) -> FnResult<Json<HttpResp>> {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         if core != "demo" && !eula {
-            findings.push(finding(id, &name, inst, "eula", "error", "未同意 EULA，无法作为可玩状态上线"));
+            findings.push(finding(
+                id,
+                &name,
+                inst,
+                "eula",
+                "error",
+                "未同意 EULA，无法作为可玩状态上线",
+            ));
         }
         let desired = spec
             .get("desired_running")
@@ -54,7 +61,14 @@ pub fn http_handle(Json(req): Json<HttpReq>) -> FnResult<Json<HttpResp>> {
         }
         let port = spec.get("port").and_then(|v| v.as_i64()).unwrap_or(0);
         if !(1..=65535).contains(&port) {
-            findings.push(finding(id, &name, inst, "port", "error", &format!("非法端口 {port}")));
+            findings.push(finding(
+                id,
+                &name,
+                inst,
+                "port",
+                "error",
+                &format!("非法端口 {port}"),
+            ));
         } else if let Some((_, other)) = used_ports.iter().find(|(p, _)| *p == port) {
             findings.push(finding(
                 id,

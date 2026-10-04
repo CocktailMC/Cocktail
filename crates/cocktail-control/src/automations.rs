@@ -1,5 +1,3 @@
-//! Condition → action rules (TPS, players, crash, CPU).
-
 use std::time::{Duration, Instant};
 
 use chrono::{Timelike, Utc};
@@ -105,9 +103,7 @@ pub async fn tick(state: &SharedState) {
             continue;
         }
         let matched = match rule.condition.as_str() {
-            "tps_below" | "players_above" | "cpu_above" => {
-                eval_metric(state, &rule).await
-            }
+            "tps_below" | "players_above" | "cpu_above" => eval_metric(state, &rule).await,
             "crashed" => false,
             _ => false,
         };
@@ -263,6 +259,6 @@ pub async fn run_backup_hours(state: &SharedState) {
             hold.insert(stamp_key, Instant::now());
         }
         let _ = crate::instance::create_backup(state, &id).await;
-        let _ = keep;
+        let _ = crate::instance::prune_instance_backups(state, &id, keep).await;
     }
 }

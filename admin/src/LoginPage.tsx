@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { api, setToken, type AuthSession } from './api'
+import { api, setSession, type AuthSession } from './api'
 
 type Props = {
   hintUsername?: string | null
@@ -23,6 +23,8 @@ export default function LoginPage({
 }: Props) {
   const [username, setUsername] = useState(hintUsername ?? '')
   const [password, setPassword] = useState('')
+  const [totp, setTotp] = useState('')
+  const [needTotp, setNeedTotp] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const submit = async (e: FormEvent) => {
@@ -30,14 +32,20 @@ export default function LoginPage({
     onBusy(true, '正在登录…')
     setError(null)
     try {
+      const code = totp.trim() ? Number(totp.trim()) : undefined
       const session = await api.login({
         username: username.trim(),
         password,
+        totp_code: code,
       })
-      setToken(session.token)
+      setSession(session)
       onDone(session)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('2FA')) {
+        setNeedTotp(true)
+      }
+      setError(msg)
     } finally {
       onBusy(false)
     }
@@ -91,6 +99,17 @@ export default function LoginPage({
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
+                disabled={offline}
+              />
+            </label>
+            <label>
+              动态码 (2FA)
+              <input
+                value={totp}
+                onChange={(e) => setTotp(e.target.value)}
+                placeholder={needTotp ? '请输入 6 位验证码' : '未开启 2FA 可留空'}
+                inputMode="numeric"
+                autoComplete="one-time-code"
                 disabled={offline}
               />
             </label>

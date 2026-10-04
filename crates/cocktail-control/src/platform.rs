@@ -1,5 +1,3 @@
-//! Host platform detection for health / UI (distro + kernel + logos).
-
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
@@ -10,15 +8,15 @@ pub struct PlatformInfo {
     pub arch: String,
     pub family: String,
     pub hostname: String,
-    /// Short id for logos: ubuntu, debian, windows, macos, linux, …
+
     pub distro_id: String,
-    /// Human-readable name, e.g. "Ubuntu 24.04.1 LTS"
+
     pub distro_name: String,
-    /// Distro version string when known
+
     pub distro_version: String,
-    /// Kernel version (uname -r / Windows NT build)
+
     pub kernel: String,
-    /// True when running under Windows Subsystem for Linux
+
     pub wsl: bool,
 }
 
@@ -92,10 +90,7 @@ fn enrich_linux(info: &mut PlatformInfo) {
                 format!("{name} {ver}")
             };
         }
-        if let Some(ver) = release
-            .get("VERSION_ID")
-            .or_else(|| release.get("VERSION"))
-        {
+        if let Some(ver) = release.get("VERSION_ID").or_else(|| release.get("VERSION")) {
             info.distro_version = ver.clone();
         }
     } else {
@@ -179,8 +174,7 @@ fn parse_os_release() -> Option<std::collections::HashMap<String, String>> {
 }
 
 fn detect_wsl() -> bool {
-    if std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some()
-    {
+    if std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some() {
         return true;
     }
     if let Ok(ver) = fs::read_to_string("/proc/version") {
@@ -194,7 +188,7 @@ fn detect_wsl() -> bool {
 
 fn read_proc_version_short() -> Option<String> {
     let ver = fs::read_to_string("/proc/version").ok()?;
-    // "Linux version 5.15.0-xxx (build@) ..."
+
     let mut parts = ver.split_whitespace();
     if parts.next()? != "Linux" {
         return None;

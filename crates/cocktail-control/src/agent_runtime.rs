@@ -1,5 +1,3 @@
-//! Remote node agent — runs instances on behalf of the control plane.
-
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -8,10 +6,8 @@ use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
 
-use crate::instance::{
-    files, InstanceEvent, InstanceSpec, InstanceStatus, RuntimeKind,
-};
 use crate::instance::process::{self, ProcessHandle, StopMode};
+use crate::instance::{InstanceEvent, InstanceSpec, InstanceStatus, RuntimeKind, files};
 use crate::proto::{AgentDown, AgentUp, ApplyInstance};
 use crate::util;
 
@@ -25,9 +21,8 @@ pub async fn run_agent() -> anyhow::Result<()> {
     crate::wincompat::enable_utf8_console();
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("cocktail_control=info")
-            }),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("cocktail_control=info")),
         )
         .init();
 
@@ -89,17 +84,19 @@ async fn serve_once(url: &str) -> anyhow::Result<()> {
         hostname: hostname(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
+        protocol_version: crate::proto::PROTOCOL_VERSION,
     };
     sink.send(Message::Text(serde_json::to_string(&hello)?.into()))
         .await?;
 
     let mut ev_rx = events.subscribe();
     let mut beat = tokio::time::interval(Duration::from_secs(15));
+    let mut net_prev = crate::hostnet::HostNetPrev::default();
 
     loop {
         tokio::select! {
             _ = beat.tick() => {
-                sink.send(Message::Text(serde_json::to_string(&sample_heartbeat())?.into()))
+                sink.send(Message::Text(serde_json::to_string(&sample_heartbeat(&mut net_prev))?.into()))
                     .await?;
             }
             ev = ev_rx.recv() => {
@@ -126,7 +123,12 @@ async fn serve_once(url: &str) -> anyhow::Result<()> {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
                         let down: AgentDown = serde_json::from_str(&text)?;
+                        let seq = down.seq();
                         apply_down(&mut lives, down, events.clone()).await;
+                        if seq > 0 {
+                            let ack = AgentUp::Ack { seq };
+                            sink.send(Message::Text(serde_json::to_string(&ack)?.into())).await?;
+                        }
                     }
                     Some(Ok(Message::Ping(p))) => {
                         sink.send(Message::Pong(p)).await?;
@@ -152,10 +154,10 @@ async fn apply_down(
                 apply_one(lives, inst, events.clone()).await;
             }
         }
-        AgentDown::Apply { instance } => {
+        AgentDown::Apply { instance, .. } => {
             apply_one(lives, instance, events).await;
         }
-        AgentDown::Stop { instance_id } => {
+        AgentDown::Stop { instance_id, .. } => {
             if let Some(live) = lives.get_mut(&instance_id) {
                 live.spec.desired_running = false;
                 stop_live(live).await;
@@ -169,6 +171,7 @@ async fn apply_down(
         AgentDown::Command {
             instance_id,
             command,
+            ..
         } => {
             if let Some(live) = lives.get(&instance_id) {
                 if let Some(h) = live.handle.as_ref() {
@@ -267,7 +270,9 @@ async fn spawn_live(
     let command = if spec.runtime == RuntimeKind::Process
         && command.as_deref().is_some_and(util::is_java_command)
     {
-        let bin = crate::java::ensure_for_spec(&workdir, spec.java_major, spec.mc_version.as_deref()).await?;
+        let bin =
+            crate::java::ensure_for_spec(&workdir, spec.java_major, spec.mc_version.as_deref())
+                .await?;
         crate::java::rewrite_java_command(command, &bin)
     } else {
         command
@@ -302,15 +307,34 @@ async fn spawn_live(
     }
 }
 
-fn sample_heartbeat() -> AgentUp {
+fn sample_heartbeat(prev: &mut crate::hostnet::HostNetPrev) -> AgentUp {
     let mut sys = sysinfo::System::new();
     sys.refresh_cpu_all();
     sys.refresh_memory();
+    let (sample, next) = crate::hostnet::sample(prev, 0.0);
+    *prev = next;
+    let nic_stats = sample
+        .nics
+        .iter()
+        .map(|n| crate::proto::NicStat {
+            name: n.name.clone(),
+            rx_bytes: n.rx_bytes,
+            tx_bytes: n.tx_bytes,
+            rx_pkts: 0,
+            tx_pkts: 0,
+        })
+        .collect();
     AgentUp::Heartbeat {
         cpu_pct: sys.global_cpu_usage(),
         memory_mib: (sys.used_memory() as f32) / (1024.0 * 1024.0),
-        rx_bps: 0.0,
-        tx_bps: 0.0,
+        rx_bps: sample.rx_bps,
+        tx_bps: sample.tx_bps,
+        nic_stats,
+        tcp_states: crate::proto::TcpStates {
+            estab: sample.tcp_estab,
+            syn_recv: sample.syn_recv,
+            time_wait: sample.time_wait,
+        },
     }
 }
 

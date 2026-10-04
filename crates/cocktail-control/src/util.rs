@@ -1,5 +1,3 @@
-//! Shared helpers: JVM flags, properties, log parsing, audit, webhook.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -22,15 +20,15 @@ pub fn inject_jvm_memory(args: &mut Vec<String>, memory_mib: u32) {
 }
 
 pub fn is_java_command(command: &str) -> bool {
-    let base = Path::new(command)
-        .file_name()
-        .and_then(|s| s.to_str())
+    let base = command
+        .rsplit(['/', '\\'])
+        .next()
         .unwrap_or(command)
+        .trim()
         .to_ascii_lowercase();
     base == "java" || base == "java.exe" || base.starts_with("java")
 }
 
-/// Split a launch line into binary + args, honoring single/double quotes.
 pub fn parse_command_line(line: &str) -> anyhow::Result<(String, Vec<String>)> {
     let parts = split_command_line(line);
     let mut iter = parts.into_iter();
@@ -64,13 +62,12 @@ fn split_command_line(line: &str) -> Vec<String> {
     out
 }
 
-/// Default Minecraft server launch line for a jar relative to workdir.
 pub fn java_jar_startup(jar_rel: &str) -> (String, Vec<String>) {
-    let jar = jar_rel.replace('\\', "/").trim_start_matches('/').to_string();
-    (
-        "java".into(),
-        vec!["-jar".into(), jar, "nogui".into()],
-    )
+    let jar = jar_rel
+        .replace('\\', "/")
+        .trim_start_matches('/')
+        .to_string();
+    ("java".into(), vec!["-jar".into(), jar, "nogui".into()])
 }
 
 pub fn set_property_file(path: &Path, key: &str, value: &str) -> anyhow::Result<()> {
@@ -213,33 +210,28 @@ pub fn parse_game_stats(line: &str) -> ParsedGameStats {
     static HEAP: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     static GC: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
 
-    let tps_from = TPS_FROM.get_or_init(|| {
-        Regex::new(r"(?i)TPS from last[^:]+:\s*([0-9]+(?:\.[0-9]+)?)").unwrap()
-    });
-    let tps_eq = TPS_EQ.get_or_init(|| {
-        Regex::new(r"(?i)\bTPS[=:\s]+([0-9]+(?:\.[0-9]+)?)").unwrap()
-    });
+    let tps_from = TPS_FROM
+        .get_or_init(|| Regex::new(r"(?i)TPS from last[^:]+:\s*([0-9]+(?:\.[0-9]+)?)").unwrap());
+    let tps_eq =
+        TPS_EQ.get_or_init(|| Regex::new(r"(?i)\bTPS[=:\s]+([0-9]+(?:\.[0-9]+)?)").unwrap());
     let mspt = MSPT.get_or_init(|| {
-        Regex::new(r"(?i)(?:MSPT|mean tick(?: time)?|tick time)[=:\s]+([0-9]+(?:\.[0-9]+)?)").unwrap()
+        Regex::new(r"(?i)(?:MSPT|mean tick(?: time)?|tick time)[=:\s]+([0-9]+(?:\.[0-9]+)?)")
+            .unwrap()
     });
     let list = LIST.get_or_init(|| {
         Regex::new(r"(?i)There are ([0-9]+) of a max(?:imum)? of ([0-9]+)").unwrap()
     });
-    let players = PLAYERS.get_or_init(|| {
-        Regex::new(r"(?i)\bplayers[=:\s]+([0-9]+)").unwrap()
-    });
+    let players = PLAYERS.get_or_init(|| Regex::new(r"(?i)\bplayers[=:\s]+([0-9]+)").unwrap());
     let ent = ENT.get_or_init(|| {
         Regex::new(r"(?i)(?:living )?entit(?:y|ies)(?: count)?[=:\s]+([0-9]+)").unwrap()
     });
-    let chunk = CHUNK.get_or_init(|| {
-        Regex::new(r"(?i)chunks?(?: loaded)?[=:\s]+([0-9]+)").unwrap()
-    });
+    let chunk =
+        CHUNK.get_or_init(|| Regex::new(r"(?i)chunks?(?: loaded)?[=:\s]+([0-9]+)").unwrap());
     let heap = HEAP.get_or_init(|| {
         Regex::new(r"(?i)heap(?: memory)?[:\s]+([0-9]+(?:\.[0-9]+)?)\s*([MG])i?B?(?:\s*/\s*([0-9]+(?:\.[0-9]+)?)\s*([MG])i?B?)?").unwrap()
     });
-    let gc = GC.get_or_init(|| {
-        Regex::new(r"(?i)\[(?:full )?gc|pause \(g1|garbage.?collect").unwrap()
-    });
+    let gc =
+        GC.get_or_init(|| Regex::new(r"(?i)\[(?:full )?gc|pause \(g1|garbage.?collect").unwrap());
 
     let mut stats = ParsedGameStats::default();
     if let Some(c) = tps_from.captures(line).or_else(|| tps_eq.captures(line)) {
@@ -280,7 +272,6 @@ pub fn parse_game_stats(line: &str) -> ParsedGameStats {
     stats
 }
 
-/// True once vanilla/Paper-style bootstrap has finished ("Done (1.23s)!").
 pub fn minecraft_ready(line: &str) -> bool {
     let lower = line.to_ascii_lowercase();
     if let Some(rest) = lower.split("done (").nth(1) {
@@ -345,18 +336,14 @@ pub fn health_report(
 }
 
 pub fn append_instance_log(instance_id: &str, stream: &str, line: &str) {
-    let path = Path::new("data").join("logs").join(format!("{instance_id}.log"));
+    let path = Path::new("data")
+        .join("logs")
+        .join(format!("{instance_id}.log"));
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(
-            f,
-            "{} [{}] {}",
-            Utc::now().to_rfc3339(),
-            stream,
-            line
-        );
+        let _ = writeln!(f, "{} [{}] {}", Utc::now().to_rfc3339(), stream, line);
     }
 }
 
@@ -371,8 +358,92 @@ pub struct AuditRecord {
 }
 
 const AUDIT_MAX_READ: usize = 8000;
+pub const AUDIT_MAX_ROWS: usize = 50_000;
+
+fn audit_conn() -> Option<&'static std::sync::Mutex<rusqlite::Connection>> {
+    static CONN: std::sync::OnceLock<Option<std::sync::Mutex<rusqlite::Connection>>> =
+        std::sync::OnceLock::new();
+    CONN.get_or_init(|| crate::db::open().ok().map(std::sync::Mutex::new))
+        .as_ref()
+}
+
+pub fn migrate_audit_jsonl() {
+    let path = Path::new("data").join("audit.jsonl");
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return;
+    };
+    let Some(conn) = audit_conn() else {
+        return;
+    };
+    let Ok(guard) = conn.lock() else {
+        return;
+    };
+    let count: i64 = guard
+        .query_row("SELECT COUNT(*) FROM audit_log", [], |r| r.get(0))
+        .unwrap_or(0);
+    if count > 0 {
+        return;
+    }
+    let mut moved = 0usize;
+    for line in raw.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(rec) = serde_json::from_str::<AuditRecord>(line) else {
+            continue;
+        };
+        let row = crate::db::AuditRow {
+            at: rec.at,
+            action: rec.action,
+            instance_id: rec.instance_id,
+            actor: rec.actor,
+            detail: rec.detail,
+        };
+        if crate::db::insert_audit(&guard, &row).is_ok() {
+            moved += 1;
+        }
+    }
+    let _ = crate::db::prune_audit(&guard, AUDIT_MAX_ROWS);
+    if moved > 0 {
+        let _ = fs::rename(&path, path.with_extension("jsonl.migrated"));
+        tracing::info!(rows = moved, "audit.jsonl migrated into sqlite");
+    }
+}
 
 pub fn list_audit(
+    limit: usize,
+    offset: usize,
+    action: Option<&str>,
+    instance_id: Option<&str>,
+    actor: Option<&str>,
+    q: Option<&str>,
+) -> (Vec<AuditRecord>, usize) {
+    let limit = limit.clamp(1, 200);
+    let action = action.map(str::trim).filter(|s| !s.is_empty());
+    let instance_id = instance_id.map(str::trim).filter(|s| !s.is_empty());
+    let actor = actor.map(str::trim).filter(|s| !s.is_empty());
+    let q = q.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(conn) = audit_conn() {
+        if let Ok(guard) = conn.lock() {
+            if let Ok((rows, total)) =
+                crate::db::query_audit(&guard, limit, offset, action, instance_id, actor, q)
+            {
+                return (
+                    rows.into_iter()
+                        .map(|r| AuditRecord {
+                            at: r.at,
+                            action: r.action,
+                            instance_id: r.instance_id,
+                            detail: r.detail,
+                            actor: r.actor,
+                        })
+                        .collect(),
+                    total,
+                );
+            }
+        }
+    }
+    legacy_list_audit(limit, offset, action, instance_id, actor, q)
+}
+
+fn legacy_list_audit(
     limit: usize,
     offset: usize,
     action: Option<&str>,
@@ -393,12 +464,7 @@ pub fn list_audit(
         rows = rows.split_off(rows.len() - AUDIT_MAX_READ);
     }
     rows.reverse();
-
-    let action = action.map(str::trim).filter(|s| !s.is_empty());
-    let instance_id = instance_id.map(str::trim).filter(|s| !s.is_empty());
-    let actor = actor.map(str::trim).filter(|s| !s.is_empty());
-    let q = q.map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
-
+    let q = q.map(|s| s.to_ascii_lowercase());
     rows.retain(|r| {
         if let Some(a) = action {
             if r.action != a && !r.action.starts_with(&format!("{a}.")) {
@@ -431,9 +497,7 @@ pub fn list_audit(
         }
         true
     });
-
     let total = rows.len();
-    let limit = limit.clamp(1, 200);
     let page: Vec<AuditRecord> = rows.into_iter().skip(offset).take(limit).collect();
     (page, total)
 }
@@ -447,23 +511,55 @@ pub struct AuditEntry<'a> {
     pub actor: &'a str,
 }
 
+tokio::task_local! {
+    pub static ACTOR: String;
+}
+
+pub async fn with_actor<F, T>(actor: String, fut: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    ACTOR.scope(actor, fut).await
+}
+
+pub fn current_actor(fallback: &str) -> String {
+    ACTOR
+        .try_with(|a| a.clone())
+        .unwrap_or_else(|_| fallback.to_string())
+}
+
 pub fn audit(action: &str, instance_id: Option<&str>, detail: serde_json::Value, actor: &str) {
+    let at = Utc::now().to_rfc3339();
+    let resolved = current_actor(actor);
+    let entry = AuditEntry {
+        at: at.clone(),
+        action,
+        instance_id,
+        detail: detail.clone(),
+        actor: resolved.as_str(),
+    };
     let path = Path::new("data").join("audit.jsonl");
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let entry = AuditEntry {
-        at: Utc::now().to_rfc3339(),
-        action,
-        instance_id,
-        detail,
-        actor,
-    };
     if let (Ok(line), Ok(mut f)) = (
         serde_json::to_string(&entry),
         OpenOptions::new().create(true).append(true).open(path),
     ) {
         let _ = writeln!(f, "{line}");
+    }
+    if let Some(conn) = audit_conn() {
+        if let Ok(guard) = conn.lock() {
+            let row = crate::db::AuditRow {
+                at,
+                action: action.to_string(),
+                instance_id: instance_id.map(str::to_string),
+                actor: resolved.clone(),
+                detail,
+            };
+            let _ = crate::db::insert_audit(&guard, &row);
+            let _ = crate::db::prune_audit(&guard, AUDIT_MAX_ROWS);
+        }
     }
 }
 
