@@ -12,6 +12,7 @@ mod hardening;
 mod hostnet;
 mod http;
 mod i18n;
+mod identity;
 mod instance;
 mod java;
 mod metrics;
