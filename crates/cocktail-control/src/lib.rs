@@ -1,6 +1,7 @@
 pub mod agent_runtime;
 mod api;
 mod auth;
+pub mod backup;
 mod automations;
 mod cluster;
 pub mod crypto;
