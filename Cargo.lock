@@ -454,6 +454,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "libc",
+ "rand_core 0.6.4",
  "regex",
  "reqwest",
  "rusqlite",

@@ -1,10 +1,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub fn generate_secret() -> String {
+use rand_core::{OsRng, RngCore};
+
+pub fn generate_secret() -> anyhow::Result<String> {
     let mut bytes = [0u8; 20];
-    use std::io::Read;
-    let _ = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes));
-    base32_encode(&bytes)
+    OsRng.fill_bytes(&mut bytes);
+    Ok(base32_encode(&bytes))
 }
 
 pub fn totp_code(secret: &str, period: u64) -> Option<u32> {
@@ -216,6 +217,13 @@ mod tests {
         assert!(url.starts_with("otpauth://totp/"));
         assert!(url.contains("digits=6"));
         assert!(url.contains("period=30"));
+    }
+
+    #[test]
+    fn generated_secret_is_valid_base32() {
+        let secret = generate_secret().expect("OS RNG should be available");
+        assert_eq!(secret.len(), 32);
+        assert!(base32_decode(&secret).is_some());
     }
 
     #[test]
