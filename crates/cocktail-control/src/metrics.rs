@@ -112,10 +112,12 @@ impl Histogram {
         let mut cur = self.sum_bits.load(Ordering::Relaxed);
         loop {
             let next = f64_bits(bits_f64(cur) + value);
-            match self
-                .sum_bits
-                .compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed)
-            {
+            match self.sum_bits.compare_exchange_weak(
+                cur,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
                 Ok(_) => break,
                 Err(observed) => cur = observed,
             }
@@ -330,12 +332,8 @@ impl Registry {
                     if label_part.is_empty() {
                         lines.push_str(&format!("{base}_bucket{{le=\"{le}\"}} {cum}\n"));
                     } else {
-                        let inner = label_part
-                            .trim_start_matches('{')
-                            .trim_end_matches('}');
-                        lines.push_str(&format!(
-                            "{base}_bucket{{{inner},le=\"{le}\"}} {cum}\n"
-                        ));
+                        let inner = label_part.trim_start_matches('{').trim_end_matches('}');
+                        lines.push_str(&format!("{base}_bucket{{{inner},le=\"{le}\"}} {cum}\n"));
                     }
                 }
                 if label_part.is_empty() {
@@ -552,10 +550,7 @@ impl AlertEngine {
                 let since = state.pending_since.unwrap_or(now);
                 let held = now.duration_since(since).as_secs();
                 if held >= rule.for_secs {
-                    let silenced = state
-                        .silenced_until
-                        .map(|t| t > now)
-                        .unwrap_or(false);
+                    let silenced = state.silenced_until.map(|t| t > now).unwrap_or(false);
                     if !silenced {
                         state.firing = true;
                         firing.push(AlertFiring {
@@ -615,11 +610,7 @@ impl HealthReport {
     }
 
     pub fn status_code(&self) -> u16 {
-        if self.ok {
-            200
-        } else {
-            503
-        }
+        if self.ok { 200 } else { 503 }
     }
 
     pub fn summary(&self) -> String {
@@ -639,12 +630,22 @@ impl HealthReport {
 
 pub fn default_rules() -> Vec<AlertRule> {
     vec![
-        AlertRule::new("cpu_sustained", "cocktail_node_cpu_pct", Comparator::Gt, 90.0)
-            .with_for(300)
-            .with_name("CPU 持续超过 90%"),
-        AlertRule::new("mem_sustained", "cocktail_node_mem_pct", Comparator::Gt, 92.0)
-            .with_for(300)
-            .with_name("内存持续超过 92%"),
+        AlertRule::new(
+            "cpu_sustained",
+            "cocktail_node_cpu_pct",
+            Comparator::Gt,
+            90.0,
+        )
+        .with_for(300)
+        .with_name("CPU 持续超过 90%"),
+        AlertRule::new(
+            "mem_sustained",
+            "cocktail_node_mem_pct",
+            Comparator::Gt,
+            92.0,
+        )
+        .with_for(300)
+        .with_name("内存持续超过 92%"),
         AlertRule::new(
             "backup_failed",
             "cocktail_backup_failures_total",
@@ -671,15 +672,10 @@ pub fn default_rules() -> Vec<AlertRule> {
         .with_for(120)
         .with_severity("critical")
         .with_name("接口错误率过高"),
-        AlertRule::new(
-            "disk_low",
-            "cocktail_disk_free_pct",
-            Comparator::Lt,
-            10.0,
-        )
-        .with_for(60)
-        .with_severity("critical")
-        .with_name("磁盘剩余不足 10%"),
+        AlertRule::new("disk_low", "cocktail_disk_free_pct", Comparator::Lt, 10.0)
+            .with_for(60)
+            .with_severity("critical")
+            .with_name("磁盘剩余不足 10%"),
     ]
 }
 
@@ -749,14 +745,14 @@ mod tests {
     #[test]
     fn alert_for_duration_gating() {
         let engine = AlertEngine::new(vec![
-            AlertRule::new("hot", "cpu", Comparator::Gt, 80.0).with_for(60)
+            AlertRule::new("hot", "cpu", Comparator::Gt, 80.0).with_for(60),
         ]);
         let mut values = BTreeMap::new();
         values.insert("cpu".to_string(), 95.0);
         assert!(engine.evaluate(&values).is_empty());
         assert!(engine.evaluate(&values).is_empty());
         let instant = AlertEngine::new(vec![
-            AlertRule::new("hot", "cpu", Comparator::Gt, 80.0).with_for(0)
+            AlertRule::new("hot", "cpu", Comparator::Gt, 80.0).with_for(0),
         ]);
         let fired = instant.evaluate(&values);
         assert_eq!(fired.len(), 1);
@@ -767,23 +763,18 @@ mod tests {
 
     #[test]
     fn alert_silence_and_inhibition() {
-        let engine = AlertEngine::new(vec![
-            AlertRule::new("parent", "p", Comparator::Gt, 1.0),
-            {
-                let mut r = AlertRule::new("child", "c", Comparator::Gt, 1.0);
-                r.inhibits = vec!["parent".to_string()];
-                r
-            },
-        ]);
+        let engine = AlertEngine::new(vec![AlertRule::new("parent", "p", Comparator::Gt, 1.0), {
+            let mut r = AlertRule::new("child", "c", Comparator::Gt, 1.0);
+            r.inhibits = vec!["parent".to_string()];
+            r
+        }]);
         let mut values = BTreeMap::new();
         values.insert("p".to_string(), 5.0);
         values.insert("c".to_string(), 5.0);
         let fired = engine.evaluate(&values);
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].id, "child");
-        let solo = AlertEngine::new(vec![
-            AlertRule::new("x", "v", Comparator::Gt, 1.0)
-        ]);
+        let solo = AlertEngine::new(vec![AlertRule::new("x", "v", Comparator::Gt, 1.0)]);
         let mut v = BTreeMap::new();
         v.insert("v".to_string(), 9.0);
         solo.silence("x", 300);
@@ -795,15 +786,31 @@ mod tests {
     #[test]
     fn health_report_aggregates() {
         let ok = HealthReport::from_checks(vec![
-            CheckResult { name: "db".into(), ok: true, detail: "writable".into() },
-            CheckResult { name: "disk".into(), ok: true, detail: "40% free".into() },
+            CheckResult {
+                name: "db".into(),
+                ok: true,
+                detail: "writable".into(),
+            },
+            CheckResult {
+                name: "disk".into(),
+                ok: true,
+                detail: "40% free".into(),
+            },
         ]);
         assert!(ok.ok);
         assert_eq!(ok.status_code(), 200);
         assert_eq!(ok.summary(), "ok");
         let bad = HealthReport::from_checks(vec![
-            CheckResult { name: "db".into(), ok: true, detail: "ok".into() },
-            CheckResult { name: "disk".into(), ok: false, detail: "full".into() },
+            CheckResult {
+                name: "db".into(),
+                ok: true,
+                detail: "ok".into(),
+            },
+            CheckResult {
+                name: "disk".into(),
+                ok: false,
+                detail: "full".into(),
+            },
         ]);
         assert!(!bad.ok);
         assert_eq!(bad.status_code(), 503);

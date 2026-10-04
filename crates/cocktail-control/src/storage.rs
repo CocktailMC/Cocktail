@@ -158,8 +158,7 @@ pub fn upload_payload(
 
 pub fn download_payload(aad: &str, data: &[u8]) -> anyhow::Result<Vec<u8>> {
     if crate::secrets::is_encrypted_bytes(data) {
-        crate::secrets::decrypt_bytes(aad, data)
-            .ok_or_else(|| anyhow::anyhow!("远端对象解密失败"))
+        crate::secrets::decrypt_bytes(aad, data).ok_or_else(|| anyhow::anyhow!("远端对象解密失败"))
     } else {
         Ok(data.to_vec())
     }
@@ -356,8 +355,7 @@ pub fn eligible(facts: &[NodeFacts], req: &PlacementRequest) -> Vec<NodeFacts> {
         .filter(|n| !req.avoid_labels.iter().any(|l| n.has_label(l)))
         .filter(|n| n.max_instances == 0 || n.instance_count < n.max_instances)
         .filter(|n| {
-            req.need_mem_mib <= 0.0
-                || (n.mem_total_mib - n.mem_used_mib) >= req.need_mem_mib
+            req.need_mem_mib <= 0.0 || (n.mem_total_mib - n.mem_used_mib) >= req.need_mem_mib
         })
         .filter(|n| req.need_disk_gib <= 0.0 || n.disk_free_gib >= req.need_disk_gib)
         .cloned()

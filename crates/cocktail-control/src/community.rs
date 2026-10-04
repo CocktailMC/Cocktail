@@ -88,7 +88,12 @@ impl BanRegistry {
             .collect()
     }
 
-    pub fn is_banned(&self, target: &str, instance: &str, now: DateTime<Utc>) -> Option<&GlobalBan> {
+    pub fn is_banned(
+        &self,
+        target: &str,
+        instance: &str,
+        now: DateTime<Utc>,
+    ) -> Option<&GlobalBan> {
         self.bans
             .iter()
             .find(|b| b.target.eq_ignore_ascii_case(target) && b.applies_to(instance, now))
@@ -342,7 +347,8 @@ impl Ticket {
     }
 
     pub fn add_note(&mut self, who: &str, text: &str) {
-        self.notes.push((Utc::now(), who.to_string(), text.to_string()));
+        self.notes
+            .push((Utc::now(), who.to_string(), text.to_string()));
         self.updated_at = Utc::now();
     }
 
@@ -721,7 +727,13 @@ mod tests {
     #[test]
     fn ticket_notes_and_stats() {
         let mut q = TicketQueue::new();
-        let id = q.submit(Ticket::new(TicketKind::Whitelist, "Cara", "s1", "申请", "想加入"));
+        let id = q.submit(Ticket::new(
+            TicketKind::Whitelist,
+            "Cara",
+            "s1",
+            "申请",
+            "想加入",
+        ));
         {
             let t = q.get_mut(&id).unwrap();
             t.add_note("admin", "已核对");

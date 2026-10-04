@@ -163,10 +163,7 @@ const PATTERNS: &[Pattern] = &[
             "region file",
             "unable to read level.dat",
         ],
-        hints: &[
-            "从最近一次备份恢复世界",
-            "删除损坏的 region 文件后重新生成",
-        ],
+        hints: &["从最近一次备份恢复世界", "删除损坏的 region 文件后重新生成"],
     },
     Pattern {
         kind: CrashKind::PermissionDenied,
@@ -451,10 +448,7 @@ mod tests {
 
     #[test]
     fn hs_err_detection() {
-        let dir = std::env::temp_dir().join(format!(
-            "ck-hs-{}",
-            crate::crypto::random_token(8)
-        ));
+        let dir = std::env::temp_dir().join(format!("ck-hs-{}", crate::crypto::random_token(8)));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("hs_err_pid1234.log");
         std::fs::write(

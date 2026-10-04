@@ -292,11 +292,17 @@ pub struct Resolution {
 
 impl Resolution {
     pub fn errors(&self) -> Vec<&Issue> {
-        self.issues.iter().filter(|i| i.severity == "error").collect()
+        self.issues
+            .iter()
+            .filter(|i| i.severity == "error")
+            .collect()
     }
 
     pub fn warnings(&self) -> Vec<&Issue> {
-        self.issues.iter().filter(|i| i.severity == "warning").collect()
+        self.issues
+            .iter()
+            .filter(|i| i.severity == "warning")
+            .collect()
     }
 
     pub fn summary(&self) -> String {
@@ -408,38 +414,36 @@ impl<'a> Resolver<'a> {
                             ));
                         }
                     }
-                    _ => {
-                        match self.provider(&dep.id) {
-                            None => {
-                                if !dep.optional {
-                                    missing.push(dep.id.clone());
-                                    issues.push(Issue::new(
-                                        IssueKind::MissingDependency,
-                                        &m.id,
-                                        &format!("缺少 {}", dep.id),
-                                        &format!("安装 {} {}", dep.id, dep.constraint),
-                                    ));
-                                }
-                            }
-                            Some(p) => {
-                                let ok = p
-                                    .version_parsed()
-                                    .map(|v| v.satisfies(&dep.constraint))
-                                    .unwrap_or(true);
-                                if !ok {
-                                    issues.push(Issue::new(
-                                        IssueKind::VersionConflict,
-                                        &m.id,
-                                        &format!(
-                                            "需要 {} {} 但已装 {}",
-                                            dep.id, dep.constraint, p.version
-                                        ),
-                                        &format!("升级 {} 到满足 {}", dep.id, dep.constraint),
-                                    ));
-                                }
+                    _ => match self.provider(&dep.id) {
+                        None => {
+                            if !dep.optional {
+                                missing.push(dep.id.clone());
+                                issues.push(Issue::new(
+                                    IssueKind::MissingDependency,
+                                    &m.id,
+                                    &format!("缺少 {}", dep.id),
+                                    &format!("安装 {} {}", dep.id, dep.constraint),
+                                ));
                             }
                         }
-                    }
+                        Some(p) => {
+                            let ok = p
+                                .version_parsed()
+                                .map(|v| v.satisfies(&dep.constraint))
+                                .unwrap_or(true);
+                            if !ok {
+                                issues.push(Issue::new(
+                                    IssueKind::VersionConflict,
+                                    &m.id,
+                                    &format!(
+                                        "需要 {} {} 但已装 {}",
+                                        dep.id, dep.constraint, p.version
+                                    ),
+                                    &format!("升级 {} 到满足 {}", dep.id, dep.constraint),
+                                ));
+                            }
+                        }
+                    },
                 }
             }
         }
@@ -647,7 +651,13 @@ impl ConfigHistory {
         }
     }
 
-    pub fn commit(&mut self, file: &str, content: &str, author: &str, message: &str) -> ConfigSnapshot {
+    pub fn commit(
+        &mut self,
+        file: &str,
+        content: &str,
+        author: &str,
+        message: &str,
+    ) -> ConfigSnapshot {
         let rev = self
             .snapshots
             .iter()
@@ -663,11 +673,8 @@ impl ConfigHistory {
     }
 
     pub fn history(&self, file: &str) -> Vec<&ConfigSnapshot> {
-        let mut out: Vec<&ConfigSnapshot> = self
-            .snapshots
-            .iter()
-            .filter(|s| s.file == file)
-            .collect();
+        let mut out: Vec<&ConfigSnapshot> =
+            self.snapshots.iter().filter(|s| s.file == file).collect();
         out.sort_by_key(|s| s.revision);
         out
     }
@@ -868,7 +875,11 @@ mod tests {
         let res = Resolver::new(&manifests).resolve();
         assert!(!res.ok);
         assert_eq!(res.missing, vec!["ghost".to_string()]);
-        assert!(res.errors().iter().any(|i| i.kind == IssueKind::MissingDependency));
+        assert!(
+            res.errors()
+                .iter()
+                .any(|i| i.kind == IssueKind::MissingDependency)
+        );
     }
 
     #[test]
@@ -889,7 +900,11 @@ mod tests {
         ];
         let res = Resolver::new(&manifests).resolve();
         assert!(!res.ok);
-        assert!(res.errors().iter().any(|i| i.kind == IssueKind::VersionConflict));
+        assert!(
+            res.errors()
+                .iter()
+                .any(|i| i.kind == IssueKind::VersionConflict)
+        );
     }
 
     #[test]
@@ -900,7 +915,11 @@ mod tests {
         ];
         let res = Resolver::new(&manifests).resolve();
         assert!(!res.ok);
-        assert!(res.errors().iter().any(|i| i.kind == IssueKind::DuplicatePlugin));
+        assert!(
+            res.errors()
+                .iter()
+                .any(|i| i.kind == IssueKind::DuplicatePlugin)
+        );
     }
 
     #[test]
@@ -923,7 +942,9 @@ mod tests {
     fn resolver_detects_java_too_old() {
         let mut m = PluginManifest::new("modern", "1.0.0");
         m.java_major = Some(21);
-        let res = Resolver::new(&[m]).for_target("1.20.4", "paper", 17).resolve();
+        let res = Resolver::new(&[m])
+            .for_target("1.20.4", "paper", 17)
+            .resolve();
         assert!(res.issues.iter().any(|i| i.kind == IssueKind::JavaTooOld));
         let ok = Resolver::new(&[PluginManifest {
             java_major: Some(21),
@@ -942,7 +963,11 @@ mod tests {
         ];
         let res = Resolver::new(&manifests).resolve();
         assert!(!res.ok);
-        assert!(res.errors().iter().any(|i| i.kind == IssueKind::ExplicitConflict));
+        assert!(
+            res.errors()
+                .iter()
+                .any(|i| i.kind == IssueKind::ExplicitConflict)
+        );
     }
 
     #[test]
@@ -953,7 +978,11 @@ mod tests {
         ];
         let res = Resolver::new(&manifests).resolve();
         assert!(!res.ok);
-        assert!(res.errors().iter().any(|i| i.kind == IssueKind::DependencyCycle));
+        assert!(
+            res.errors()
+                .iter()
+                .any(|i| i.kind == IssueKind::DependencyCycle)
+        );
     }
 
     #[test]
@@ -976,7 +1005,11 @@ mod tests {
         let mut m = PluginManifest::new("shader", "1.0.0");
         m.side = "client".into();
         let res = Resolver::new(&[m.clone()]).resolve();
-        assert!(res.warnings().iter().any(|i| i.kind == IssueKind::SideMismatch));
+        assert!(
+            res.warnings()
+                .iter()
+                .any(|i| i.kind == IssueKind::SideMismatch)
+        );
         let allowed = Resolver::new(&[m]).allow_client_only(true).resolve();
         assert!(allowed.ok);
     }
@@ -1006,8 +1039,18 @@ mod tests {
     #[test]
     fn config_history_and_rollback() {
         let mut h = ConfigHistory::new();
-        h.commit("server.properties", "max-players=20\nmotd=Hi", "root", "初始");
-        h.commit("server.properties", "max-players=50\nmotd=Hi", "root", "扩容");
+        h.commit(
+            "server.properties",
+            "max-players=20\nmotd=Hi",
+            "root",
+            "初始",
+        );
+        h.commit(
+            "server.properties",
+            "max-players=50\nmotd=Hi",
+            "root",
+            "扩容",
+        );
         let hist = h.history("server.properties");
         assert_eq!(hist.len(), 2);
         assert_eq!(hist[1].revision, 2);
@@ -1036,10 +1079,19 @@ mod tests {
         let same = detect_drift(expected, expected, "server.properties");
         assert!(!same.drifted);
         assert_eq!(same.detail, "一致");
-        let changed = detect_drift(expected, "max-players=99\ndifficulty=hard\npvp=true", "server.properties");
+        let changed = detect_drift(
+            expected,
+            "max-players=99\ndifficulty=hard\npvp=true",
+            "server.properties",
+        );
         assert!(changed.drifted);
         assert!(changed.keys.iter().any(|k| k.contains("max-players")));
-        assert!(changed.keys.iter().any(|k| k.contains("pv p") || k.contains("pv")));
+        assert!(
+            changed
+                .keys
+                .iter()
+                .any(|k| k.contains("pv p") || k.contains("pv"))
+        );
     }
 
     #[test]

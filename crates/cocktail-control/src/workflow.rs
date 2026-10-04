@@ -510,7 +510,10 @@ pub fn append_audit(
     instance_id: Option<&str>,
     detail: &str,
 ) -> AuditEntry {
-    let prev_hash = chain.last().map(|e| e.hash.clone()).unwrap_or_else(|| "genesis".into());
+    let prev_hash = chain
+        .last()
+        .map(|e| e.hash.clone())
+        .unwrap_or_else(|| "genesis".into());
     let mut entry = AuditEntry {
         seq: chain.len() as u64 + 1,
         at: Utc::now(),
@@ -628,9 +631,13 @@ mod tests {
             name: "每日维护".into(),
             description: String::new(),
             steps: vec![
-                Step::new("save", StepKind::Command).on("i1").with("command", "save-all"),
+                Step::new("save", StepKind::Command)
+                    .on("i1")
+                    .with("command", "save-all"),
                 Step::new("backup", StepKind::Backup).on("i1").after("save"),
-                Step::new("restart", StepKind::Restart).on("i1").after("backup"),
+                Step::new("restart", StepKind::Restart)
+                    .on("i1")
+                    .after("backup"),
             ],
             enabled: true,
             created_at: Utc::now(),
@@ -770,14 +777,24 @@ mod tests {
             .with_timezone(&Utc);
         assert!(should_run_cron(&c, None, at));
         assert!(!should_run_cron(&c, Some(at), at));
-        assert!(should_run_cron(&c, Some(at - chrono::Duration::minutes(5)), at));
+        assert!(should_run_cron(
+            &c,
+            Some(at - chrono::Duration::minutes(5)),
+            at
+        ));
     }
 
     #[test]
     fn audit_chain_appends_and_verifies() {
         let mut chain = Vec::new();
         append_audit(&mut chain, "instance.start", "root", Some("i1"), "{}");
-        append_audit(&mut chain, "player.kick", "support", Some("i1"), "{\"p\":\"x\"}");
+        append_audit(
+            &mut chain,
+            "player.kick",
+            "support",
+            Some("i1"),
+            "{\"p\":\"x\"}",
+        );
         append_audit(&mut chain, "settings.update", "root", None, "{}");
         assert_eq!(chain.len(), 3);
         assert_eq!(chain[0].prev_hash, "genesis");

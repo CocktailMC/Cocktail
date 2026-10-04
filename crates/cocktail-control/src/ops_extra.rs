@@ -195,11 +195,7 @@ impl Series {
     }
 
     pub fn since(&self, at: DateTime<Utc>) -> Vec<MetricPoint> {
-        self.points
-            .iter()
-            .filter(|p| p.at >= at)
-            .cloned()
-            .collect()
+        self.points.iter().filter(|p| p.at >= at).cloned().collect()
     }
 
     pub fn downsample(&self, buckets: usize) -> Vec<f64> {
@@ -616,7 +612,11 @@ mod tests {
         let mut store = SeriesStore::new(50);
         let base = Utc::now();
         for i in 0..10 {
-            store.record("players", base + chrono::Duration::seconds(i), 10.0 + i as f64 * 2.0);
+            store.record(
+                "players",
+                base + chrono::Duration::seconds(i),
+                10.0 + i as f64 * 2.0,
+            );
         }
         assert_eq!(store.names(), vec!["players"]);
         assert_eq!(store.trend("players"), Some("上升"));
@@ -631,7 +631,12 @@ mod tests {
 
     #[test]
     fn delivery_signature_and_lifecycle() {
-        let mut d = Delivery::new("https://x/hook", "instance.crashed", "{\"a\":1}", "topsecret");
+        let mut d = Delivery::new(
+            "https://x/hook",
+            "instance.crashed",
+            "{\"a\":1}",
+            "topsecret",
+        );
         assert!(d.signature.starts_with("sha256="));
         assert!(d.verify("topsecret", "{\"a\":1}"));
         assert!(!d.verify("wrong", "{\"a\":1}"));

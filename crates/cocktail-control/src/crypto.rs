@@ -226,12 +226,8 @@ fn chacha20_block(key: &[u8; 32], counter: u32, nonce: &[u8; 12]) -> [u8; 64] {
     state[2] = 0x79622d32;
     state[3] = 0x6b206574;
     for i in 0..8 {
-        state[4 + i] = u32::from_le_bytes([
-            key[i * 4],
-            key[i * 4 + 1],
-            key[i * 4 + 2],
-            key[i * 4 + 3],
-        ]);
+        state[4 + i] =
+            u32::from_le_bytes([key[i * 4], key[i * 4 + 1], key[i * 4 + 2], key[i * 4 + 3]]);
     }
     state[12] = counter;
     for i in 0..3 {
@@ -442,12 +438,7 @@ pub fn aead_encrypt(key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], plain: &[u8]) 
     out
 }
 
-pub fn aead_decrypt(
-    key: &[u8; 32],
-    nonce: &[u8; 12],
-    aad: &[u8],
-    data: &[u8],
-) -> Option<Vec<u8>> {
+pub fn aead_decrypt(key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &[u8]) -> Option<Vec<u8>> {
     if data.len() < 16 {
         return None;
     }

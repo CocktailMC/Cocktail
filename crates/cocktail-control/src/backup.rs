@@ -56,9 +56,7 @@ fn snapshots_dir(instance_id: &str) -> PathBuf {
 }
 
 fn object_path(instance_id: &str, hash: &str) -> PathBuf {
-    objects_dir(instance_id)
-        .join(&hash[..2])
-        .join(hash)
+    objects_dir(instance_id).join(&hash[..2]).join(hash)
 }
 
 fn snapshot_path(instance_id: &str, id: &str) -> PathBuf {
@@ -160,11 +158,7 @@ fn chain_of(instance_id: &str, parent: Option<&str>) -> String {
     crypto::sha256_hex(seed.as_bytes())[..16].to_string()
 }
 
-pub fn create_snapshot(
-    instance_id: &str,
-    workdir: &str,
-    label: &str,
-) -> anyhow::Result<Snapshot> {
+pub fn create_snapshot(instance_id: &str, workdir: &str, label: &str) -> anyhow::Result<Snapshot> {
     let root = Path::new(workdir);
     if !root.is_dir() {
         anyhow::bail!("实例目录不存在: {workdir}");
@@ -307,8 +301,8 @@ pub fn latest_snapshot_id(instance_id: &str) -> anyhow::Result<Option<String>> {
 }
 
 pub fn verify_manifest(instance_id: &str, id: &str) -> anyhow::Result<(usize, usize)> {
-    let snap = read_snapshot(instance_id, id)?
-        .ok_or_else(|| anyhow::anyhow!("快照不存在: {id}"))?;
+    let snap =
+        read_snapshot(instance_id, id)?.ok_or_else(|| anyhow::anyhow!("快照不存在: {id}"))?;
     let path = snapshot_path(instance_id, id);
     let text = fs::read_to_string(&path)?;
     let expect = manifest_digest(&snap);
@@ -341,8 +335,8 @@ pub fn restore_snapshot(
     dest: &str,
     prune_extra: bool,
 ) -> anyhow::Result<u64> {
-    let snap = read_snapshot(instance_id, id)?
-        .ok_or_else(|| anyhow::anyhow!("快照不存在: {id}"))?;
+    let snap =
+        read_snapshot(instance_id, id)?.ok_or_else(|| anyhow::anyhow!("快照不存在: {id}"))?;
     let dest_root = Path::new(dest);
     fs::create_dir_all(dest_root)?;
     let mut written = 0u64;
@@ -454,10 +448,7 @@ fn bucket_key(t: DateTime<Utc>, kind: &str) -> String {
     }
 }
 
-pub fn gfs_keep_set(
-    snapshots: &[Snapshot],
-    policy: &RetentionPolicy,
-) -> Vec<String> {
+pub fn gfs_keep_set(snapshots: &[Snapshot], policy: &RetentionPolicy) -> Vec<String> {
     let mut keep: BTreeSet<String> = BTreeSet::new();
     let mut sorted: Vec<&Snapshot> = snapshots.iter().collect();
     sorted.sort_by(|a, b| a.created_at.cmp(&b.created_at));
@@ -494,10 +485,7 @@ pub fn gfs_keep_set(
     out
 }
 
-pub fn prune_gfs(
-    instance_id: &str,
-    policy: &RetentionPolicy,
-) -> anyhow::Result<(usize, usize)> {
+pub fn prune_gfs(instance_id: &str, policy: &RetentionPolicy) -> anyhow::Result<(usize, usize)> {
     let snapshots = list_snapshots(instance_id)?;
     if snapshots.is_empty() {
         return Ok((0, 0));
@@ -586,10 +574,9 @@ pub fn diff_snapshots(
     from: &str,
     to: &str,
 ) -> anyhow::Result<(Vec<String>, Vec<String>, Vec<String>)> {
-    let a = read_snapshot(instance_id, from)?
-        .ok_or_else(|| anyhow::anyhow!("快照不存在: {from}"))?;
-    let b = read_snapshot(instance_id, to)?
-        .ok_or_else(|| anyhow::anyhow!("快照不存在: {to}"))?;
+    let a =
+        read_snapshot(instance_id, from)?.ok_or_else(|| anyhow::anyhow!("快照不存在: {from}"))?;
+    let b = read_snapshot(instance_id, to)?.ok_or_else(|| anyhow::anyhow!("快照不存在: {to}"))?;
     let map_a: BTreeMap<String, &FileEntryMeta> =
         a.files.iter().map(|f| (f.path.clone(), f)).collect();
     let map_b: BTreeMap<String, &FileEntryMeta> =
@@ -641,10 +628,7 @@ mod tests {
     static CWD_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "ck-bk-{tag}-{}",
-            crypto::random_token(8)
-        ));
+        let p = std::env::temp_dir().join(format!("ck-bk-{tag}-{}", crypto::random_token(8)));
         fs::create_dir_all(&p).unwrap();
         p
     }

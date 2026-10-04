@@ -273,7 +273,9 @@ impl PolicyEngine {
             .with_desc("日常运营"),
         );
         e.add_role(
-            Role::new("superadmin", "Owner", ALL_PERMISSIONS).builtin().with_desc("全部权限"),
+            Role::new("superadmin", "Owner", ALL_PERMISSIONS)
+                .builtin()
+                .with_desc("全部权限"),
         );
         e
     }
@@ -356,12 +358,7 @@ impl PolicyEngine {
         before - self.grants.len()
     }
 
-    pub fn effective_for(
-        &self,
-        user: &str,
-        base_role: &str,
-        scope: &Scope,
-    ) -> BTreeSet<String> {
+    pub fn effective_for(&self, user: &str, base_role: &str, scope: &Scope) -> BTreeSet<String> {
         let now = Utc::now();
         let mut perms = self.effective_permissions(base_role);
         for group in self.groups_for_user(user) {
@@ -575,10 +572,7 @@ impl SessionRegistry {
     }
 
     pub fn for_user(&self, user: &str) -> Vec<&DeviceSession> {
-        self.sessions
-            .values()
-            .filter(|s| s.user == user)
-            .collect()
+        self.sessions.values().filter(|s| s.user == user).collect()
     }
 
     pub fn active_for_user(&self, user: &str, now: DateTime<Utc>) -> Vec<&DeviceSession> {
@@ -616,10 +610,7 @@ impl SessionRegistry {
     }
 
     pub fn is_anomalous(&self, user: &str, ip: &str, ua: &str) -> bool {
-        let known_ip = self
-            .sessions
-            .values()
-            .any(|s| s.user == user && s.ip == ip);
+        let known_ip = self.sessions.values().any(|s| s.user == user && s.ip == ip);
         let known_ua = self
             .sessions
             .values()
@@ -706,11 +697,7 @@ impl PasswordPolicy {
         if self.require_digit && !password.chars().any(|c| c.is_ascii_digit()) {
             issues.push("需要至少一个数字".into());
         }
-        if self.require_symbol
-            && !password
-                .chars()
-                .any(|c| !c.is_ascii_alphanumeric())
-        {
+        if self.require_symbol && !password.chars().any(|c| !c.is_ascii_alphanumeric()) {
             issues.push("需要至少一个符号".into());
         }
         if self.deny_username && !username.is_empty() {
@@ -795,19 +782,8 @@ impl PasswordPolicy {
 
 fn is_keyboard_run(lower: &str) -> bool {
     const RUNS: &[&str] = &[
-        "qwerty",
-        "asdf",
-        "zxcv",
-        "1234",
-        "2345",
-        "3456",
-        "4567",
-        "5678",
-        "6789",
-        "7890",
-        "abcd",
-        "bcde",
-        "cdef",
+        "qwerty", "asdf", "zxcv", "1234", "2345", "3456", "4567", "5678", "6789", "7890", "abcd",
+        "bcde", "cdef",
     ];
     RUNS.iter().any(|r| lower.contains(r))
 }
@@ -1010,7 +986,13 @@ mod tests {
             expires_at: now + chrono::Duration::hours(exp_off),
             revoked: false,
         };
-        reg.insert(mk("s1", "alice", "1.1.1.1", "Mozilla/5.0 Chrome/120 Windows", 1));
+        reg.insert(mk(
+            "s1",
+            "alice",
+            "1.1.1.1",
+            "Mozilla/5.0 Chrome/120 Windows",
+            1,
+        ));
         reg.insert(mk("s2", "alice", "2.2.2.2", "curl/8.0 Linux", 1));
         reg.insert(mk("s3", "alice", "1.1.1.1", "old", -1));
         assert_eq!(reg.for_user("alice").len(), 3);

@@ -44,7 +44,11 @@ impl Cidr {
             return None;
         }
         let net = u32::from(addr);
-        let mask = if bits == 0 { 0 } else { u32::MAX << (32 - bits) };
+        let mask = if bits == 0 {
+            0
+        } else {
+            u32::MAX << (32 - bits)
+        };
         Some(Cidr {
             net: net & mask,
             mask,
@@ -93,11 +97,7 @@ pub fn parse_allowlist(raw: &str) -> Vec<Cidr> {
     raw.split([',', '\n', ' ', ';'])
         .filter_map(|part| {
             let t = part.trim();
-            if t.is_empty() {
-                None
-            } else {
-                Cidr::parse(t)
-            }
+            if t.is_empty() { None } else { Cidr::parse(t) }
         })
         .collect()
 }
@@ -277,9 +277,7 @@ impl QuotaTracker {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        let entry = guard
-            .entry(key.to_string())
-            .or_insert((0, Instant::now()));
+        let entry = guard.entry(key.to_string()).or_insert((0, Instant::now()));
         entry.0 = entry.0.saturating_add(amount);
         entry.0
     }
@@ -384,7 +382,10 @@ mod tests {
 
     #[test]
     fn client_ip_precedence() {
-        assert_eq!(client_ip(Some("1.1.1.1, 2.2.2.2"), None, Some("3.3.3.3")), "1.1.1.1");
+        assert_eq!(
+            client_ip(Some("1.1.1.1, 2.2.2.2"), None, Some("3.3.3.3")),
+            "1.1.1.1"
+        );
         assert_eq!(client_ip(Some("1.1.1.1"), Some("9.9.9.9"), None), "9.9.9.9");
         assert_eq!(client_ip(None, None, None), "local");
         assert_eq!(client_ip(None, None, Some("4.4.4.4")), "4.4.4.4");
