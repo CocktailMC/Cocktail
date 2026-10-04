@@ -151,7 +151,6 @@ impl InstanceManifest {
     }
 }
 
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NicStat {
     pub name: String,
@@ -202,7 +201,11 @@ mod tests {
         let raw = r#"{"type":"heartbeat","cpu_pct":1.5}"#;
         let msg: AgentUp = serde_json::from_str(raw).unwrap();
         match msg {
-            AgentUp::Heartbeat { nic_stats, tcp_states, .. } => {
+            AgentUp::Heartbeat {
+                nic_stats,
+                tcp_states,
+                ..
+            } => {
                 assert!(nic_stats.is_empty());
                 assert_eq!(tcp_states.estab, 0);
             }
@@ -215,7 +218,9 @@ mod tests {
         let raw = r#"{"type":"welcome","node_id":"n1","instances":[]}"#;
         let msg: AgentDown = serde_json::from_str(raw).unwrap();
         match msg {
-            AgentDown::Welcome { protocol_version, .. } => {
+            AgentDown::Welcome {
+                protocol_version, ..
+            } => {
                 assert_eq!(protocol_version, PROTOCOL_VERSION);
             }
             _ => panic!("wrong variant"),

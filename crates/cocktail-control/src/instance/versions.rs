@@ -1,5 +1,3 @@
-
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -103,8 +101,7 @@ pub async fn download_and_install(
     version: &str,
     loader: Option<&str>,
 ) -> anyhow::Result<(String, Vec<String>)> {
-    fs::create_dir_all(workdir)
-        .with_context(|| format!("create server directory {workdir}"))?;
+    fs::create_dir_all(workdir).with_context(|| format!("create server directory {workdir}"))?;
     let loader = opt_loader(loader);
     match core {
         "forge" => install_forge(workdir, version, loader).await,
@@ -208,12 +205,14 @@ async fn get_json(url: &str) -> anyhow::Result<Value> {
     let resp = resp
         .error_for_status()
         .map_err(|e| crate::http::explain(e, url))?;
-    resp.json()
-        .await
-        .map_err(|e| crate::http::explain(e, url))
+    resp.json().await.map_err(|e| crate::http::explain(e, url))
 }
 
-async fn write_server_jar(workdir: &str, url: &str, label: &str) -> anyhow::Result<(String, Vec<String>)> {
+async fn write_server_jar(
+    workdir: &str,
+    url: &str,
+    label: &str,
+) -> anyhow::Result<(String, Vec<String>)> {
     let jar_path = Path::new(workdir).join("server.jar");
     tracing::info!(%url, "downloading server jar");
     let job = crate::http::Transfer::new(label);
@@ -242,8 +241,6 @@ async fn download_file(url: &str, dest: &Path, label: &str) -> anyhow::Result<u6
     }
     Ok(n)
 }
-
-
 
 async fn list_fill_versions(project: &str) -> anyhow::Result<Vec<CoreVersion>> {
     let url = format!("https://fill.papermc.io/v3/projects/{project}");
@@ -299,8 +296,6 @@ async fn resolve_fill_download_url(project: &str, version: &str) -> anyhow::Resu
     chosen.ok_or_else(|| anyhow::anyhow!("no downloadable {project} build for {version}"))
 }
 
-
-
 async fn list_vanilla_versions() -> anyhow::Result<Vec<CoreVersion>> {
     let v = get_json("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json").await?;
     let latest = v
@@ -350,8 +345,6 @@ async fn resolve_vanilla_download_url(version: &str) -> anyhow::Result<String> {
         .map(|s| s.to_string())
         .ok_or_else(|| anyhow::anyhow!("vanilla server download missing for {version}"))
 }
-
-
 
 async fn list_purpur_versions() -> anyhow::Result<Vec<CoreVersion>> {
     let v = get_json("https://api.purpurmc.org/v2/purpur").await?;
@@ -414,8 +407,6 @@ async fn resolve_leaves_download_url(version: &str) -> anyhow::Result<String> {
     ))
 }
 
-
-
 async fn list_fabric_game_versions() -> anyhow::Result<Vec<CoreVersion>> {
     let v = get_json("https://meta.fabricmc.net/v2/versions/game").await?;
     let ids = v
@@ -430,7 +421,10 @@ async fn list_fabric_game_versions() -> anyhow::Result<Vec<CoreVersion>> {
 }
 
 async fn list_fabric_loaders(mc: &str) -> anyhow::Result<Vec<CoreLoader>> {
-    let v = get_json(&format!("https://meta.fabricmc.net/v2/versions/loader/{mc}")).await?;
+    let v = get_json(&format!(
+        "https://meta.fabricmc.net/v2/versions/loader/{mc}"
+    ))
+    .await?;
     let mut out = Vec::new();
     for row in v.as_array().into_iter().flatten() {
         let Some(ver) = row.pointer("/loader/version").and_then(|x| x.as_str()) else {
@@ -457,7 +451,10 @@ async fn list_fabric_loaders(mc: &str) -> anyhow::Result<Vec<CoreLoader>> {
 }
 
 async fn latest_fabric_loader(mc: &str) -> anyhow::Result<String> {
-    let v = get_json(&format!("https://meta.fabricmc.net/v2/versions/loader/{mc}")).await?;
+    let v = get_json(&format!(
+        "https://meta.fabricmc.net/v2/versions/loader/{mc}"
+    ))
+    .await?;
     let arr = v
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("fabric loader list missing for {mc}"))?;
@@ -508,8 +505,6 @@ async fn resolve_fabric_server_jar(mc: &str, loader: Option<&str>) -> anyhow::Re
         "https://meta.fabricmc.net/v2/versions/loader/{mc}/{loader}/{installer}/server/jar"
     ))
 }
-
-
 
 async fn list_quilt_game_versions() -> anyhow::Result<Vec<CoreVersion>> {
     let v = get_json("https://meta.quiltmc.org/v3/versions/game").await?;
@@ -623,11 +618,10 @@ async fn install_quilt(
     Ok(crate::util::java_jar_startup("quilt-server-launch.jar"))
 }
 
-
-
 async fn list_forge_versions() -> anyhow::Result<Vec<CoreVersion>> {
-    let v = get_json("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")
-        .await?;
+    let v =
+        get_json("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")
+            .await?;
     let mut by_mc: BTreeMap<String, (String, bool)> = BTreeMap::new();
     let Some(promos) = v.get("promos").and_then(|x| x.as_object()) else {
         anyhow::bail!("forge promotions missing");
@@ -672,8 +666,9 @@ async fn list_forge_versions() -> anyhow::Result<Vec<CoreVersion>> {
 }
 
 async fn forge_build_for_mc(mc: &str) -> anyhow::Result<String> {
-    let v = get_json("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")
-        .await?;
+    let v =
+        get_json("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")
+            .await?;
     let promos = v
         .get("promos")
         .and_then(|x| x.as_object())
@@ -689,10 +684,7 @@ async fn forge_build_for_mc(mc: &str) -> anyhow::Result<String> {
 
 fn strip_mc_prefix(mc: &str, loader: &str) -> String {
     let prefix = format!("{mc}-");
-    loader
-        .strip_prefix(&prefix)
-        .unwrap_or(loader)
-        .to_string()
+    loader.strip_prefix(&prefix).unwrap_or(loader).to_string()
 }
 
 async fn get_text(url: &str) -> anyhow::Result<String> {
@@ -704,9 +696,7 @@ async fn get_text(url: &str) -> anyhow::Result<String> {
     let resp = resp
         .error_for_status()
         .map_err(|e| crate::http::explain(e, url))?;
-    resp.text()
-        .await
-        .map_err(|e| crate::http::explain(e, url))
+    resp.text().await.map_err(|e| crate::http::explain(e, url))
 }
 
 async fn list_forge_loaders(mc: &str) -> anyhow::Result<Vec<CoreLoader>> {
@@ -757,11 +747,10 @@ async fn install_forge(
     let java = installer_java(workdir, mc).await?;
     run_java_installer(&java, workdir, &installer, &["--installServer"]).await?;
     let _ = fs::remove_file(&installer);
-    detect_modloader_startup(Path::new(workdir))
-        .ok_or_else(|| anyhow::anyhow!("forge installer finished but no server launch files were found"))
+    detect_modloader_startup(Path::new(workdir)).ok_or_else(|| {
+        anyhow::anyhow!("forge installer finished but no server launch files were found")
+    })
 }
-
-
 
 fn neoforge_to_mc(ver: &str) -> Option<String> {
     let clean = ver.split('-').next().unwrap_or(ver);
@@ -784,8 +773,9 @@ fn neoforge_to_mc(ver: &str) -> Option<String> {
 }
 
 async fn list_neoforge_versions() -> anyhow::Result<Vec<CoreVersion>> {
-    let v = get_json("https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge")
-        .await?;
+    let v =
+        get_json("https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge")
+            .await?;
     let arr = v
         .get("versions")
         .and_then(|x| x.as_array())
@@ -796,7 +786,9 @@ async fn list_neoforge_versions() -> anyhow::Result<Vec<CoreVersion>> {
         if is_unstable(ver) {
             continue;
         }
-        let Some(mc) = neoforge_to_mc(ver) else { continue };
+        let Some(mc) = neoforge_to_mc(ver) else {
+            continue;
+        };
         best.entry(mc).or_insert_with(|| ver.to_string());
     }
     let mut rows: Vec<(String, String)> = best.into_iter().collect();
@@ -815,8 +807,9 @@ async fn list_neoforge_versions() -> anyhow::Result<Vec<CoreVersion>> {
 }
 
 async fn list_neoforge_loaders(mc: &str) -> anyhow::Result<Vec<CoreLoader>> {
-    let v = get_json("https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge")
-        .await?;
+    let v =
+        get_json("https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge")
+            .await?;
     let arr = v
         .get("versions")
         .and_then(|x| x.as_array())
@@ -843,8 +836,9 @@ async fn list_neoforge_loaders(mc: &str) -> anyhow::Result<Vec<CoreLoader>> {
 }
 
 async fn neoforge_build_for_mc(mc: &str) -> anyhow::Result<String> {
-    let v = get_json("https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge")
-        .await?;
+    let v =
+        get_json("https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge")
+            .await?;
     let arr = v
         .get("versions")
         .and_then(|x| x.as_array())
@@ -874,8 +868,9 @@ async fn install_neoforge(
     let java = installer_java(workdir, mc).await?;
     run_java_installer(&java, workdir, &installer, &["--installServer"]).await?;
     let _ = fs::remove_file(&installer);
-    detect_modloader_startup(Path::new(workdir))
-        .ok_or_else(|| anyhow::anyhow!("NeoForge installer finished but no server launch files were found"))
+    detect_modloader_startup(Path::new(workdir)).ok_or_else(|| {
+        anyhow::anyhow!("NeoForge installer finished but no server launch files were found")
+    })
 }
 
 pub(crate) fn has_modloader_startup(workdir: &Path) -> bool {
@@ -995,7 +990,8 @@ async fn run_java_installer(
         .map_err(|e| {
             anyhow::anyhow!(
                 "failed to spawn java {} in {} (needed to run the installer): {e}",
-                java.display(), workdir
+                java.display(),
+                workdir
             )
         })?;
     if !output.status.success() {
@@ -1008,8 +1004,6 @@ async fn run_java_installer(
     }
     Ok(())
 }
-
-
 
 async fn list_mohist_project(project: &str) -> anyhow::Result<Vec<CoreVersion>> {
     let v = get_json(&format!("https://mohistmc.com/api/v2/projects/{project}")).await?;
@@ -1043,8 +1037,6 @@ async fn resolve_mohist_download_url(project: &str, version: &str) -> anyhow::Re
         .map(|s| s.to_string())
         .ok_or_else(|| anyhow::anyhow!("{project} download url missing"))
 }
-
-
 
 const ARCLIGHT_ROOT: &str = "https://files.hypoglycemia.icu/v1/files";
 
@@ -1085,9 +1077,9 @@ async fn list_arclight_loaders(version: &str) -> anyhow::Result<Vec<CoreLoader>>
             .and_then(|x| x.as_str())
             .is_some_and(|n| n == "latest-snapshot")
     });
-    let pointer = stable.or(snap).ok_or_else(|| {
-        anyhow::anyhow!("arclight latest-stable missing for {version}")
-    })?;
+    let pointer = stable
+        .or(snap)
+        .ok_or_else(|| anyhow::anyhow!("arclight latest-stable missing for {version}"))?;
     let key = pointer
         .get("key")
         .and_then(|x| x.as_str())
@@ -1145,9 +1137,9 @@ async fn resolve_arclight_download_url(
             .and_then(|x| x.as_str())
             .is_some_and(|n| n == "latest-snapshot")
     });
-    let pointer = stable.or(snap).ok_or_else(|| {
-        anyhow::anyhow!("arclight latest-stable missing for {version}")
-    })?;
+    let pointer = stable
+        .or(snap)
+        .ok_or_else(|| anyhow::anyhow!("arclight latest-stable missing for {version}"))?;
     let key = pointer
         .get("key")
         .and_then(|x| x.as_str())

@@ -1,5 +1,3 @@
-
-
 use std::path::Path;
 use std::time::Instant;
 
@@ -113,7 +111,6 @@ pub fn sample(prev: &HostNetPrev, rx_alert_bps: f32) -> (HostNetSample, HostNetP
             rx_bytes: n.rx,
             tx_bytes: n.tx,
             rx_bps: if prev.at.is_some() {
-                
                 if rx > 0 {
                     rx_bps * (n.rx as f32 / rx as f32)
                 } else {
@@ -223,8 +220,12 @@ fn read_nics_sysinfo() -> Vec<RawNic> {
             tx: data.total_transmitted(),
             rx_pkts: data.total_packets_received(),
             tx_pkts: data.total_packets_transmitted(),
-            drops: data.total_errors_on_received().saturating_add(data.total_errors_on_transmitted()),
-            errors: data.total_errors_on_received().saturating_add(data.total_errors_on_transmitted()),
+            drops: data
+                .total_errors_on_received()
+                .saturating_add(data.total_errors_on_transmitted()),
+            errors: data
+                .total_errors_on_received()
+                .saturating_add(data.total_errors_on_transmitted()),
         });
     }
     out.sort_by(|a, b| b.rx.cmp(&a.rx));

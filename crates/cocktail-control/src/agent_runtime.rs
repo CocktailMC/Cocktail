@@ -1,5 +1,3 @@
-
-
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -8,10 +6,8 @@ use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
 
-use crate::instance::{
-    files, InstanceEvent, InstanceSpec, InstanceStatus, RuntimeKind,
-};
 use crate::instance::process::{self, ProcessHandle, StopMode};
+use crate::instance::{InstanceEvent, InstanceSpec, InstanceStatus, RuntimeKind, files};
 use crate::proto::{AgentDown, AgentUp, ApplyInstance};
 use crate::util;
 
@@ -25,9 +21,8 @@ pub async fn run_agent() -> anyhow::Result<()> {
     crate::wincompat::enable_utf8_console();
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                tracing_subscriber::EnvFilter::new("cocktail_control=info")
-            }),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("cocktail_control=info")),
         )
         .init();
 
@@ -275,7 +270,9 @@ async fn spawn_live(
     let command = if spec.runtime == RuntimeKind::Process
         && command.as_deref().is_some_and(util::is_java_command)
     {
-        let bin = crate::java::ensure_for_spec(&workdir, spec.java_major, spec.mc_version.as_deref()).await?;
+        let bin =
+            crate::java::ensure_for_spec(&workdir, spec.java_major, spec.mc_version.as_deref())
+                .await?;
         crate::java::rewrite_java_command(command, &bin)
     } else {
         command

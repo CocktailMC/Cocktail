@@ -1,5 +1,3 @@
-
-
 use std::path::Path;
 
 #[cfg(windows)]
@@ -10,7 +8,6 @@ mod ffi {
         pub fn SetConsoleCP(w_code_page_id: u32) -> i32;
     }
 }
-
 
 pub fn hide_console(cmd: &mut tokio::process::Command) {
     #[cfg(windows)]

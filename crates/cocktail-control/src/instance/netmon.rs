@@ -1,5 +1,3 @@
-
-
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
@@ -99,7 +97,9 @@ pub fn sample(port: u16, pid: u32, docker: bool, prev: &NetCounters) -> NetSampl
         }
         if s.established && !s.remote_ip.is_unspecified() {
             connections += 1;
-            let e = by_ip.entry(s.remote_ip).or_insert((0, s.remote_ip.is_ipv6()));
+            let e = by_ip
+                .entry(s.remote_ip)
+                .or_insert((0, s.remote_ip.is_ipv6()));
             e.0 += 1;
         }
     }
@@ -134,16 +134,8 @@ pub fn sample(port: u16, pid: u32, docker: bool, prev: &NetCounters) -> NetSampl
     } else {
         (0.0, 0.0, 0.0, 0.0)
     };
-    let baseline_rx = if primed {
-        prev.baseline_rx
-    } else {
-        traffic.rx
-    };
-    let baseline_tx = if primed {
-        prev.baseline_tx
-    } else {
-        traffic.tx
-    };
+    let baseline_rx = if primed { prev.baseline_rx } else { traffic.rx };
+    let baseline_tx = if primed { prev.baseline_tx } else { traffic.tx };
     let peak_rx = prev.peak_rx_bps.max(rx_bps);
     let peak_tx = prev.peak_tx_bps.max(tx_bps);
     let ping = status_ping(port);
@@ -157,7 +149,9 @@ pub fn sample(port: u16, pid: u32, docker: bool, prev: &NetCounters) -> NetSampl
         alerts.push(format!("半开连接 {syn_recv}，可能在被扫描或 SYN 洪水"));
     }
     if unique_ips >= 40 && connections >= 40 {
-        alerts.push(format!("独立 IP {unique_ips}、连接 {connections}，注意是否被扫服"));
+        alerts.push(format!(
+            "独立 IP {unique_ips}、连接 {connections}，注意是否被扫服"
+        ));
     }
     if connections >= 256 {
         alerts.push(format!("TCP 连接 {connections}，接近常见代理/人数上限"));
@@ -483,8 +477,14 @@ fn status_ping(port: u16) -> Option<StatusPing> {
     let v: Value = serde_json::from_str(&json).ok()?;
     Some(StatusPing {
         rtt_ms: Some(rtt),
-        online: v.pointer("/players/online").and_then(|x| x.as_u64()).map(|n| n as u32),
-        max: v.pointer("/players/max").and_then(|x| x.as_u64()).map(|n| n as u32),
+        online: v
+            .pointer("/players/online")
+            .and_then(|x| x.as_u64())
+            .map(|n| n as u32),
+        max: v
+            .pointer("/players/max")
+            .and_then(|x| x.as_u64())
+            .map(|n| n as u32),
         version: v
             .pointer("/version/name")
             .and_then(|x| x.as_str())
@@ -568,7 +568,10 @@ fn ip_scope(ip: IpAddr) -> &'static str {
         IpAddr::V6(v) => {
             if v.is_loopback() {
                 "loopback"
-            } else if v.to_ipv4_mapped().is_some_and(|v4| v4.is_private() || v4.is_loopback()) {
+            } else if v
+                .to_ipv4_mapped()
+                .is_some_and(|v4| v4.is_private() || v4.is_loopback())
+            {
                 if v.to_ipv4_mapped().unwrap().is_loopback() {
                     "loopback"
                 } else {
@@ -685,8 +688,16 @@ pub fn demo_sample(tick: u32, prev: &NetCounters) -> NetSample {
         tx_pps: 28.0,
         rx_bytes: rx,
         tx_bytes: tx,
-        session_rx: rx.saturating_sub(if prev.at.is_some() { prev.baseline_rx } else { rx }),
-        session_tx: tx.saturating_sub(if prev.at.is_some() { prev.baseline_tx } else { tx }),
+        session_rx: rx.saturating_sub(if prev.at.is_some() {
+            prev.baseline_rx
+        } else {
+            rx
+        }),
+        session_tx: tx.saturating_sub(if prev.at.is_some() {
+            prev.baseline_tx
+        } else {
+            tx
+        }),
         peak_rx_bps: prev.peak_rx_bps.max(rx_bps),
         peak_tx_bps: prev.peak_tx_bps.max(tx_bps),
         drops: 0,
@@ -716,8 +727,16 @@ pub fn demo_sample(tick: u32, prev: &NetCounters) -> NetSample {
             tx_bytes: tx,
             rx_pkts: u64::from(tick) * 40,
             tx_pkts: u64::from(tick) * 90,
-            baseline_rx: if prev.at.is_some() { prev.baseline_rx } else { rx },
-            baseline_tx: if prev.at.is_some() { prev.baseline_tx } else { tx },
+            baseline_rx: if prev.at.is_some() {
+                prev.baseline_rx
+            } else {
+                rx
+            },
+            baseline_tx: if prev.at.is_some() {
+                prev.baseline_tx
+            } else {
+                tx
+            },
             peak_rx_bps: prev.peak_rx_bps.max(rx_bps),
             peak_tx_bps: prev.peak_tx_bps.max(tx_bps),
             at: Some(now),

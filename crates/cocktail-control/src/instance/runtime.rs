@@ -1,9 +1,7 @@
-
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use bollard::container::LogOutput;
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use bollard::models::{
@@ -198,7 +196,6 @@ impl ContainerRuntime {
             .await
             .with_context(|| format!("start container {}", spec.name))?;
 
-        
         Ok(SpawnedContainer { pid: 0 })
     }
 
@@ -244,11 +241,7 @@ impl ContainerRuntime {
             .await
             .ok()?;
         let pid = info.state?.pid?;
-        if pid > 0 {
-            Some(pid as u32)
-        } else {
-            None
-        }
+        if pid > 0 { Some(pid as u32) } else { None }
     }
 
     pub async fn stats(&self, name: &str) -> Result<ContainerStats> {
@@ -307,7 +300,11 @@ impl ContainerRuntime {
         Ok(images
             .into_iter()
             .map(|i| ImageInfo {
-                repo_tag: i.repo_tags.first().cloned().unwrap_or_else(|| "<none>".into()),
+                repo_tag: i
+                    .repo_tags
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "<none>".into()),
                 id: i.id,
                 size: format_size(i.size),
             })
@@ -357,7 +354,10 @@ impl ContainerRuntime {
             .with_context(|| format!("start exec {}", result.id))?;
 
         let mut output = String::new();
-        if let StartExecResults::Attached { output: mut stream, .. } = start {
+        if let StartExecResults::Attached {
+            output: mut stream, ..
+        } = start
+        {
             while let Some(chunk) = stream.next().await {
                 if let Ok(lo) = chunk {
                     output.push_str(&String::from_utf8_lossy(&log_output_bytes(&lo)));
@@ -368,11 +368,6 @@ impl ContainerRuntime {
     }
 
     pub async fn write_stdin_exec(&self, name: &str, command: &str) -> Result<()> {
-        
-        
-        
-        
-        
         let line = format!("{}\n", command);
         let config = CreateExecOptions {
             cmd: Some(vec!["sh".to_string(), "-c".into(), line]),
@@ -422,9 +417,8 @@ impl ContainerRuntime {
 }
 
 pub struct ContainerAttach {
-    pub output: std::pin::Pin<
-        Box<dyn Stream<Item = Result<LogOutput, bollard::errors::Error>> + Send>,
-    >,
+    pub output:
+        std::pin::Pin<Box<dyn Stream<Item = Result<LogOutput, bollard::errors::Error>> + Send>>,
     pub input: Arc<Mutex<std::pin::Pin<Box<dyn tokio::io::AsyncWrite + Send>>>>,
 }
 
@@ -535,17 +529,16 @@ fn connect_podman_default() -> Result<Docker> {
 static GLOBAL_RUNTIME: std::sync::OnceLock<Result<Arc<ContainerRuntime>, String>> =
     std::sync::OnceLock::new();
 
-
 pub fn set_runtime(rt: ContainerRuntime) {
     let _ = GLOBAL_RUNTIME.set(Ok(Arc::new(rt)));
 }
 
-
 pub fn runtime() -> Option<Arc<ContainerRuntime>> {
-    GLOBAL_RUNTIME.get().and_then(|r| r.as_ref().ok()).map(Arc::clone)
+    GLOBAL_RUNTIME
+        .get()
+        .and_then(|r| r.as_ref().ok())
+        .map(Arc::clone)
 }
-
-
 
 pub async fn require_runtime() -> Result<Arc<ContainerRuntime>> {
     if let Some(existing) = GLOBAL_RUNTIME.get() {

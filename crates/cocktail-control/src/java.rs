@@ -1,5 +1,3 @@
-
-
 use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -101,7 +99,7 @@ pub struct EnsureJavaRequest {
     pub major: Option<u32>,
     #[serde(default)]
     pub image_type: Option<String>,
-    
+
     #[serde(default)]
     pub managed: bool,
 }
@@ -180,11 +178,7 @@ fn adoptium_arch() -> &'static str {
 }
 
 fn java_exe() -> &'static str {
-    if cfg!(windows) {
-        "java.exe"
-    } else {
-        "java"
-    }
+    if cfg!(windows) { "java.exe" } else { "java" }
 }
 
 fn root_dir() -> PathBuf {
@@ -260,7 +254,11 @@ pub fn list_installed() -> Vec<InstalledRuntime> {
             out.push(rt);
         }
     }
-    out.sort_by(|a, b| b.major.cmp(&a.major).then(a.image_type.as_str().cmp(b.image_type.as_str())));
+    out.sort_by(|a, b| {
+        b.major
+            .cmp(&a.major)
+            .then(a.image_type.as_str().cmp(b.image_type.as_str()))
+    });
     out
 }
 
@@ -378,11 +376,7 @@ fn which_java() -> Option<String> {
         })
         .or_else(|| text.lines().map(str::trim).find(|l| !l.is_empty()))?
         .to_string();
-    if line.is_empty() {
-        None
-    } else {
-        Some(line)
-    }
+    if line.is_empty() { None } else { Some(line) }
 }
 
 fn parse_java_version(text: &str) -> Option<(u32, String)> {
@@ -402,11 +396,7 @@ fn parse_java_version(text: &str) -> Option<(u32, String)> {
 }
 
 fn system_satisfies(have: u32, need: u32) -> bool {
-    if need <= 8 {
-        have == 8
-    } else {
-        have >= need
-    }
+    if need <= 8 { have == 8 } else { have >= need }
 }
 
 async fn available_lts() -> Vec<u32> {
@@ -447,7 +437,6 @@ pub async fn inventory() -> JavaInventory {
     }
 }
 
-
 pub const INSTANCE_JRE_REL: &str = "runtime/jre";
 
 pub fn instance_jre_home(workdir: &Path) -> PathBuf {
@@ -456,7 +445,6 @@ pub fn instance_jre_home(workdir: &Path) -> PathBuf {
         .fold(workdir.to_path_buf(), |p, seg| p.join(seg))
 }
 
-
 pub async fn ensure_template(major: u32, image: ImageType) -> anyhow::Result<PathBuf> {
     if let Some(rt) = find_managed(major, Some(image)).or_else(|| find_managed(major, None)) {
         return Ok(PathBuf::from(rt.java_bin));
@@ -464,8 +452,6 @@ pub async fn ensure_template(major: u32, image: ImageType) -> anyhow::Result<Pat
     let rt = install(major, image).await?;
     Ok(PathBuf::from(rt.java_bin))
 }
-
-
 
 pub async fn ensure(major: u32, image: ImageType) -> anyhow::Result<PathBuf> {
     if let Some(rt) = find_managed(major, Some(image)).or_else(|| find_managed(major, None)) {
@@ -488,15 +474,13 @@ pub async fn ensure_for_spec(
     ensure_instance_jre(workdir, java_major, mc_version).await
 }
 
-
 pub async fn ensure_instance_jre(
     workdir: &str,
     java_major: Option<u32>,
     mc_version: Option<&str>,
 ) -> anyhow::Result<PathBuf> {
     let major = java_major.unwrap_or_else(|| recommended_java_major(mc_version));
-    
-    
+
     let work = std::path::absolute(workdir)
         .with_context(|| format!("resolve instance directory {workdir}"))?;
     let dest = instance_jre_home(&work);
@@ -531,13 +515,7 @@ pub async fn ensure_instance_jre(
     })
     .await
     .map_err(|e| anyhow::anyhow!("复制实例 JRE 任务失败：{e}"))?
-    .with_context(|| {
-        format!(
-            "复制 JRE {} → {}",
-            template_home.display(),
-            dest.display()
-        )
-    })?;
+    .with_context(|| format!("复制 JRE {} → {}", template_home.display(), dest.display()))?;
 
     let bin = locate_java(&dest).ok_or_else(|| {
         anyhow::anyhow!("实例 JRE 复制后找不到 {}（{}）", java_exe(), dest.display())
@@ -595,10 +573,12 @@ fn write_instance_meta(home: &Path, major: u32, bin: &Path) -> anyhow::Result<()
         java_bin: bin.to_string_lossy().into(),
         java_home: java_home_of(bin).to_string_lossy().into(),
     };
-    fs::write(home.join(".cocktail.json"), serde_json::to_vec_pretty(&meta)?)?;
+    fs::write(
+        home.join(".cocktail.json"),
+        serde_json::to_vec_pretty(&meta)?,
+    )?;
     Ok(())
 }
-
 
 pub fn rewrite_java_command(command: Option<String>, java_bin: &Path) -> Option<String> {
     let path = java_bin.to_string_lossy().into_owned();
@@ -642,9 +622,8 @@ pub async fn install(major: u32, image: ImageType) -> anyhow::Result<InstalledRu
         .with_context(|| format!("解压 {} 失败", archive.display()))?;
     let _ = fs::remove_file(&archive);
     flatten_single_root(&staging)?;
-    let bin = locate_java(&staging).ok_or_else(|| {
-        anyhow::anyhow!("解压后找不到 {}（请检查 Adoptium 包结构）", java_exe())
-    })?;
+    let bin = locate_java(&staging)
+        .ok_or_else(|| anyhow::anyhow!("解压后找不到 {}（请检查 Adoptium 包结构）", java_exe()))?;
     chmod_bin(bin.parent().unwrap_or(&staging))?;
     let home = java_home_of(&bin);
     let meta = RuntimeMeta {
@@ -671,7 +650,8 @@ pub async fn install(major: u32, image: ImageType) -> anyhow::Result<InstalledRu
         fs::remove_dir_all(&staging)?;
     }
 
-    let installed = read_installed(&dest).ok_or_else(|| anyhow::anyhow!("安装完成但无法读取运行时"))?;
+    let installed =
+        read_installed(&dest).ok_or_else(|| anyhow::anyhow!("安装完成但无法读取运行时"))?;
     job.finish(installed.size_bytes, Some(installed.size_bytes.max(1)));
     tracing::info!(id = %installed.id, bin = %installed.java_bin, "Temurin installed");
     Ok(installed)
@@ -707,11 +687,15 @@ async fn resolve_asset(
         .error_for_status()?
         .json::<serde_json::Value>()
         .await?;
-    let row = v
-        .as_array()
-        .and_then(|a| a.first())
-        .ok_or_else(|| anyhow::anyhow!("Adoptium 没有 {os}/{arch} 的 Temurin {major} {}", image.as_str()))?;
-    let pkg = row.pointer("/binary/package").ok_or_else(|| anyhow::anyhow!("Adoptium 响应缺少 package"))?;
+    let row = v.as_array().and_then(|a| a.first()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Adoptium 没有 {os}/{arch} 的 Temurin {major} {}",
+            image.as_str()
+        )
+    })?;
+    let pkg = row
+        .pointer("/binary/package")
+        .ok_or_else(|| anyhow::anyhow!("Adoptium 响应缺少 package"))?;
     let link = pkg
         .get("link")
         .and_then(|x| x.as_str())
@@ -913,7 +897,6 @@ pub async fn ensure_api(req: EnsureJavaRequest) -> anyhow::Result<EnsureJavaResp
     })
 }
 
-
 pub fn apply_java_home(cmd: &mut tokio::process::Command, bin: &str) {
     let path = Path::new(bin);
     if !crate::util::is_java_command(bin) {
@@ -933,7 +916,6 @@ pub fn apply_java_home(cmd: &mut tokio::process::Command, bin: &str) {
         }
     }
 }
-
 
 pub fn apply_isolated_env(cmd: &mut tokio::process::Command, java_bin: &str, workdir: &str) {
     apply_java_home(cmd, java_bin);
@@ -1014,7 +996,14 @@ mod tests {
         fs::remove_dir_all(&work).unwrap();
         let bin = result.unwrap();
         assert!(bin.is_absolute());
-        assert_eq!(bin, std::env::current_dir().unwrap().join(home).join("bin").join(java_exe()));
+        assert_eq!(
+            bin,
+            std::env::current_dir()
+                .unwrap()
+                .join(home)
+                .join("bin")
+                .join(java_exe())
+        );
     }
 
     #[test]
@@ -1042,7 +1031,10 @@ mod tests {
             Some(21)
         );
         assert_eq!(parse_release_major("JAVA_VERSION=\"1.8.0_422\"\n"), Some(8));
-        assert_eq!(parse_release_major("IMPLEMENTOR=\"Eclipse Adoptium\"\n"), None);
+        assert_eq!(
+            parse_release_major("IMPLEMENTOR=\"Eclipse Adoptium\"\n"),
+            None
+        );
     }
 
     #[test]

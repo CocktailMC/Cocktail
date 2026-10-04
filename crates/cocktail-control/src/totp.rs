@@ -26,7 +26,10 @@ pub fn totp_code_at(secret: &str, unix_secs: u64, period: u64) -> Option<u32> {
 }
 
 pub fn verify_code(secret: &str, code: u32) -> bool {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     for drift in -1i64..=1 {
         let counter = ((now as i64 / 30) + drift).max(0) as u64;
         let msg = counter.to_be_bytes();
@@ -153,10 +156,10 @@ impl Sha1 {
         for chunk in self.data.chunks(64) {
             let mut w = [0u32; 80];
             for i in 0..16 {
-                w[i] = u32::from_be_bytes(chunk[i*4..i*4+4].try_into().unwrap());
+                w[i] = u32::from_be_bytes(chunk[i * 4..i * 4 + 4].try_into().unwrap());
             }
             for i in 16..80 {
-                w[i] = (w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16]).rotate_left(1);
+                w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
             }
             let mut a = self.h[0];
             let mut b = self.h[1];
@@ -170,7 +173,8 @@ impl Sha1 {
                     40..=59 => ((b & c) | (b & d) | (c & d), 0x8f1bbcdc),
                     _ => (b ^ c ^ d, 0xca62c1d6),
                 };
-                let temp = a.rotate_left(5)
+                let temp = a
+                    .rotate_left(5)
                     .wrapping_add(f)
                     .wrapping_add(e)
                     .wrapping_add(k)

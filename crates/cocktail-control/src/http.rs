@@ -1,9 +1,3 @@
-
-
-
-
-
-
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -88,9 +82,16 @@ fn looks_like_dns(s: &str) -> bool {
 }
 
 fn env_proxy_set() -> bool {
-    ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
-        .iter()
-        .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))
+    [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ]
+    .iter()
+    .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()))
 }
 
 fn explicit_proxy() -> Option<reqwest::Proxy> {
@@ -302,9 +303,13 @@ pub async fn download_to_path(
     if let Some(parent) = dest.parent() {
         if !parent.as_os_str().is_empty() {
             tracing::debug!(parent = %parent.display(), "download_to_path: ensuring parent dir exists");
-            tokio::fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("create parent dir {} for {}", parent.display(), dest.display()))?;
+            tokio::fs::create_dir_all(parent).await.with_context(|| {
+                format!(
+                    "create parent dir {} for {}",
+                    parent.display(),
+                    dest.display()
+                )
+            })?;
         }
     }
     tracing::debug!(dest = %dest.display(), "download_to_path: creating file");
@@ -316,9 +321,13 @@ pub async fn download_to_path(
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| explain(e, url))?;
         written += chunk.len() as u64;
-        file.write_all(&chunk)
-            .await
-            .with_context(|| format!("write to file {} ({} bytes written)", dest.display(), written))?;
+        file.write_all(&chunk).await.with_context(|| {
+            format!(
+                "write to file {} ({} bytes written)",
+                dest.display(),
+                written
+            )
+        })?;
         job.emit("download", written, total);
     }
     file.flush()

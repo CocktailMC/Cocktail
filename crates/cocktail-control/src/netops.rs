@@ -1,6 +1,3 @@
-
-
-
 use std::net::IpAddr;
 use std::process::{Command, Stdio};
 
@@ -93,11 +90,7 @@ pub async fn status(state: &AppState) -> NetopsStatus {
         crate::db::list_netops(&conn).unwrap_or_default()
     };
     let backend = if cfg!(windows) {
-        if privileged {
-            "netsh"
-        } else {
-            "none"
-        }
+        if privileged { "netsh" } else { "none" }
     } else if nft {
         "nftables"
     } else if iptables {
@@ -342,11 +335,7 @@ async fn apply_all(state: &AppState) -> anyhow::Result<()> {
 
 async fn game_ports(state: &AppState) -> Vec<u16> {
     let g = state.instances.read().await;
-    let mut ports: Vec<u16> = g
-        .values()
-        .map(|i| i.spec.port)
-        .filter(|p| *p > 0)
-        .collect();
+    let mut ports: Vec<u16> = g.values().map(|i| i.spec.port).filter(|p| *p > 0).collect();
     ports.sort();
     ports.dedup();
     ports
@@ -385,7 +374,9 @@ async fn game_command(state: &AppState, instance_id: Option<&str>, target: &Targ
         let _ = crate::instance::send_command(
             state,
             &id,
-            CommandRequest { command: cmd.clone() },
+            CommandRequest {
+                command: cmd.clone(),
+            },
         )
         .await;
     }
@@ -468,7 +459,13 @@ fn apply_firewall(rules: &[(NetopsRule, Vec<u16>)]) -> anyhow::Result<()> {
 #[cfg(windows)]
 fn apply_netsh(rules: &[(NetopsRule, Vec<u16>)]) -> anyhow::Result<()> {
     let mut del = std::process::Command::new("netsh");
-    del.args(["advfirewall", "firewall", "delete", "rule", "group=Cocktail"]);
+    del.args([
+        "advfirewall",
+        "firewall",
+        "delete",
+        "rule",
+        "group=Cocktail",
+    ]);
     crate::wincompat::hide_console_std(&mut del);
     let _ = del.output();
     for (rule, ports) in rules {
@@ -610,10 +607,7 @@ fn apply_iptables(rules: &[(NetopsRule, Vec<u16>)]) -> anyhow::Result<()> {
                 args.extend(jump.iter().map(|s| (*s).to_string()));
                 let status = Command::new(tool).args(&args).output()?;
                 if !status.status.success() {
-                    anyhow::bail!(
-                        "{tool}: {}",
-                        String::from_utf8_lossy(&status.stderr)
-                    );
+                    anyhow::bail!("{tool}: {}", String::from_utf8_lossy(&status.stderr));
                 }
             }
         }
@@ -651,12 +645,8 @@ fn kick_conns(cidr: &str, ports: &[u16]) {
 fn kick_conns(cidr: &str, ports: &[u16]) {
     let ip = cidr.split_once('/').map(|(a, _)| a).unwrap_or(cidr);
     if has_cmd("conntrack") {
-        let _ = Command::new("conntrack")
-            .args(["-D", "-s", ip])
-            .output();
-        let _ = Command::new("conntrack")
-            .args(["-D", "-d", ip])
-            .output();
+        let _ = Command::new("conntrack").args(["-D", "-s", ip]).output();
+        let _ = Command::new("conntrack").args(["-D", "-d", ip]).output();
     }
     if has_cmd("ss") {
         for port in ports {

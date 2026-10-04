@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RconConfig {
@@ -24,7 +24,11 @@ pub struct RconClient {
 impl RconClient {
     pub fn connect(host: &str, port: u16, password: &str) -> anyhow::Result<Self> {
         let mut s = TcpStream::connect_timeout(
-            &std::net::SocketAddr::from((host.parse().unwrap_or_else(|_| std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)), port)),
+            &std::net::SocketAddr::from((
+                host.parse()
+                    .unwrap_or_else(|_| std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+                port,
+            )),
             Duration::from_secs(3),
         )?;
         s.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -76,7 +80,6 @@ impl RconClient {
     }
 }
 
-
 pub fn extract_rcon_config(workdir: &str) -> Option<RconConfig> {
     let path = std::path::Path::new(workdir).join("server.properties");
     let raw = std::fs::read_to_string(path).ok()?;
@@ -106,7 +109,11 @@ pub fn extract_rcon_config(workdir: &str) -> Option<RconConfig> {
         }
     }
     if enabled && !password.is_empty() {
-        Some(RconConfig { host, port, password })
+        Some(RconConfig {
+            host,
+            port,
+            password,
+        })
     } else {
         None
     }

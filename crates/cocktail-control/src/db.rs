@@ -1,11 +1,6 @@
-
-
-
-
-
 use std::fs;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 pub const DB_PATH: &str = "data/cocktail.db";
 
@@ -142,10 +137,7 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     ] {
         ensure_column(conn, "panel_settings", name, decl)?;
     }
-    for (name, decl) in [
-        ("expires_at", "TEXT"),
-        ("csrf_token", "TEXT"),
-    ] {
+    for (name, decl) in [("expires_at", "TEXT"), ("csrf_token", "TEXT")] {
         ensure_column(conn, "sessions", name, decl)?;
     }
     for (name, decl) in [
@@ -172,10 +164,7 @@ fn ensure_column(conn: &Connection, table: &str, name: &str, decl: &str) -> anyh
         .any(|col| col == name);
     drop(stmt);
     if !exists {
-        conn.execute(
-            &format!("ALTER TABLE {table} ADD COLUMN {name} {decl}"),
-            [],
-        )?;
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {name} {decl}"), [])?;
     }
     Ok(())
 }
@@ -322,7 +311,10 @@ pub fn insert_agent_node(
 }
 
 pub fn delete_node(conn: &Connection, id: &str) -> anyhow::Result<()> {
-    let n = conn.execute("DELETE FROM nodes WHERE id = ?1 AND kind = 'agent'", params![id])?;
+    let n = conn.execute(
+        "DELETE FROM nodes WHERE id = ?1 AND kind = 'agent'",
+        params![id],
+    )?;
     if n == 0 {
         anyhow::bail!("节点不存在");
     }
@@ -489,11 +481,7 @@ fn write_panel(conn: &Connection, row: &PanelRow) -> anyhow::Result<()> {
 
 fn null_if_empty(s: &str) -> Option<&str> {
     let t = s.trim();
-    if t.is_empty() {
-        None
-    } else {
-        Some(t)
-    }
+    if t.is_empty() { None } else { Some(t) }
 }
 
 #[derive(Default)]
@@ -691,7 +679,10 @@ pub fn delete_session(conn: &Connection, token: &str) -> anyhow::Result<()> {
 }
 
 pub fn delete_sessions_for_admin(conn: &Connection, admin_id: i64) -> anyhow::Result<usize> {
-    let n = conn.execute("DELETE FROM sessions WHERE admin_id = ?1", params![admin_id])?;
+    let n = conn.execute(
+        "DELETE FROM sessions WHERE admin_id = ?1",
+        params![admin_id],
+    )?;
     Ok(n)
 }
 
@@ -1059,8 +1050,8 @@ pub fn mark_automation_fired(conn: &Connection, id: &str, at: &str) -> anyhow::R
 }
 
 pub fn list_admins(conn: &Connection) -> anyhow::Result<Vec<AdminRow>> {
-    let mut stmt =
-        conn.prepare("SELECT id, username, password_hash, role, created_at FROM admins ORDER BY id")?;
+    let mut stmt = conn
+        .prepare("SELECT id, username, password_hash, role, created_at FROM admins ORDER BY id")?;
     let rows = stmt.query_map([], |r| {
         Ok(AdminRow {
             id: r.get(0)?,
@@ -1106,7 +1097,6 @@ pub fn delete_admin(conn: &Connection, id: i64) -> anyhow::Result<()> {
     Ok(())
 }
 
-
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AuditRow {
     pub at: String,
@@ -1139,7 +1129,8 @@ pub fn query_audit(
     actor: Option<&str>,
     q: Option<&str>,
 ) -> anyhow::Result<(Vec<AuditRow>, usize)> {
-    let mut sql = String::from("SELECT at, action, instance_id, actor, detail FROM audit_log WHERE 1=1");
+    let mut sql =
+        String::from("SELECT at, action, instance_id, actor, detail FROM audit_log WHERE 1=1");
     let mut args: Vec<String> = Vec::new();
     if let Some(a) = action {
         sql.push_str(" AND (action = ? OR action LIKE ?)");
@@ -1196,7 +1187,6 @@ pub fn prune_audit(conn: &Connection, keep: usize) -> anyhow::Result<usize> {
     Ok(n)
 }
 
-
 pub fn admin_totp_secret(conn: &Connection, id: i64) -> anyhow::Result<Option<String>> {
     let row: Option<String> = conn
         .query_row(
@@ -1246,7 +1236,6 @@ pub fn node_last_seq(conn: &Connection, id: &str) -> anyhow::Result<i64> {
     .map(|v| v.unwrap_or(0))
     .map_err(Into::into)
 }
-
 
 pub fn set_node_protocol(conn: &Connection, id: &str, version: i64) -> anyhow::Result<()> {
     conn.execute(
