@@ -1,5 +1,7 @@
 # Cocktail Manager
 target/
+__pycache__/
+*.pyc
 data/
 **/node_modules/
 admin/dist/
