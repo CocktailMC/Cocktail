@@ -19,6 +19,7 @@ mod platform;
 mod plugin_bridge;
 mod proto;
 mod qqbot;
+mod rbac;
 mod rcon;
 pub mod secrets;
 mod sevenz;
