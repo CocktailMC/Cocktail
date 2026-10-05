@@ -436,6 +436,10 @@ export function getCsrf(): string {
   return localStorage.getItem(CSRF_KEY) ?? ''
 }
 
+// HTTPS 下加 Secure 标志，防止 token 经明文 HTTP 被中间人截获。
+// 注意 localStorage 中的 token 仍可被 XSS 读取，需配合严格 CSP 与依赖审计。
+const cookieSecure = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : ''
+
 export function setSession(session: AuthSession) {
   localStorage.setItem(TOKEN_KEY, session.token)
   if (session.csrf_token) localStorage.setItem(CSRF_KEY, session.csrf_token)
@@ -444,7 +448,7 @@ export function setSession(session: AuthSession) {
   }
   if (session.expires_at) localStorage.setItem(EXPIRES_KEY, session.expires_at)
   const maxAge = 12 * 24 * 3600
-  document.cookie = `cocktail_token=${encodeURIComponent(session.token)}; Path=/; Max-Age=${maxAge}; SameSite=Lax`
+  document.cookie = `cocktail_token=${encodeURIComponent(session.token)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${cookieSecure}`
 }
 
 export function setToken(token: string) {
@@ -457,7 +461,7 @@ export function clearSession() {
   localStorage.removeItem(CSRF_KEY)
   localStorage.removeItem(PERM_KEY)
   localStorage.removeItem(EXPIRES_KEY)
-  document.cookie = 'cocktail_token=; Path=/; Max-Age=0; SameSite=Lax'
+  document.cookie = `cocktail_token=; Path=/; Max-Age=0; SameSite=Lax${cookieSecure}`
 }
 
 export function getPermissions(): string[] {

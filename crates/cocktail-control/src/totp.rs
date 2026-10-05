@@ -31,6 +31,8 @@ pub fn verify_code(secret: &str, code: u32) -> bool {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // 将用户输入也编码为 4 字节，统一走恒定时间比较，避免时序侧信道。
+    let code_bytes = (code & 0x00ff_ffff).to_be_bytes();
     for drift in -1i64..=1 {
         let counter = ((now as i64 / 30) + drift).max(0) as u64;
         let msg = counter.to_be_bytes();
@@ -40,7 +42,8 @@ pub fn verify_code(secret: &str, code: u32) -> bool {
             | ((mac[offset + 1] as u32) << 16)
             | ((mac[offset + 2] as u32) << 8)
             | (mac[offset + 3] as u32);
-        if expected % 1_000_000 == code {
+        let expected_bytes = (expected & 0x00ff_ffff).to_be_bytes();
+        if crate::crypto::ct_eq(&expected_bytes, &code_bytes) {
             return true;
         }
     }

@@ -59,6 +59,12 @@ pub(crate) mod testutil {
         if let Some(t) = auth {
             builder = builder.header("Authorization", format!("Bearer {t}"));
         }
+        // 注入 ConnectInfo extension，模拟生产环境 axum 的
+        // into_make_service_with_connect_info 提供的对端地址。
+        // 不注入的话 login handler 提取 ConnectInfo 会失败返回 500。
+        builder = builder.extension(axum::extract::ConnectInfo(
+            "127.0.0.1:0".parse::<std::net::SocketAddr>().unwrap(),
+        ));
         let req = match body {
             Some(v) => builder
                 .header("content-type", "application/json")

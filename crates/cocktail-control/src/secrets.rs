@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 use crate::crypto;
 
 const KEY_FILE: &str = "data/master.key";
+const SALT_FILE: &str = "data/master.salt";
 const PREFIX: &str = "enc:v1:";
 
 static MASTER: OnceLock<Vec<u8>> = OnceLock::new();
@@ -12,9 +13,43 @@ fn key_path() -> PathBuf {
     PathBuf::from(KEY_FILE)
 }
 
+fn salt_path() -> PathBuf {
+    PathBuf::from(SALT_FILE)
+}
+
+/// 读取或创建每部署独立的 passphrase 盐。
+/// 盐本身不保密，但必须每部署不同，避免相同 passphrase 在多部署派生出相同密钥。
+/// 仅在 passphrase 模式下使用；hex env/file 模式直接用 32 字节密钥，跳过 HKDF。
+fn load_or_create_salt() -> Vec<u8> {
+    let path = salt_path();
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        if let Some(bytes) = crypto::unhex(text.trim()) {
+            if bytes.len() == 32 {
+                return bytes;
+            }
+        }
+    }
+    let salt = crypto::random_bytes(32);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&path, crypto::hex(&salt));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = std::fs::set_permissions(&path, perms);
+        }
+    }
+    salt
+}
+
 fn derive_from_passphrase(pass: &str) -> Vec<u8> {
-    let salt = b"cocktail-master-key-v1";
-    crypto::hkdf_sha256(pass.as_bytes(), salt, b"field-encryption", 32)
+    // 每部署独立随机盐，避免相同 passphrase 在不同部署派生出相同密钥。
+    let salt = load_or_create_salt();
+    crypto::hkdf_sha256(pass.as_bytes(), &salt, b"field-encryption", 32)
 }
 
 fn load_or_create() -> Vec<u8> {

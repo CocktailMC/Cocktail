@@ -25,6 +25,12 @@ public sealed class PluginManifest
     [JsonPropertyName("permissions")]
     public string[] Permissions { get; init; } = [];
 
+    // 可选：插件入口 DLL 的 SHA-256（小写 hex，无分隔符）。
+    // 设置后宿主在加载前校验，防止 DLL 被替换为恶意版本。
+    // 未设置时宿主仅记录 warning 并按旧逻辑加载（向后兼容）。
+    [JsonPropertyName("entryAssemblySha256")]
+    public string? EntryAssemblySha256 { get; init; }
+
     [JsonPropertyName("ui")]
     public PluginUi? Ui { get; init; }
 }

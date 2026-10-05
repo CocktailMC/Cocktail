@@ -200,6 +200,26 @@ internal sealed class PluginRegistry
                 throw new FileNotFoundException("plugin assembly missing", dll);
             }
 
+            // 校验入口 DLL 的 SHA-256（如果 manifest 声明了 entryAssemblySha256）。
+            // 防止磁盘上的 DLL 被替换为恶意版本后仍被加载执行。
+            if (!string.IsNullOrWhiteSpace(state.Manifest.EntryAssemblySha256))
+            {
+                var expected = state.Manifest.EntryAssemblySha256.Trim().ToLowerInvariant();
+                var actual = await ComputeSha256Async(dll, ct);
+                if (!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"plugin assembly hash mismatch: manifest={expected}, actual={actual}");
+                }
+                _log.LogInformation("plugin {Id} assembly hash verified", state.Manifest.Id);
+            }
+            else
+            {
+                _log.LogWarning(
+                    "plugin {Id} has no entryAssemblySha256 in manifest — loading without integrity check",
+                    state.Manifest.Id);
+            }
+
             var alc = new PluginLoadContext(dll);
             var asm = alc.LoadFromAssemblyPath(dll);
             var type = FindEntryType(asm, state.Manifest.EntryType)
@@ -290,5 +310,19 @@ internal sealed class PluginRegistry
         Directory.CreateDirectory(Path.GetDirectoryName(_statePath)!);
         var map = _plugins.ToDictionary(kv => kv.Key, kv => kv.Value.Enabled, StringComparer.OrdinalIgnoreCase);
         File.WriteAllText(_statePath, JsonSerializer.Serialize(map, PluginJson.Options));
+    }
+
+    /// <summary>
+    /// 计算文件 SHA-256，返回小写 hex 字符串（无分隔符）。
+    /// 流式读取避免大 DLL 一次性占用内存。
+    /// </summary>
+    private static async Task<string> ComputeSha256Async(string path, CancellationToken ct)
+    {
+        await using var fs = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 8192, useAsync: true);
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        var hash = await sha.ComputeHashAsync(fs, ct);
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 }

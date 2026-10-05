@@ -173,30 +173,12 @@ pub fn unhex(s: &str) -> Option<Vec<u8>> {
 }
 
 pub fn random_bytes(len: usize) -> Vec<u8> {
+    // 直接使用操作系统级 CSPRNG：rand_core::OsRng 在 Linux/macOS 走 getrandom，
+    // 在 Windows 走 BCryptGenRandom/ProcessPrng，提供密码学安全熵源。
+    // 失败时 fill_bytes 会 panic——这是正确的语义，避免静默降级到弱随机。
+    use rand_core::{OsRng, RngCore};
     let mut buf = vec![0u8; len];
-    if std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| {
-            use std::io::Read;
-            f.read_exact(&mut buf)
-        })
-        .is_ok()
-    {
-        return buf;
-    }
-    let mut seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x9e3779b97f4a7c15);
-    seed ^= std::process::id() as u64;
-    for chunk in buf.chunks_mut(8) {
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
-        let bytes = seed.to_le_bytes();
-        for (i, b) in chunk.iter_mut().enumerate() {
-            *b = bytes[i];
-        }
-    }
+    OsRng.fill_bytes(&mut buf);
     buf
 }
 
