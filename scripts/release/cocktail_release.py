@@ -557,7 +557,54 @@ def build_parser() -> argparse.ArgumentParser:
     rename.add_argument("--build", required=True)
     rename.add_argument("--dist", type=Path, required=True)
     rename.add_argument("--require", required=True, help="逗号分隔，例如 deb,rpm,tar.gz")
+
+    setver = sub.add_parser(
+        "set-version",
+        help="把 plan 出来的版本号回写到 Cargo.toml 与 package.json",
+    )
+    setver.add_argument("--version", required=True, help="cocktail 格式，如 26Q4.11.DP")
+    setver.add_argument("--build", default="", help="可选 build metadata，如 B1842")
+    setver.add_argument(
+        "--root",
+        type=Path,
+        default=Path(__file__).resolve().parents[2],
+        help="仓库根目录（默认脚本上级两级）",
+    )
     return parser
+
+
+def to_semver(version: "Version", build: str = "") -> str:
+    """26Q4.11.DP → 26.4.11-DP；带 build 则附加 +B1842。"""
+    base = f"{version.yy}.{version.quarter}.{version.major}-{version.stage}"
+    if build:
+        return f"{base}+{build}"
+    return base
+
+
+_CARGO_VERSION_RE = re.compile(r'^(\s*version\s*=\s*")([^"]*)(")', re.MULTILINE)
+_PKGJSON_VERSION_RE = re.compile(r'"version"\s*:\s*"([^"]*)"')
+
+
+def set_version(root: Path, version: "Version", build: str) -> None:
+    """把 semver 版本号写到 Cargo.toml（workspace）与 admin/package.json。"""
+    semver = to_semver(version, build)
+    cargo = root / "Cargo.toml"
+    text = cargo.read_text(encoding="utf-8")
+    new_text, n = _CARGO_VERSION_RE.subn(
+        lambda m: f'{m.group(1)}{semver}{m.group(3)}', text, count=1
+    )
+    if n == 0:
+        raise RuntimeError(f"Cargo.toml 未找到 workspace version 字段：{cargo}")
+    cargo.write_text(new_text, encoding="utf-8")
+
+    pkg = root / "admin" / "package.json"
+    if pkg.exists():
+        text = pkg.read_text(encoding="utf-8")
+        new_text, n = _PKGJSON_VERSION_RE.subn(f'"version": "{semver}"', text, count=1)
+        if n == 0:
+            raise RuntimeError(f"package.json 未找到 version 字段：{pkg}")
+        pkg.write_text(new_text, encoding="utf-8")
+
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -596,6 +643,12 @@ def main(argv: list[str] | None = None) -> int:
             paths = rename_dist(args.dist, version, rules, required)
             for path in paths:
                 print(path)
+            return 0
+        if args.command == "set-version":
+            version = parse_version(args.version)
+            build = normalize_build(args.build) if args.build else ""
+            set_version(args.root, version, build)
+            print(f"set-version: {to_semver(version, build)}")
             return 0
         decision = plan_from_args(args, rules)
         payload = decision_outputs(decision, rules)

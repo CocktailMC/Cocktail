@@ -1,9 +1,49 @@
+use std::sync::OnceLock;
+
 use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
 
 use crate::platform;
 use crate::state::SharedState;
+
+/// 把 Cargo.toml 的 semver 版本（如 `26.4.11-DP` 或 `26.4.11-DP+B1842`）
+/// 转成 Cocktail 自定义格式 `26Q4.11.DP`。build metadata 不出现在 version 字段。
+fn version_string() -> &'static str {
+    static V: OnceLock<String> = OnceLock::new();
+    V.get_or_init(|| {
+        let raw = env!("CARGO_PKG_VERSION");
+        // 去掉 build metadata（+B1842）
+        let base = raw.split('+').next().unwrap_or(raw);
+        // 拆 major.minor.<patch>-<pre>
+        let mut parts = base.splitn(3, '.');
+        let major = parts.next().unwrap_or("");
+        let minor = parts.next().unwrap_or("");
+        let rest = parts.next().unwrap_or("");
+        let (patch, pre) = match rest.split_once('-') {
+            Some((p, s)) => (p, s),
+            None => (rest, ""),
+        };
+        if pre.is_empty() {
+            format!("{major}Q{minor}.{patch}")
+        } else {
+            format!("{major}Q{minor}.{patch}.{pre}")
+        }
+    })
+}
+
+/// `26.4.11-DP` → `26Q4`（年份+季度）
+fn release_string() -> &'static str {
+    static R: OnceLock<String> = OnceLock::new();
+    R.get_or_init(|| {
+        let raw = env!("CARGO_PKG_VERSION");
+        let base = raw.split('+').next().unwrap_or(raw);
+        let mut parts = base.splitn(3, '.');
+        let major = parts.next().unwrap_or("");
+        let minor = parts.next().unwrap_or("");
+        format!("{major}Q{minor}")
+    })
+}
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -44,8 +84,8 @@ pub async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
     let (plugin_host_ok, plugins) = crate::plugin_bridge::health_snapshot(&state).await;
     Json(HealthResponse {
         name: "cocktail-control",
-        version: "26Q4.11.DP",
-        release: "26Q4",
+        version: version_string(),
+        release: release_string(),
         status: "ok",
         auth_required: !setup_required || state.env_api_token.is_some(),
         setup_required,
@@ -79,8 +119,8 @@ mod tests {
         let (status, v) = request(&state, "GET", "/api/v1/health", None, None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(v["name"], "cocktail-control");
-        assert_eq!(v["version"], "26Q4.11.DP");
-        assert_eq!(v["release"], "26Q4");
+        assert_eq!(v["version"], super::version_string());
+        assert_eq!(v["release"], super::release_string());
         assert_eq!(v["status"], "ok");
         assert!(v["setup_required"].as_bool().unwrap());
     }

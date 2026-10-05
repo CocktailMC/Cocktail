@@ -3,7 +3,7 @@ name = "cocktail-control"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Cocktail Manager control plane — Minecraft server orchestration (v0.1 / 26Q3)"
+description = "Cocktail Manager control plane — Minecraft server orchestration"
 
 [[bin]]
 name = "cocktail-control"

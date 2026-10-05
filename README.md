@@ -6,7 +6,7 @@
 
 <p align="center">
   单机多实例的 Minecraft 控制面<br>
-  <sub>v26Q4.11.DP · Developer Preview</sub>
+  <sub>Developer Preview · 版本由 git tag 自动驱动</sub>
 </p>
 
 <p align="center">
