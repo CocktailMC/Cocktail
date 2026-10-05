@@ -355,6 +355,27 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
     let mc_version = instance.spec.mc_version.clone();
     let events = state.events.clone();
 
+    // 自动修复：用户可能手动把启动命令设成了 `java -jar server.jar`，
+    // 但实际安装的是 NeoForge/Forge 26+（args 文件布局，workdir 无 server.jar）。
+    // 此时尝试用 detect_modloader_startup 重新探测正确的启动命令，避免启动失败。
+    let workdir_path = std::path::Path::new(&workdir);
+    if command.as_deref() == Some("java")
+        && args.iter().any(|a| a == "-jar" || a.contains("server.jar"))
+        && !files::jar_exists(&workdir, "server.jar")
+        && super::versions::has_modloader_startup(workdir_path)
+    {
+        if let Some((cmd, a)) = super::versions::detect_modloader_startup(workdir_path) {
+            tracing::info!(
+                instance_id,
+                "auto-replacing java -jar server.jar with modloader args file"
+            );
+            command = Some(cmd.clone());
+            args = a.clone();
+            instance.spec.command = Some(cmd);
+            instance.spec.args = a;
+        }
+    }
+
     if command.is_none() || (command.as_deref() == Some("java") && args.is_empty()) {
         if files::jar_exists(&workdir, "server.jar") {
             let (cmd, a) = util::java_jar_startup("server.jar");

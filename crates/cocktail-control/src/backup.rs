@@ -341,12 +341,53 @@ pub fn restore_snapshot(
     fs::create_dir_all(dest_root)?;
     let mut written = 0u64;
     let mut expected = BTreeSet::new();
+    let canonical_dest = dest_root
+        .canonicalize()
+        .unwrap_or_else(|_| dest_root.to_path_buf());
     for f in &snap.files {
-        expected.insert(f.path.clone());
-        let target = dest_root.join(&f.path);
-        if let Some(dir) = target.parent() {
-            fs::create_dir_all(dir)?;
+        // 防路径穿越：f.path 来自 snapshot 文件，可能被外部篡改或来自导入的备份。
+        // 拒绝任何含 ParentDir / RootDir / Windows 盘符前缀的路径，避免写出 dest 之外。
+        let rel = Path::new(&f.path);
+        let bad_component = rel.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        });
+        if bad_component {
+            tracing::warn!(
+                instance_id,
+                id,
+                path = %f.path,
+                "skipping snapshot file with escape component (.., absolute, or drive prefix)"
+            );
+            continue;
         }
+        // 二次校验：canonicalize 后必须仍在 dest_root 之下（防符号链接等绕过）。
+        let target = dest_root.join(rel);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        // canonicalize target；失败（文件还不存在）则用 canonical_dest + rel 拼接，
+        // 保证与 canonical_dest 的路径前缀一致（Windows canonicalize 会加 \\?\ 前缀，
+        // 直接用 target.clone() 会因前缀不一致导致 starts_with 误判）。
+        let canonical_target = match target.canonicalize() {
+            Ok(c) => c,
+            Err(_) => canonical_dest.join(rel),
+        };
+        if !canonical_target.starts_with(&canonical_dest) {
+            tracing::warn!(
+                instance_id,
+                id,
+                path = %f.path,
+                target = %canonical_target.display(),
+                "skipping snapshot file escaping dest_root after canonicalize"
+            );
+            continue;
+        }
+        expected.insert(f.path.clone());
         let mut out = fs::File::create(&target)?;
         for c in &f.chunks {
             let data = load_object(instance_id, c)?;
