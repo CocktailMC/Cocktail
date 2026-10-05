@@ -184,9 +184,20 @@ pub async fn run_plane() -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| "0.0.0.0:11011".parse().unwrap());
+    if !addr.ip().is_loopback() {
+        tracing::warn!(
+            %addr,
+            "控制面板监听非环回地址。HTTP 明文 + 默认凭据传输不安全：\
+             请在前端部署 TLS 反代（如 Caddy/Nginx），或显式设置 COCKTAIL_BIND=127.0.0.1:11011"
+        );
+    }
     tracing::info!(%addr, "Cocktail Manager control plane v0.1 listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

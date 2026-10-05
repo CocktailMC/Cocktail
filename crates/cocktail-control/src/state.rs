@@ -135,14 +135,15 @@ impl AppState {
     }
 
     pub async fn bearer_ok(&self, token: &str) -> bool {
-        if self
-            .env_api_token
-            .as_ref()
-            .is_some_and(|expected| expected == token)
-        {
-            return true;
+        // 全部走恒定时间比较，避免时序侧信道泄漏 token 前缀。
+        if let Some(expected) = self.env_api_token.as_ref() {
+            if crate::crypto::ct_eq(expected.as_bytes(), token.as_bytes()) {
+                return true;
+            }
         }
-        if !self.plugin_token.is_empty() && self.plugin_token == token {
+        if !self.plugin_token.is_empty()
+            && crate::crypto::ct_eq(self.plugin_token.as_bytes(), token.as_bytes())
+        {
             return true;
         }
         let conn = self.db.get().expect("db pool");
@@ -150,12 +151,14 @@ impl AppState {
     }
 
     pub async fn token_role(&self, token: &str) -> Option<(String, String)> {
-        if self
+        // 与 bearer_ok 保持一致：恒定时间比较，避免时序侧信道。
+        let env_match = self
             .env_api_token
             .as_ref()
-            .is_some_and(|expected| expected == token)
-            || (!self.plugin_token.is_empty() && self.plugin_token == token)
-        {
+            .is_some_and(|expected| crate::crypto::ct_eq(expected.as_bytes(), token.as_bytes()));
+        let plugin_match = !self.plugin_token.is_empty()
+            && crate::crypto::ct_eq(self.plugin_token.as_bytes(), token.as_bytes());
+        if env_match || plugin_match {
             let conn = self.db.get().expect("db pool");
             return db::superadmin(&conn)
                 .ok()

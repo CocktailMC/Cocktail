@@ -30,7 +30,11 @@ pub async fn current_admin(
         )
     })?;
     let conn = state.db.get().expect("db pool");
-    if state.env_api_token.as_ref().is_some_and(|t| t == &token) {
+    if state
+        .env_api_token
+        .as_ref()
+        .is_some_and(|t| crate::crypto::ct_eq(t.as_bytes(), token.as_bytes()))
+    {
         return crate::db::superadmin(&conn).ok().flatten().ok_or_else(|| {
             (
                 StatusCode::UNAUTHORIZED,

@@ -33,7 +33,12 @@ pub fn login_allowed(key: &str) -> bool {
     let now = Instant::now();
     let mut table = match fail_table().lock() {
         Ok(t) => t,
-        Err(_) => return true,
+        // mutex 中毒说明上游发生过 panic，此时拒绝登录比放行更安全。
+        // 修复人员需重启进程清除中毒状态。
+        Err(_) => {
+            tracing::error!("login fail table mutex poisoned — denying login");
+            return false;
+        }
     };
     table.retain(|_, s| {
         now.saturating_duration_since(s.first) < LOGIN_WINDOW
@@ -203,7 +208,9 @@ pub fn permissions(role: &str) -> Vec<&'static str> {
             "netops.write",
             "nodes",
         ],
-        _ => vec![
+        // 超管显式分支：包含全部权限，含 users 与 2fa.manage。
+        // 注意 can() 已对 "superadmin" 直接放行，这里只是 permissions() 的返回值。
+        "superadmin" => vec![
             "view",
             "start",
             "stop",
@@ -240,6 +247,9 @@ pub fn permissions(role: &str) -> Vec<&'static str> {
             "users",
             "2fa.manage",
         ],
+        // 未知角色 fail-closed：仅授予最小 view 权限，
+        // 防止 DB 中出现非法 role 字符串时静默获得超管级权限。
+        _ => vec!["view"],
     }
 }
 

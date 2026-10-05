@@ -136,16 +136,14 @@ pub async fn setup(
 
 pub async fn login(
     State(state): State<SharedState>,
-    headers: HeaderMap,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
     Json(body): Json<LoginRequest>,
 ) -> impl IntoResponse {
     let username = body.username.trim().to_string();
-    let peer = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "local".into());
+    // 直接使用 TCP 对端 IP 作为限流键，不再信任 X-Forwarded-For，
+    // 否则攻击者可以通过伪造该头绕过登录限速。
+    // 如需在反代后保留真实客户端 IP，请在反代层做 SNAT 而非依赖应用层头。
+    let peer = connect_info.0.ip().to_string();
     let rate_key = format!("{peer}|{}", username.to_ascii_lowercase());
 
     let conn = state.db.get().expect("db pool");
@@ -340,7 +338,11 @@ pub async fn totp_setup(
         )
     })?;
     let conn = state.db.get().expect("db pool");
-    let admin = if state.env_api_token.as_ref().is_some_and(|t| t == &token) {
+    let admin = if state
+        .env_api_token
+        .as_ref()
+        .is_some_and(|t| crate::crypto::ct_eq(t.as_bytes(), token.as_bytes()))
+    {
         crate::db::superadmin(&conn).ok().flatten()
     } else {
         crate::db::session_admin(&conn, &token).ok().flatten()
@@ -381,7 +383,11 @@ pub async fn totp_verify(
         )
     })?;
     let conn = state.db.get().expect("db pool");
-    let admin = if state.env_api_token.as_ref().is_some_and(|t| t == &token) {
+    let admin = if state
+        .env_api_token
+        .as_ref()
+        .is_some_and(|t| crate::crypto::ct_eq(t.as_bytes(), token.as_bytes()))
+    {
         crate::db::superadmin(&conn).ok().flatten()
     } else {
         crate::db::session_admin(&conn, &token).ok().flatten()
@@ -426,7 +432,11 @@ pub async fn totp_status(
         )
     })?;
     let conn = state.db.get().expect("db pool");
-    let admin = if state.env_api_token.as_ref().is_some_and(|t| t == &token) {
+    let admin = if state
+        .env_api_token
+        .as_ref()
+        .is_some_and(|t| crate::crypto::ct_eq(t.as_bytes(), token.as_bytes()))
+    {
         crate::db::superadmin(&conn).ok().flatten()
     } else {
         crate::db::session_admin(&conn, &token).ok().flatten()
@@ -457,7 +467,11 @@ pub async fn totp_disable(
         )
     })?;
     let conn = state.db.get().expect("db pool");
-    let admin = if state.env_api_token.as_ref().is_some_and(|t| t == &token) {
+    let admin = if state
+        .env_api_token
+        .as_ref()
+        .is_some_and(|t| crate::crypto::ct_eq(t.as_bytes(), token.as_bytes()))
+    {
         crate::db::superadmin(&conn).ok().flatten()
     } else {
         crate::db::session_admin(&conn, &token).ok().flatten()
