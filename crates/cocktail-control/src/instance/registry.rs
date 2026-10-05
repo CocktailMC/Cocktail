@@ -2355,3 +2355,101 @@ pub async fn bulk_action(state: &AppState, req: BulkActionRequest) -> BulkAction
     );
     BulkActionResult { ok, failed }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_port_free;
+    use crate::instance::{Instance, InstanceSpec, InstanceStatus, RuntimeKind};
+    use crate::state::test_state;
+
+    fn spec(name: &str, port: u16, node_id: &str) -> InstanceSpec {
+        InstanceSpec {
+            name: name.into(),
+            workdir: format!("data/instances/{name}"),
+            command: None,
+            args: Vec::new(),
+            memory_mib: 1024,
+            core: "vanilla".into(),
+            port,
+            auto_restart: false,
+            eula_accepted: false,
+            webhook_url: None,
+            runtime: RuntimeKind::Process,
+            docker_image: None,
+            cpu_limit: None,
+            tags: Vec::new(),
+            group: None,
+            node_id: node_id.into(),
+            desired_running: false,
+            backup_keep: 7,
+            backup_hour: None,
+            java_major: None,
+            mc_version: None,
+        }
+    }
+
+    async fn insert(
+        state: &crate::state::SharedState,
+        id: &str,
+        port: u16,
+        status: InstanceStatus,
+    ) {
+        let mut inst = Instance::with_id(id.into(), spec(id, port, "local"));
+        inst.status = status;
+        state.instances.write().await.insert(id.into(), inst);
+    }
+
+    #[tokio::test]
+    async fn port_free_when_no_instances() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(&tmp.path().join("t.db")).await;
+        ensure_port_free(&state, 25565, "local", None)
+            .await
+            .expect("port should be free");
+    }
+
+    #[tokio::test]
+    async fn port_conflicts_with_assigned_instance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(&tmp.path().join("t.db")).await;
+        insert(&state, "a", 25565, InstanceStatus::Stopped).await;
+        let err = ensure_port_free(&state, 25565, "local", None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("already assigned"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn port_conflicts_with_running_instance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(&tmp.path().join("t.db")).await;
+        insert(&state, "a", 25565, InstanceStatus::Running).await;
+        let err = ensure_port_free(&state, 25565, "local", None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("already in use"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn own_port_is_exempt_when_updating() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(&tmp.path().join("t.db")).await;
+        insert(&state, "a", 25565, InstanceStatus::Running).await;
+        // the instance itself keeps its port during an update
+        ensure_port_free(&state, 25565, "local", Some("a"))
+            .await
+            .expect("self port is exempt");
+    }
+
+    #[tokio::test]
+    async fn same_port_on_other_node_is_allowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(&tmp.path().join("t.db")).await;
+        let mut inst = Instance::with_id("a".into(), spec("a", 25565, "agent-1"));
+        inst.status = InstanceStatus::Running;
+        state.instances.write().await.insert("a".into(), inst);
+        ensure_port_free(&state, 25565, "local", None)
+            .await
+            .expect("different node, port is free");
+    }
+}

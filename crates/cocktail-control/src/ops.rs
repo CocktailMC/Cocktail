@@ -55,7 +55,7 @@ pub fn spawn(state: &SharedState) {
 
 async fn tick(state: &SharedState) -> anyhow::Result<()> {
     let cfg = {
-        let conn = state.db.lock().await;
+        let conn = state.db.get().expect("db pool");
         crate::db::panel(&conn)?
     };
     let prev = state.ops.prev.lock().await.clone();
@@ -234,7 +234,7 @@ fn fmt_bps(n: f32) -> String {
 
 pub async fn send_now(state: &SharedState, text: &str) -> anyhow::Result<()> {
     let cfg = {
-        let conn = state.db.lock().await;
+        let conn = state.db.get().expect("db pool");
         crate::db::panel(&conn)?
     };
     let qq = QqConfig {
@@ -249,7 +249,7 @@ pub async fn send_now(state: &SharedState, text: &str) -> anyhow::Result<()> {
 
 pub async fn notify_event(state: &SharedState, title: &str, body: &str) {
     let cfg = {
-        let conn = state.db.lock().await;
+        let conn = state.db.get().expect("db pool");
         crate::db::panel(&conn).ok()
     };
     let Some(cfg) = cfg else {

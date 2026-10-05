@@ -52,7 +52,7 @@ pub async fn ingest_line(state: &AppState, instance_id: &str, line: &str) {
     let ping = PING.get_or_init(|| Regex::new(r"(?i)(\S+)'s ping:\s*([0-9]+)").unwrap());
 
     let now = Utc::now().to_rfc3339();
-    let conn = state.db.lock().await;
+    let conn = state.db.get().expect("db pool");
 
     if let Some(c) = uuid.captures(line) {
         let _ = db::upsert_player(
@@ -154,7 +154,7 @@ pub async fn list_enriched(
     online_names: &[String],
 ) -> Vec<PlayerInfo> {
     let profiles = {
-        let conn = state.db.lock().await;
+        let conn = state.db.get().expect("db pool");
         db::list_players(&conn, instance_id).unwrap_or_default()
     };
     let mut by_name: HashMap<String, db::PlayerRow> = HashMap::new();
@@ -206,7 +206,7 @@ pub async fn history(state: &AppState, instance_id: &str) -> Vec<PlayerInfo> {
             .unwrap_or_default()
     };
     let rows = {
-        let conn = state.db.lock().await;
+        let conn = state.db.get().expect("db pool");
         db::list_players(&conn, instance_id).unwrap_or_default()
     };
     rows.into_iter()

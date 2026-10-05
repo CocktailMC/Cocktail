@@ -1,20 +1,49 @@
 use std::fs;
+use std::path::Path;
 
+use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, OptionalExtension, params};
 
 pub const DB_PATH: &str = "data/cocktail.db";
 
+pub type DbPool = r2d2::Pool<SqliteConnectionManager>;
+
 pub fn open() -> anyhow::Result<Connection> {
     fs::create_dir_all("data")?;
     let conn = Connection::open(DB_PATH)?;
-    conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.pragma_update(None, "busy_timeout", 5000)?;
-    migrate(&conn)?;
+    init_connection(&conn)?;
     Ok(conn)
 }
 
-fn migrate(conn: &Connection) -> anyhow::Result<()> {
+/// Opens a pooled SQLite connection set. `journal_mode=WAL`, `foreign_keys`,
+/// `busy_timeout` and the schema migration run on every pooled connection.
+pub fn pool() -> anyhow::Result<DbPool> {
+    pool_at(Path::new(DB_PATH))
+}
+
+pub fn pool_at(path: &Path) -> anyhow::Result<DbPool> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let manager = SqliteConnectionManager::file(path).with_init(|conn| {
+        init_connection(conn)?;
+        Ok(())
+    });
+    let pool = r2d2::Pool::builder().max_size(8).build(manager)?;
+    // Warm one connection so schema migration runs before first request.
+    pool.get()?;
+    Ok(pool)
+}
+
+fn init_connection(conn: &Connection) -> rusqlite::Result<()> {
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "busy_timeout", 5000)?;
+    migrate(conn)?;
+    Ok(())
+}
+
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS panel_settings (
@@ -156,7 +185,7 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn ensure_column(conn: &Connection, table: &str, name: &str, decl: &str) -> anyhow::Result<()> {
+fn ensure_column(conn: &Connection, table: &str, name: &str, decl: &str) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let exists = stmt
         .query_map([], |r| r.get::<_, String>(1))?

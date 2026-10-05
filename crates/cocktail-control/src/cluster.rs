@@ -23,7 +23,7 @@ pub async fn agent_ws(
     State(state): State<SharedState>,
 ) -> impl IntoResponse {
     let token = q.token;
-    let conn = state.db.lock().await;
+    let conn = state.db.get().expect("db pool");
     let node = match find_agent_node(&conn, &token) {
         Ok(Some(n)) => n,
         _ => {
@@ -134,7 +134,7 @@ async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
             arch,
             protocol_version,
         } => {
-            let conn = state.db.lock().await;
+            let conn = state.db.get().expect("db pool");
             let _ = db::set_node_protocol(&conn, node_id, protocol_version as i64);
             drop(conn);
             state
@@ -144,7 +144,7 @@ async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
                 .entry(node_id.to_string())
                 .or_default()
                 .protocol_version = protocol_version;
-            let conn = state.db.lock().await;
+            let conn = state.db.get().expect("db pool");
             let _ = db::touch_node(&conn, node_id, Some(&hostname), Some(&os), Some(&arch));
         }
         AgentUp::Heartbeat {
@@ -155,7 +155,7 @@ async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
             nic_stats,
             tcp_states,
         } => {
-            let conn = state.db.lock().await;
+            let conn = state.db.get().expect("db pool");
             let _ = db::touch_node(&conn, node_id, None, None, None);
             drop(conn);
             let mut live = state.node_live.write().await;
@@ -220,7 +220,7 @@ async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
             }
         }
         AgentUp::Ack { seq } => {
-            let conn = state.db.lock().await;
+            let conn = state.db.get().expect("db pool");
             let _ = db::set_node_seq(&conn, node_id, seq as i64);
             drop(conn);
             if let Some(entry) = state.node_live.write().await.get_mut(node_id) {
@@ -245,7 +245,7 @@ pub async fn send_down(
 }
 
 pub async fn list_views(state: &crate::state::AppState) -> anyhow::Result<Vec<db::NodeView>> {
-    let conn = state.db.lock().await;
+    let conn = state.db.get().expect("db pool");
     let mut nodes = db::list_nodes(&conn)?;
     drop(conn);
     let agents = state.agents.lock().await;
@@ -293,7 +293,7 @@ pub async fn create_node(
     let token = format!("cn_{}", uuid::Uuid::new_v4());
     let hash = auth::hash_password(&token)?;
     let id = uuid::Uuid::new_v4().to_string();
-    let conn = state.db.lock().await;
+    let conn = state.db.get().expect("db pool");
     db::insert_agent_node(&conn, &id, name, &hash)?;
     let row = db::get_node(&conn, &id)?.ok_or_else(|| anyhow::anyhow!("node insert failed"))?;
     drop(conn);
@@ -317,7 +317,7 @@ pub async fn delete_node(state: &crate::state::AppState, id: &str) -> anyhow::Re
     if used {
         anyhow::bail!("该节点上仍有实例，请先迁移或删除");
     }
-    let conn = state.db.lock().await;
+    let conn = state.db.get().expect("db pool");
     db::delete_node(&conn, id)?;
     drop(conn);
     crate::util::audit("node.delete", None, serde_json::json!({ "id": id }), "api");
@@ -328,6 +328,6 @@ pub async fn node_exists(state: &crate::state::AppState, id: &str) -> bool {
     if crate::instance::is_local_node(id) {
         return true;
     }
-    let conn = state.db.lock().await;
+    let conn = state.db.get().expect("db pool");
     db::get_node(&conn, id).ok().flatten().is_some()
 }

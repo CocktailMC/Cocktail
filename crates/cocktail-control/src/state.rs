@@ -39,7 +39,7 @@ pub struct AppState {
     pub events: broadcast::Sender<InstanceEvent>,
     pub log_buffers: RwLock<HashMap<String, VecDeque<LogLine>>>,
     pub metric_history: RwLock<HashMap<String, VecDeque<instance::MetricSample>>>,
-    pub db: Mutex<rusqlite::Connection>,
+    pub db: crate::db::DbPool,
     pub agents: Mutex<HashMap<String, mpsc::UnboundedSender<AgentDown>>>,
     pub http: reqwest::Client,
     pub ops: OpsRuntime,
@@ -67,11 +67,16 @@ impl AppState {
     pub fn new() -> Self {
         let (events, _) = broadcast::channel(2048);
         crate::http::attach_events(events.clone());
-        let db = db::open().expect("open sqlite database (data/cocktail.db)");
-        if let Err(e) = db::ensure_local_node(&db) {
-            tracing::warn!(error = %e, "ensure local node");
-        }
-        let (instances, schedules) = hydrate_state(&db);
+        let db = db::pool().expect("open sqlite database (data/cocktail.db)");
+        let (instances, schedules, setup_pending) = {
+            let conn = db.get().expect("db pool");
+            if let Err(e) = db::ensure_local_node(&conn) {
+                tracing::warn!(error = %e, "ensure local node");
+            }
+            let (instances, schedules) = hydrate_state(&conn);
+            let setup_pending = crate::auth::setup_required(&conn).unwrap_or(true);
+            (instances, schedules, setup_pending)
+        };
         let bind = std::env::var("COCKTAIL_BIND")
             .ok()
             .filter(|s| !s.is_empty())
@@ -88,14 +93,13 @@ impl AppState {
         let http = crate::http::builder()
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        let setup_pending = crate::auth::setup_required(&db).unwrap_or(true);
         let state = Self {
             instances: RwLock::new(instances),
             schedules: RwLock::new(schedules),
             events,
             log_buffers: RwLock::new(HashMap::new()),
             metric_history: RwLock::new(HashMap::new()),
-            db: Mutex::new(db),
+            db,
             agents: Mutex::new(HashMap::new()),
             http,
             ops: OpsRuntime::new(),
@@ -121,7 +125,7 @@ impl AppState {
     }
 
     pub async fn effective_webhook(&self) -> Option<String> {
-        let conn = self.db.lock().await;
+        let conn = self.db.get().expect("db pool");
         let row = db::panel(&conn).ok();
         drop(conn);
         if let Some(url) = row.and_then(|r| r.webhook_url).filter(|s| !s.is_empty()) {
@@ -141,7 +145,7 @@ impl AppState {
         if !self.plugin_token.is_empty() && self.plugin_token == token {
             return true;
         }
-        let conn = self.db.lock().await;
+        let conn = self.db.get().expect("db pool");
         db::session_lookup(&conn, token).ok().flatten().is_some()
     }
 
@@ -152,13 +156,13 @@ impl AppState {
             .is_some_and(|expected| expected == token)
             || (!self.plugin_token.is_empty() && self.plugin_token == token)
         {
-            let conn = self.db.lock().await;
+            let conn = self.db.get().expect("db pool");
             return db::superadmin(&conn)
                 .ok()
                 .flatten()
                 .map(|a| (a.role, String::new()));
         }
-        let conn = self.db.lock().await;
+        let conn = self.db.get().expect("db pool");
         db::session_lookup(&conn, token)
             .ok()
             .flatten()
@@ -166,7 +170,7 @@ impl AppState {
     }
 
     pub async fn purge_sessions(&self) {
-        let conn = self.db.lock().await;
+        let conn = self.db.get().expect("db pool");
         let _ = db::purge_expired_sessions(&conn);
     }
 
@@ -232,7 +236,7 @@ impl AppState {
         let schedules = self.schedules.read().await.clone();
 
         {
-            let conn = self.db.lock().await;
+            let conn = self.db.get().expect("db pool");
             db::replace_instances(&conn, &instances)?;
         }
 
@@ -265,6 +269,38 @@ impl AppState {
             .map(|b| b.iter().cloned().collect())
             .unwrap_or_default()
     }
+}
+
+/// Builds an isolated `AppState` for integration tests: fresh temp-dir SQLite
+/// pool, no env lookups, no plugin host, no persisted `state.json`.
+#[cfg(test)]
+pub(crate) async fn test_state(db_path: &std::path::Path) -> SharedState {
+    let (events, _) = broadcast::channel(2048);
+    let db = crate::db::pool_at(db_path).expect("test db pool");
+    {
+        let conn = db.get().expect("db pool");
+        crate::db::ensure_local_node(&conn).expect("ensure local node");
+    }
+    Arc::new(AppState {
+        instances: RwLock::new(HashMap::new()),
+        schedules: RwLock::new(Vec::new()),
+        events,
+        log_buffers: RwLock::new(HashMap::new()),
+        metric_history: RwLock::new(HashMap::new()),
+        db,
+        agents: Mutex::new(HashMap::new()),
+        http: reqwest::Client::new(),
+        ops: OpsRuntime::new(),
+        feed: RwLock::new(VecDeque::new()),
+        node_live: RwLock::new(HashMap::new()),
+        plugin_host: String::new(),
+        plugin_token: String::new(),
+        plugins: std::sync::Mutex::new(crate::plugin_bridge::PluginRegistry::default()),
+        plane: OnceLock::new(),
+        env_api_token: None,
+        env_webhook_url: None,
+        bind: "127.0.0.1:0".into(),
+    })
 }
 
 fn hydrate_state(db: &rusqlite::Connection) -> (HashMap<String, Instance>, Vec<Schedule>) {

@@ -338,7 +338,7 @@ async fn auth_middleware(
         return next.run(req).await;
     }
 
-    let conn = state.db.lock().await;
+    let conn = state.db.get().expect("db pool");
     let needs_setup = crate::auth::setup_required(&conn).unwrap_or(true);
     drop(conn);
     if needs_setup {
@@ -393,7 +393,7 @@ async fn auth_middleware(
         || (!state.plugin_token.is_empty() && state.plugin_token == token);
     let (role, csrf, actor) = if is_machine {
         let owner = {
-            let conn = state.db.lock().await;
+            let conn = state.db.get().expect("db pool");
             crate::db::superadmin(&conn).ok().flatten()
         };
         match owner {
@@ -408,7 +408,7 @@ async fn auth_middleware(
         }
     } else {
         let session = {
-            let conn = state.db.lock().await;
+            let conn = state.db.get().expect("db pool");
             crate::db::session_lookup(&conn, &token).ok().flatten()
         };
         match session {

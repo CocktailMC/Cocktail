@@ -88,14 +88,14 @@ pub async fn create(state: &SharedState, req: CreateAutomation) -> anyhow::Resul
     if row.name.is_empty() {
         anyhow::bail!("名称不能为空");
     }
-    let conn = state.db.lock().await;
+    let conn = state.db.get().expect("db pool");
     crate::db::insert_automation(&conn, &row)?;
     Ok(row)
 }
 
 pub async fn tick(state: &SharedState) {
     let rules = {
-        let conn = state.db.lock().await;
+        let conn = state.db.get().expect("db pool");
         crate::db::list_automations(&conn, None).unwrap_or_default()
     };
     for rule in rules {
@@ -158,7 +158,7 @@ pub async fn on_crash(state: &SharedState, instance_id: &str, name: &str) {
     )
     .await;
     let rules = {
-        let conn = state.db.lock().await;
+        let conn = state.db.get().expect("db pool");
         crate::db::list_automations(&conn, Some(instance_id)).unwrap_or_default()
     };
     for rule in rules {
@@ -182,7 +182,7 @@ async fn fire(state: &SharedState, rule: &AutomationRow) {
     }
     let now = Utc::now().to_rfc3339();
     {
-        let conn = state.db.lock().await;
+        let conn = state.db.get().expect("db pool");
         let _ = crate::db::mark_automation_fired(&conn, &rule.id, &now);
     }
     emit(

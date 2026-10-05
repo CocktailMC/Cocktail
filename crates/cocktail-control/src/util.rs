@@ -579,7 +579,7 @@ pub async fn notify_webhook(url: &str, instance_id: &str, status: &str, name: &s
 
 #[cfg(test)]
 mod tests {
-    use super::{minecraft_ready, parse_command_line};
+    use super::{inject_jvm_memory, minecraft_ready, parse_command_line};
 
     #[test]
     fn splits_quoted_startup() {
@@ -596,5 +596,40 @@ mod tests {
         ));
         assert!(!minecraft_ready("Downloading mojang_1.21.10.jar"));
         assert!(!minecraft_ready("> tps"));
+    }
+
+    #[test]
+    fn jvm_memory_injected_when_missing() {
+        let mut args = vec!["-jar".to_string(), "server.jar".to_string()];
+        inject_jvm_memory(&mut args, 4096);
+        // -Xms is inserted first, then -Xmx lands after it
+        assert_eq!(
+            &args[..2],
+            &["-Xms2048M".to_string(), "-Xmx4096M".to_string()]
+        );
+        assert!(args.contains(&"-jar".to_string()));
+    }
+
+    #[test]
+    fn jvm_memory_respects_existing_flags() {
+        let mut args = vec![
+            "-Xmx2G".to_string(),
+            "-Xms1G".to_string(),
+            "-jar".to_string(),
+        ];
+        inject_jvm_memory(&mut args, 4096);
+        // user flags win; nothing injected
+        assert!(!args.iter().any(|a| a.starts_with("-Xmx4")));
+        assert_eq!(args[0], "-Xmx2G");
+        assert_eq!(args[1], "-Xms1G");
+    }
+
+    #[test]
+    fn jvm_memory_small_heaps_clamp_xms() {
+        let mut args = Vec::new();
+        inject_jvm_memory(&mut args, 256);
+        assert_eq!(args[0], "-Xms256M");
+        // xms = max(128, 256) = 256 for tiny heaps
+        assert_eq!(args[1], "-Xmx256M");
     }
 }

@@ -1140,3 +1140,33 @@ async fn metric_ticker(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_script_command;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn plain_binary_passes_through() {
+        let (bin, out) = wrap_script_command("java", &args(&["-jar", "server.jar", "nogui"]));
+        assert_eq!(bin, "java");
+        assert_eq!(out, args(&["-jar", "server.jar", "nogui"]));
+    }
+
+    #[test]
+    fn batch_script_wrapped_in_cmd() {
+        let (bin, out) = wrap_script_command("C:/servers/start.bat", &args(&["--nogui"]));
+        assert_eq!(bin, "cmd.exe");
+        assert_eq!(out, args(&["/C", "C:/servers/start.bat", "--nogui"]));
+    }
+
+    #[test]
+    fn shell_script_wrapped_in_sh() {
+        let (bin, out) = wrap_script_command("start.sh", &args(&["--nogui"]));
+        assert_eq!(bin, "sh");
+        assert_eq!(out, args(&["start.sh", "--nogui"]));
+    }
+}
