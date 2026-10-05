@@ -6,7 +6,7 @@
 
 <p align="center">
   单机多实例的 Minecraft 控制面<br>
-  <sub>v0.1 · 26Q3</sub>
+  <sub>v26Q4.11.DP · Developer Preview</sub>
 </p>
 
 <p align="center">
@@ -40,7 +40,7 @@
 | 实例克隆（自动选端口） | 启动前预检（端口/磁盘/EULA） | 备份恢复预览（条目/世界/插件/level.dat） |
 | 世界 zip 下载与上传 | MC 版本自动识别与比对 | 审计日志落 SQLite，可检索、按操作者过滤 |
 
-Docker 运行时可设 `--memory` / `--cpus`。本机进程硬限、多节点 Agent 尚未提供。
+Docker 运行时可设 `--memory` / `--cpus`。多节点 Agent 已具备基础能力（心跳、远程命令下发），但断线期间的命令 seq/ack 持久化、远端网络监控尚未实现。
 
 ---
 
@@ -70,26 +70,54 @@ cd admin && npm install && npm run dev
 
 会话 12 天过期，写请求需带 `X-Cocktail-CSRF`；同一用户名连续 5 次登录失败锁定 15 分钟。
 
-可选环境变量：
+### 安全特性
+
+| 域 | 实现 |
+|:---|:---|
+| 密码哈希 | Argon2id + 随机盐；密码长度 8–128 字符 |
+| 会话 | UUID 拼接 token，12 天 TTL；写请求强制 `X-Cocktail-CSRF` 头 |
+| 2FA | TOTP（RFC 6238），±1 窗口；登录时代码校验用恒定时间比较 |
+| 限流 | 同 IP+用户名 5 次/10 分钟；从 `ConnectInfo<SocketAddr>` 取真实对端，不信任 `X-Forwarded-For` |
+| 凭据存储 | 后端 `HttpOnly; SameSite=Strict` Cookie；HTTPS 下自动 `Secure` |
+| 随机数源 | 全部使用 `rand_core::OsRng`（包括主密钥、nonce、session token）；不依赖 PRNG 回退 |
+| 加密 | ChaCha20-Poly1305；每部署独立 master.key + 每部署独立 salt |
+| RBAC | 五档角色，未知角色回退最小权限集（仅 `view`），不 fail-open |
+| 备份恢复 | snapshot 路径双重校验：组件级拒绝 `..`/绝对/盘符前缀 + canonicalize 后必须 starts_with dest_root |
+| JRE 缓存 | 缓存命中时 `java -version` 探测实际版本，meta 与实际不符则重新部署 |
+| 审计 | 写操作落 `data/audit.jsonl`，可按操作者过滤 |
+
+### 可选环境变量
 
 | 变量 | 说明 |
 |:---|:---|
-| `COCKTAIL_BIND` | 监听地址，默认 `0.0.0.0:11011` |
-| `COCKTAIL_API_TOKEN` | 机器 Token，供脚本调用（与登录并存） |
+| `COCKTAIL_BIND` | 监听地址，默认 `0.0.0.0:11011`；非 loopback 时控制面启动会 warn 提示需前置 TLS 反代，生产建议显式设 `127.0.0.1:11011` |
+| `COCKTAIL_API_TOKEN` | 机器 Token，供脚本调用（与登录并存）；命中后等同超管身份，等价于关闭 2FA，仅用于机器间调用 |
 | `COCKTAIL_WEBHOOK_URL` | 全局崩溃 Webhook；也可在面板里覆盖 |
 | `COCKTAIL_WEB_ROOT` | 生产环境 Admin 静态目录 |
 | `COCKTAIL_CORS_ORIGINS` | 额外允许的跨域来源，逗号分隔；默认仅本机 5173/11011 |
 | `COCKTAIL_PROXY` | 强制 HTTP 代理，例如 `http://127.0.0.1:7890` |
 | `HTTPS_PROXY` | 标准代理变量；未设置时 Windows 会读取系统代理（Clash / IE） |
+| `COCKTAIL_MASTER_KEY` | 加密主密钥：64 位 hex（32 字节）或任意字符串作为 passphrase。未设置时从 `data/master.key` 加载或随机生成 32 字节；passphrase 模式还会生成每部署独立的 `data/master.salt` |
+| `COCKTAIL_PLANE` | Agent 连接主控的基地址，例如 `https://panel.example.com`；默认 `http://127.0.0.1:11011` |
+| `COCKTAIL_NODE_TOKEN` | Agent 节点 Token，在控制面「节点」页创建节点时生成；传输应走 TLS（`COCKTAIL_PLANE=https://...`） |
+| `COCKTAIL_PLUGIN_HOST` | .NET 插件宿主监听地址 |
+| `COCKTAIL_PLUGIN_TOKEN` | .NET 插件宿主与控制面之间的认证 Token |
+| `COCKTAIL_PLUGIN_DIR` | 插件目录，默认 `data/plugins` |
+| `COCKTAIL_PLUGIN_AUTOSTART` | 插件宿主是否自启动，默认 `1` |
 
 数据目录（相对工作目录）：
 
 ```
 data/
-  cocktail.db      # 管理员、会话、面板设置
-  state.json       # 实例与计划任务
-  instances/       # 各服工作目录
-  logs/            # 控制台与审计
+  cocktail.db        # 管理员、会话、面板设置
+  state.json         # 实例与计划任务
+  master.key         # 加密主密钥（首次启动随机生成）
+  master.salt        # passphrase 模式下的随机盐（每部署独立）
+  audit.jsonl        # 审计日志（按操作追加）
+  instances/<id>/    # 各服工作目录
+    runtime/jre/     # 实例独立 JRE（按 java_major 部署，meta 校验实际版本）
+  java/temurin-NN-jre/  # 全局 JRE 模板（按 major + image 类型组织）
+  logs/              # 控制台与审计
   backups/
 ```
 
