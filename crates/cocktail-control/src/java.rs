@@ -485,13 +485,58 @@ pub async fn ensure_instance_jre(
         .with_context(|| format!("resolve instance directory {workdir}"))?;
     let dest = instance_jre_home(&work);
     if let Some(bin) = locate_java(&dest) {
-        if major_from_home(&dest) == Some(major) {
+        let cached_major = major_from_home(&dest);
+        // 双重校验：meta 中声明的 major 必须与 java.exe 实际版本一致。
+        // 历史上 copy_dir 会把 template 自带的 .cocktail.json 一并复制过来，
+        // 若 template 的 meta 与实际 java.exe 版本不符（例如之前版本写错了 meta，
+        // 或用户手动替换过 java.exe），单看 meta 会让缓存错误命中、永远用旧 JRE。
+        // 这里探测一次 java -version，与 meta 不一致就视为缓存失效。
+        let probed_major = probe_java_major(&bin).await;
+        let effective = match (cached_major, probed_major) {
+            (Some(m), Some(p)) if m == p => Some(m),
+            (Some(m), None) => {
+                tracing::warn!(
+                    workdir,
+                    meta_major = m,
+                    "instance JRE meta major 无法用 java -version 校验，仅按 meta 判断"
+                );
+                Some(m)
+            }
+            (Some(m), Some(p)) => {
+                tracing::warn!(
+                    workdir,
+                    meta_major = m,
+                    actual_major = p,
+                    "instance JRE meta 与 java -version 不一致，以实际为准"
+                );
+                Some(p)
+            }
+            (None, Some(p)) => {
+                tracing::warn!(
+                    workdir,
+                    actual_major = p,
+                    "instance JRE meta 缺失，用 java -version 探测"
+                );
+                Some(p)
+            }
+            (None, None) => None,
+        };
+        if effective == Some(major) {
+            tracing::debug!(
+                workdir,
+                major,
+                cached = ?cached_major,
+                actual = ?probed_major,
+                "instance JRE cache hit"
+            );
             return Ok(bin);
         }
         tracing::info!(
             workdir,
-            have = ?major_from_home(&dest),
+            have = ?effective,
             need = major,
+            cached_meta = ?cached_major,
+            actual_probe = ?probed_major,
             "replacing instance JRE (major mismatch)"
         );
         let _ = fs::remove_dir_all(&dest);
@@ -540,6 +585,28 @@ fn major_from_home(home: &Path) -> Option<u32> {
     }
     let release = fs::read_to_string(home.join("release")).ok()?;
     parse_release_major(&release)
+}
+
+/// 通过 `java -version` 探测实际主版本号。
+/// 仅在 ensure_instance_jre 缓存判断时调用，用于校验 meta 与实际 java.exe 一致。
+/// 失败（找不到 java、超时、无法解析）返回 None，调用方回退到 meta 判断。
+async fn probe_java_major(bin: &Path) -> Option<u32> {
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("-version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::wincompat::hide_console(&mut cmd);
+    let output = tokio::time::timeout(Duration::from_secs(8), cmd.output())
+        .await
+        .ok()?
+        .ok()?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    parse_java_version(&text).map(|(major, _)| major)
 }
 
 fn parse_release_major(text: &str) -> Option<u32> {
