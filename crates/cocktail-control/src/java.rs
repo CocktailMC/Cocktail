@@ -566,6 +566,25 @@ pub async fn ensure_instance_jre(
         anyhow::anyhow!("实例 JRE 复制后找不到 {}（{}）", java_exe(), dest.display())
     })?;
     chmod_bin(bin.parent().unwrap_or(&dest))?;
+    // 复制后立即用 java -version 校验实际版本，避免 meta 写 25 但 java.exe 实际是 21
+    // 的失配（template_home 来源错误、copy_dir 中断、外部替换等都可能导致）。
+    // 不匹配直接 bail 让上层走重试/清理路径，绝不能让错的 JRE 启动。
+    if let Some(actual) = probe_java_major(&bin).await {
+        if actual != major {
+            let _ = fs::remove_dir_all(&dest);
+            anyhow::bail!(
+                "实例 JRE 复制后 java -version 实际为 Java {actual}，\
+                 与期望 Java {major} 不符；已清理 dest，请重试启动"
+            );
+        }
+    } else {
+        tracing::warn!(
+            workdir,
+            bin = %bin.display(),
+            major,
+            "复制后无法用 java -version 探测实际版本，仅按 meta 写入"
+        );
+    }
     write_instance_meta(&dest, major, &bin)?;
     job.finish(dir_size(&dest), Some(dir_size(&dest).max(1)));
     tracing::info!(
