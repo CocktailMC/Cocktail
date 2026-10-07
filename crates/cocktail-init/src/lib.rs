@@ -16,5 +16,6 @@ pub mod rcon;
 pub mod secrets;
 pub mod server;
 pub mod sevenz;
+pub mod versions;
 
 pub use proto::{Error, Event, Request, Response, RpcResult};

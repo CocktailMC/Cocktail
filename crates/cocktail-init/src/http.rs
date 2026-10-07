@@ -278,3 +278,41 @@ pub async fn download_to_path(url: &str, dest: &Path) -> anyhow::Result<u64> {
     tracing::info!(%url, dest = %dest.display(), written, "download_to_path: complete");
     Ok(written)
 }
+
+/// 下载 url 到内存 Vec<u8>，超过 max_bytes 上限会提前 bail。
+///
+/// TODO 阶段 2：通过 event push 把 init 端下载进度回推给 control 的
+/// `Transfer::emit`，目前只在 tracing 里记录起止。
+pub async fn download_vec(url: &str, max_bytes: u64) -> anyhow::Result<Vec<u8>> {
+    tracing::info!(%url, "download_vec: sending request");
+    let resp = client()
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| explain(e, url))?
+        .error_for_status()
+        .map_err(|e| explain(e, url))?;
+    let total = resp.content_length();
+    tracing::info!(
+        %url,
+        status = %resp.status(),
+        content_length = total,
+        "download_vec: response received"
+    );
+    let mut stream = resp.bytes_stream();
+    let mut buf = Vec::new();
+    if let Some(t) = total.filter(|n| *n > 0 && *n <= max_bytes) {
+        buf.reserve(t as usize);
+    }
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| explain(e, url))?;
+        buf.extend_from_slice(&chunk);
+        if buf.len() as u64 > max_bytes {
+            anyhow::bail!("下载超过 {} bytes 上限", max_bytes);
+        }
+        // TODO 阶段 2：通过 event push 把 init 端下载进度回推给 control 的 Transfer::emit。
+    }
+    let n = buf.len() as u64;
+    tracing::info!(%url, bytes = n, "download_vec: complete");
+    Ok(buf)
+}

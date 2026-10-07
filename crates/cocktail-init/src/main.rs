@@ -4,7 +4,7 @@
 //! control 退出时关闭 stdin，本进程读到 EOF 自然退出。
 
 use cocktail_init::server::Server;
-use cocktail_init::{files, http, java, proto, rcon, secrets, sevenz};
+use cocktail_init::{files, http, java, proto, rcon, secrets, sevenz, versions};
 
 use serde::Deserialize;
 use std::path::Path;
@@ -188,6 +188,29 @@ struct JavaFindManagedParams {
     major: u32,
     #[serde(default)]
     prefer: Option<String>,
+}
+
+/// versions.list_versions 参数。
+#[derive(Debug, Deserialize)]
+struct VersionsCoreParams {
+    core: String,
+}
+
+/// versions.list_loaders 参数。
+#[derive(Debug, Deserialize)]
+struct VersionsCoreVerParams {
+    core: String,
+    version: String,
+}
+
+/// versions.download_and_install 参数。
+#[derive(Debug, Deserialize)]
+struct VersionsInstallParams {
+    workdir: String,
+    core: String,
+    version: String,
+    #[serde(default)]
+    loader: Option<String>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -698,6 +721,45 @@ async fn main() -> std::io::Result<()> {
         match java::find_managed(p.major, prefer) {
             Some(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
             None => Ok(serde_json::Value::Null),
+        }
+    });
+
+    // versions.list_versions：列出某核心的可用 MC 版本。params: { core }
+    // 返回 Vec<CoreVersion>。
+    server.register("versions.list_versions", |params| async move {
+        let p: VersionsCoreParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match versions::list_versions(&p.core).await {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // versions.list_loaders：列出某 MC 版本下可选 loader。params: { core, version }
+    // 返回 Vec<CoreLoader>。
+    server.register("versions.list_loaders", |params| async move {
+        let p: VersionsCoreVerParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match versions::list_loaders(&p.core, &p.version).await {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // versions.download_and_install：下载并落地服务端 jar / 跑 modloader 安装器。
+    // params: { workdir, core, version, loader? } 返回 { command, args }。
+    server.register("versions.download_and_install", |params| async move {
+        let p: VersionsInstallParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match versions::download_and_install(&p.workdir, &p.core, &p.version, p.loader.as_deref()).await {
+            Ok((command, args)) => Ok(serde_json::json!({ "command": command, "args": args })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
         }
     });
 
