@@ -205,8 +205,11 @@ pub async fn docker_pull(
         .map_err(|e| bad_request(e.to_string()))
 }
 
-pub async fn list_java() -> impl IntoResponse {
-    Json(crate::java::inventory().await)
+pub async fn list_java() -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
+    crate::java::inventory()
+        .await
+        .map(Json)
+        .map_err(|e| bad_request(e.to_string()))
 }
 
 pub async fn install_java(
@@ -233,6 +236,7 @@ pub async fn delete_java(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
     crate::java::remove(&id)
+        .await
         .map(|_| StatusCode::NO_CONTENT)
         .map_err(|e| bad_request(e.to_string()))
 }

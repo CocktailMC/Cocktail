@@ -19,6 +19,8 @@ cocktail-shared = { path = "../cocktail-shared" }
 zip = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 reqwest = { workspace = true, features = ["native-tls"] }

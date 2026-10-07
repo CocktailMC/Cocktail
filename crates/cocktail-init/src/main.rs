@@ -4,7 +4,7 @@
 //! control 退出时关闭 stdin，本进程读到 EOF 自然退出。
 
 use cocktail_init::server::Server;
-use cocktail_init::{files, http, proto, rcon, secrets, sevenz};
+use cocktail_init::{files, http, java, proto, rcon, secrets, sevenz};
 
 use serde::Deserialize;
 use std::path::Path;
@@ -156,6 +156,38 @@ struct TotalDirBytesParams {
 struct WriteMcVersionMarkerParams {
     workdir: String,
     version: String,
+}
+
+/// java.install RPC 参数：major + image_type（"jre"|"jdk"）。
+#[derive(Debug, Deserialize)]
+struct JavaInstallParams {
+    major: u32,
+    #[serde(default)]
+    image_type: Option<String>,
+}
+
+/// java.remove RPC 参数：runtime id（如 "temurin-21-jre"）。
+#[derive(Debug, Deserialize)]
+struct JavaIdParams {
+    id: String,
+}
+
+/// java.ensure_for_spec / java.ensure_instance_jre 参数。
+#[derive(Debug, Deserialize)]
+struct JavaEnsureForSpecParams {
+    workdir: String,
+    #[serde(default)]
+    java_major: Option<u32>,
+    #[serde(default)]
+    mc_version: Option<String>,
+}
+
+/// java.find_managed 参数。
+#[derive(Debug, Deserialize)]
+struct JavaFindManagedParams {
+    major: u32,
+    #[serde(default)]
+    prefer: Option<String>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -564,6 +596,109 @@ async fn main() -> std::io::Result<()> {
             Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
         };
         Ok(serde_json::json!({ "bytes": files::total_dir_bytes(&p.path) }))
+    });
+
+    // java.inventory：盘点系统 + 已安装的 JRE，无参数。
+    server.register("java.inventory", |_params| async move {
+        let v = java::inventory().await;
+        Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null))
+    });
+
+    // java.install：按主版本号下载并安装一份 Temurin JRE/JDK。params: { major, image_type }
+    server.register("java.install", |params| async move {
+        let p: JavaInstallParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        let image = match cocktail_shared::java::ImageType::parse(p.image_type.as_deref().unwrap_or("jre"))
+        {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match java::install(p.major, image).await {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // java.remove：按 id 删除已安装的运行时。params: { id }
+    server.register("java.remove", |params| async move {
+        let p: JavaIdParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match java::remove(&p.id) {
+            Ok(()) => Ok(serde_json::Value::Null),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // java.ensure_api：按 EnsureJavaRequest 选合适的 JRE，找不到就装。
+    server.register("java.ensure_api", |params| async move {
+        let req: cocktail_shared::java::EnsureJavaRequest = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match java::ensure_api(req).await {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // java.ensure_for_spec：按 workdir + java_major + mc_version 确保实例有可用 JRE。
+    // 返回 { java_bin: String }（PathBuf.to_string_lossy）。
+    server.register("java.ensure_for_spec", |params| async move {
+        let p: JavaEnsureForSpecParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match java::ensure_for_spec(&p.workdir, p.java_major, p.mc_version.as_deref()).await {
+            Ok(bin) => Ok(serde_json::json!({ "java_bin": bin.to_string_lossy() })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // java.ensure_instance_jre：与 ensure_for_spec 同参同返（保留独立 RPC 便于直调）。
+    server.register("java.ensure_instance_jre", |params| async move {
+        let p: JavaEnsureForSpecParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match java::ensure_instance_jre(&p.workdir, p.java_major, p.mc_version.as_deref()).await {
+            Ok(bin) => Ok(serde_json::json!({ "java_bin": bin.to_string_lossy() })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // java.probe_system：探测 PATH 上的 java，无参数，返 Option<SystemJava>。
+    server.register("java.probe_system", |_params| async move {
+        match java::probe_system().await {
+            Some(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            None => Ok(serde_json::Value::Null),
+        }
+    });
+
+    // java.list_installed：列出 data/java 下所有已安装运行时，无参数。
+    server.register("java.list_installed", |_params| async move {
+        let v = java::list_installed();
+        Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null))
+    });
+
+    // java.find_managed：按 major + prefer 找已安装运行时。返 Option<InstalledRuntime>。
+    server.register("java.find_managed", |params| async move {
+        let p: JavaFindManagedParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        let prefer = match p.prefer.as_deref().map(cocktail_shared::java::ImageType::parse).transpose()
+        {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match java::find_managed(p.major, prefer) {
+            Some(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            None => Ok(serde_json::Value::Null),
+        }
     });
 
     // 用 stdin/stdout 跑主循环

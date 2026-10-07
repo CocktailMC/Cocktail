@@ -485,11 +485,13 @@ dependencies = [
  "anyhow",
  "chrono",
  "cocktail-shared",
+ "flate2",
  "futures-util",
  "rand_core 0.6.4",
  "reqwest",
  "serde",
  "serde_json",
+ "tar",
  "tempfile",
  "tokio",
  "tracing",
@@ -553,6 +555,7 @@ dependencies = [
 name = "cocktail-shared"
 version = "26.4.11-DP"
 dependencies = [
+ "anyhow",
  "chrono",
  "serde",
  "serde_json",

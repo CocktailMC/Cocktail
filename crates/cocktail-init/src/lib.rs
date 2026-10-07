@@ -10,6 +10,7 @@
 
 pub mod files;
 pub mod http;
+pub mod java;
 pub mod proto;
 pub mod rcon;
 pub mod secrets;

@@ -7,6 +7,7 @@
 //! 阶段 2 进行中：内容待 sub-agent 从 control/src/instance/model.rs
 //! 与 control/src/proto.rs 抽取填充。
 
+pub mod java;
 pub mod model;
 pub mod proto;
 pub mod sevenz;
