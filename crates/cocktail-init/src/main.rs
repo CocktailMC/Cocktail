@@ -6,6 +6,21 @@
 use cocktail_init::server::Server;
 use cocktail_init::{proto, rcon, secrets, sevenz};
 
+use serde::Deserialize;
+
+/// sevenz.extract RPC 参数。
+#[derive(Debug, Deserialize)]
+struct ExtractParams {
+    archive: String,
+    dest: String,
+}
+
+/// sevenz.is_supported_name RPC 参数。
+#[derive(Debug, Deserialize)]
+struct NameParams {
+    name: String,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::io::Result<()> {
     // 日志走 stderr（control 端转发到自己的 tracing）。
@@ -35,10 +50,39 @@ async fn main() -> std::io::Result<()> {
         Ok(serde_json::json!({ "source": secrets::key_source() }))
     });
 
-    // sevenz.ensure_7z：返回 7z 二进制存在状态
-    server.register("sevenz.ensure_7z", |_params| async move {
-        let r = sevenz::ensure_7z();
-        Ok(serde_json::to_value(r).unwrap_or(serde_json::Value::Null))
+    // sevenz.ensure_bin：落地内置 7z 并返回路径。失败返 RPC error。
+    server.register("sevenz.ensure_bin", |_params| async move {
+        match sevenz::ensure_bin() {
+            Ok(path) => {
+                let embedded = sevenz::EMBEDDED.is_some();
+                Ok(serde_json::json!({
+                    "path": path.to_string_lossy(),
+                    "embedded": embedded,
+                }))
+            }
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // sevenz.extract：解压 archive 到 dest。params: { archive, dest }
+    server.register("sevenz.extract", |params| async move {
+        let p: ExtractParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match sevenz::extract(std::path::Path::new(&p.archive), std::path::Path::new(&p.dest)) {
+            Ok(()) => Ok(serde_json::Value::Null),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // sevenz.is_supported_name：纯字符串校验，params: { name }
+    server.register("sevenz.is_supported_name", |params| async move {
+        let p: NameParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        Ok(serde_json::json!({ "supported": sevenz::is_supported_name(&p.name) }))
     });
 
     // rcon.try_rcon：TCP 连接测试

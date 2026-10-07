@@ -17,6 +17,7 @@ cocktail-shared = { path = "../cocktail-shared" }
 
 [dev-dependencies]
 tempfile = "3"
+uuid = { workspace = true }
 
 [lib]
 name = "cocktail_init"

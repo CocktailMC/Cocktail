@@ -65,7 +65,25 @@ const MAX_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
 /// cocktail-init 子进程句柄。run_plane 启动时尝试 spawn；失败则 None，
 /// secrets 与后续用户空间操作 fallback 到本地实现（兼容单进程老部署）。
-static INIT_CLIENT: OnceLock<init_client::InitClient> = OnceLock::new();
+pub(crate) static INIT_CLIENT: OnceLock<init_client::InitClient> = OnceLock::new();
+
+/// 调一个 cocktail-init RPC。失败（init 未启动 / IPC 失败 / RPC error）
+/// 时返回 Err，调用方决定是否 fallback 到本地实现。
+///
+/// TODO 阶段 3：对未启用的模块提供本地 fallback 而不是直接报错。
+pub(crate) async fn init_call<P: serde::Serialize>(
+    method: &str,
+    params: P,
+) -> anyhow::Result<serde_json::Value> {
+    let client = INIT_CLIENT.get().ok_or_else(|| {
+        anyhow::anyhow!("cocktail-init subprocess not available (INIT_CLIENT unset)")
+    })?;
+    let v = client
+        .call(method, params)
+        .await
+        .map_err(|e| anyhow::anyhow!("init RPC {method} failed: {e}"))?;
+    Ok(v)
+}
 
 /// 尝试 fork+exec cocktail-init 子进程并握手拉取 master key。
 /// 成功后把 InitClient 存入 INIT_CLIENT 全局、把密钥注入 secrets。

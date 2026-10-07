@@ -126,9 +126,10 @@ pub async fn import_archive(
     let archive = archive_path.to_path_buf();
     let dest = PathBuf::from(&workdir);
     let filename = opts.filename.clone();
-    let extract_out = tokio::task::spawn_blocking(move || extract_pack(&archive, &dest, &filename))
+    // extract_pack 内含 sevenz RPC 调用（async），整体改 async；fs IO 仍走 std::fs。
+    let extract_out = extract_pack(&archive, &dest, &filename)
         .await
-        .map_err(|e| anyhow::anyhow!("解压任务失败：{e}"))??;
+        .map_err(|e| anyhow::anyhow!("解压任务失败：{e}"))?;
 
     job.emit("extract", 1, Some(1));
 
@@ -188,7 +189,7 @@ struct ExtractOut {
     files: u32,
 }
 
-fn extract_pack(archive: &Path, workdir: &Path, filename: &str) -> anyhow::Result<ExtractOut> {
+async fn extract_pack(archive: &Path, workdir: &Path, filename: &str) -> anyhow::Result<ExtractOut> {
     fs::create_dir_all(workdir)?;
     let staging = workdir
         .join(".cocktail")
@@ -196,20 +197,21 @@ fn extract_pack(archive: &Path, workdir: &Path, filename: &str) -> anyhow::Resul
         .join(format!("unpack-{}", uuid::Uuid::new_v4()));
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(&staging)?;
-    let result = (|| {
-        extract_archive(archive, &staging, filename)?;
-        unwrap_nested_tarball(&staging)?;
+    let outcome: anyhow::Result<ExtractOut> = async {
+        extract_archive(archive, &staging, filename).await?;
+        unwrap_nested_tarball(&staging).await?;
         strip_junk(&staging)?;
         let flattened = maybe_flatten(&staging)?;
         reject_escapes(&staging)?;
         let files = merge_tree(&staging, workdir)?;
         Ok(ExtractOut { flattened, files })
-    })();
+    }
+    .await;
     let _ = fs::remove_dir_all(&staging);
-    result
+    outcome
 }
 
-fn extract_archive(archive: &Path, dest: &Path, filename: &str) -> anyhow::Result<()> {
+async fn extract_archive(archive: &Path, dest: &Path, filename: &str) -> anyhow::Result<()> {
     let name = filename.to_ascii_lowercase();
     if name.ends_with(".zip") {
         files::unzip_archive(archive, dest)
@@ -218,7 +220,7 @@ fn extract_archive(archive: &Path, dest: &Path, filename: &str) -> anyhow::Resul
     } else if name.ends_with(".tar") {
         extract_tar(archive, dest)
     } else {
-        crate::sevenz::extract(archive, dest)
+        crate::sevenz::extract(archive, dest).await
     }
 }
 
@@ -256,7 +258,7 @@ fn unpack_tar<R: io::Read>(mut archive: Archive<R>, dest: &Path) -> anyhow::Resu
     Ok(())
 }
 
-fn unwrap_nested_tarball(dest: &Path) -> anyhow::Result<()> {
+async fn unwrap_nested_tarball(dest: &Path) -> anyhow::Result<()> {
     let Ok(entries) = fs::read_dir(dest) else {
         return Ok(());
     };
@@ -282,12 +284,12 @@ fn unwrap_nested_tarball(dest: &Path) -> anyhow::Result<()> {
         return Ok(());
     }
     let inner = files[0].clone();
-    crate::sevenz::extract(&inner, dest)?;
+    crate::sevenz::extract(&inner, dest).await?;
     let _ = fs::remove_file(&inner);
     if name.ends_with(".xz") && !name.ends_with(".tar.xz") {
-        unwrap_nested_tarball(dest)?;
+        unwrap_nested_tarball(dest).await?;
     } else if name.ends_with(".tar.xz") || name.ends_with(".xz") {
-        unwrap_nested_tarball(dest)?;
+        unwrap_nested_tarball(dest).await?;
     }
     Ok(())
 }
