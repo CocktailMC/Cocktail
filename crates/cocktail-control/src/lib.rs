@@ -63,11 +63,12 @@ use crate::state::{AppState, SharedState};
 
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
-/// cocktail-init 子进程句柄。run_plane 启动时尝试 spawn；失败则 None，
-/// secrets 与后续用户空间操作 fallback 到本地实现（兼容单进程老部署）。
-pub(crate) static INIT_CLIENT: OnceLock<init_client::InitClient> = OnceLock::new();
+/// cocktail-init 子进程 supervisor。run_plane 启动时 spawn_initial；
+/// init 崩溃后 supervisor 自动 respawn（30s 冷却限流）。
+/// control 退出时调 shutdown 主动关闭 stdin pipe，init 端 reader EOF 退出。
+pub(crate) static INIT_CLIENT: OnceLock<Arc<init_client::InitSupervisor>> = OnceLock::new();
 
-/// 调一个 cocktail-init RPC。失败（init 未启动 / IPC 失败 / RPC error）
+/// 调一个 cocktail-init RPC。失败（init 未启动 / IPC 失败 / RPC error / 正在 respawn）
 /// 时返回 Err，调用方决定是否 fallback 到本地实现。
 ///
 /// TODO 阶段 3：对未启用的模块提供本地 fallback 而不是直接报错。
@@ -75,10 +76,10 @@ pub(crate) async fn init_call<P: serde::Serialize>(
     method: &str,
     params: P,
 ) -> anyhow::Result<serde_json::Value> {
-    let client = INIT_CLIENT.get().ok_or_else(|| {
+    let sup = INIT_CLIENT.get().ok_or_else(|| {
         anyhow::anyhow!("cocktail-init subprocess not available (INIT_CLIENT unset)")
     })?;
-    let v = client
+    let v = sup
         .call(method, params)
         .await
         .map_err(|e| anyhow::anyhow!("init RPC {method} failed: {e}"))?;
@@ -86,38 +87,60 @@ pub(crate) async fn init_call<P: serde::Serialize>(
 }
 
 /// 尝试 fork+exec cocktail-init 子进程并握手拉取 master key。
-/// 成功后把 InitClient 存入 INIT_CLIENT 全局、把密钥注入 secrets。
-/// 失败不致命：调用方 fallback 到本地 load_or_create()。
+/// 成功后把 InitSupervisor 存入 INIT_CLIENT 全局。
+/// 失败不致命：secrets::master_key() fallback 到本地 load_or_create()，
+/// 但 init_call 会返 NotConnected 错直到 control 重启或下次 respawn（但 respawn
+/// 需要 init 至少启动过一次，故 spawn_initial 失败后不进 respawn 循环）。
 async fn try_spawn_init() -> anyhow::Result<()> {
-    let client = init_client::InitClient::spawn()
+    let sup = init_client::InitSupervisor::new();
+    sup.spawn_initial()
         .await
         .map_err(|e| anyhow::anyhow!("spawn cocktail-init: {e}"))?;
-
-    // 握手拉取 master key。失败则记日志但仍保留 child（init 可能只 secrets 失败，
-    // 其他 RPC 仍可用）。
-    match client.get_master_key().await {
-        Ok(key) if key.len() == 32 => {
-            tracing::info!(
-                source = "init-rpc",
-                pid = ?std::process::id(),
-                "master key loaded from cocktail-init subprocess"
-            );
-            secrets::set_init_key(key);
-        }
-        Ok(other) => {
-            tracing::warn!(
-                len = other.len(),
-                "cocktail-init returned master key with unexpected length; fallback to local file"
-            );
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "cocktail-init get_master_key failed; fallback to local file");
-        }
-    }
-
-    // 存入全局供后续 RPC 使用。OnceLock 已 set 时（理论不会）丢弃新的。
-    let _ = INIT_CLIENT.set(client);
+    // 存入全局供后续 RPC 使用 + reader_loop respawn 找回 supervisor。
+    // OnceLock 已 set 时（理论不会）丢弃新的。
+    let _ = INIT_CLIENT.set(sup);
     Ok(())
+}
+
+/// graceful shutdown：通知 init 子进程退出（关闭 stdin pipe 触发 EOF）。
+/// 由 run_plane 的 signal handler 在 axum::serve 退出后调用。幂等。
+async fn shutdown_init() {
+    if let Some(sup) = INIT_CLIENT.get() {
+        sup.shutdown().await;
+    }
+}
+
+/// 等待 shutdown 信号（Ctrl+C / SIGTERM）。返回 () 后 axum::serve
+/// 进入 graceful shutdown：停止接受新连接，等待 in-flight 请求完成。
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .unwrap_or_else(|e| tracing::warn!(error = %e, "ctrl_c signal handler error"));
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to install SIGTERM handler");
+                // 没有 SIGTERM 时永远等不到，让 ctrl_c 主导
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("received Ctrl+C, initiating graceful shutdown"),
+        _ = terminate => tracing::info!("received SIGTERM, initiating graceful shutdown"),
+    }
 }
 
 pub fn run_reset_password() -> anyhow::Result<()> {
@@ -263,7 +286,10 @@ pub async fn run_plane() -> anyhow::Result<()> {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await?;
+    // 通知 init 子进程退出（关闭 stdin pipe，init 端 reader EOF 自然退出）
+    shutdown_init().await;
     Ok(())
 }
 
