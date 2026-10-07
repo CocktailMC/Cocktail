@@ -8,6 +8,7 @@
 //! 阶段 1 范围：IPC 协议骨架 + secrets 双面（master.key 文件管理）+ ensure_7z
 //! + try_rcon 验证管线。
 
+pub mod archive;
 pub mod files;
 pub mod http;
 pub mod java;

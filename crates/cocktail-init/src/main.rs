@@ -4,7 +4,7 @@
 //! control 退出时关闭 stdin，本进程读到 EOF 自然退出。
 
 use cocktail_init::server::Server;
-use cocktail_init::{files, http, java, proto, rcon, secrets, sevenz, versions};
+use cocktail_init::{archive, files, http, java, proto, rcon, secrets, sevenz, versions};
 
 use serde::Deserialize;
 use std::path::Path;
@@ -211,6 +211,24 @@ struct VersionsInstallParams {
     version: String,
     #[serde(default)]
     loader: Option<String>,
+}
+
+/// archive.extract_pack 参数。
+#[derive(Debug, Deserialize)]
+struct ArchiveExtractPackParams {
+    archive_path: String,
+    workdir: String,
+    filename: String,
+}
+
+/// archive.resolve_startup 参数。
+#[derive(Debug, Deserialize)]
+struct ArchiveResolveStartupParams {
+    workdir: String,
+    #[serde(default)]
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -759,6 +777,44 @@ async fn main() -> std::io::Result<()> {
         };
         match versions::download_and_install(&p.workdir, &p.core, &p.version, p.loader.as_deref()).await {
             Ok((command, args)) => Ok(serde_json::json!({ "command": command, "args": args })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // archive.extract_pack：解压 → 去嵌套 → 去 junk → 扁平化 → 越界防护 → 合并到 workdir。
+    // params: { archive_path, workdir, filename } 返回 { flattened, files }。
+    // TODO 阶段 2：原 control 端 `http::Transfer` 进度推送（"extract" phase）暂砍，
+    // 待 event push 通道就位后用 init→control 单向事件回传 progress。
+    server.register("archive.extract_pack", |params| async move {
+        let p: ArchiveExtractPackParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match archive::extract_pack(
+            Path::new(&p.archive_path),
+            Path::new(&p.workdir),
+            &p.filename,
+        )
+        .await
+        {
+            Ok(out) => Ok(serde_json::to_value(&out).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // archive.resolve_startup：解析启动命令。用户 override 优先，否则扫描 workdir。
+    // params: { workdir, command?, args? } 返回 { startup, command, args }。
+    server.register("archive.resolve_startup", |params| async move {
+        let p: ArchiveResolveStartupParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match archive::resolve_startup(&p.workdir, p.command.as_deref(), &p.args) {
+            Ok((startup, command, args)) => Ok(serde_json::json!({
+                "startup": startup,
+                "command": command,
+                "args": args,
+            })),
             Err(e) => Err(proto::Error::internal(format!("{e}"))),
         }
     });
