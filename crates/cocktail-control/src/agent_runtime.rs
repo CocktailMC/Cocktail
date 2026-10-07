@@ -35,10 +35,13 @@ pub async fn run_agent() -> anyhow::Result<()> {
         anyhow::anyhow!("需要环境变量 COCKTAIL_NODE_TOKEN（在控制面「节点」页创建节点时生成）")
     })?;
     let ws = plane_to_ws(&plane, &token)?;
+    crate::try_spawn_init().await?;
     info!(%ws, "cocktail-agent connecting");
 
+    let (events, _) = broadcast::channel::<InstanceEvent>(512);
+    let mut lives: HashMap<String, Live> = HashMap::new();
     loop {
-        if let Err(e) = serve_once(&ws).await {
+        if let Err(e) = serve_once(&ws, &mut lives, events.clone()).await {
             warn!(error = %e, "agent session ended, retry in 3s");
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
@@ -75,12 +78,13 @@ fn urlencoding_lite(s: &str) -> String {
     out
 }
 
-async fn serve_once(url: &str) -> anyhow::Result<()> {
+async fn serve_once(
+    url: &str,
+    lives: &mut HashMap<String, Live>,
+    events: broadcast::Sender<InstanceEvent>,
+) -> anyhow::Result<()> {
     let (ws, _) = tokio_tungstenite::connect_async(url).await?;
     let (mut sink, mut stream) = ws.split();
-    let (events, _) = broadcast::channel::<InstanceEvent>(512);
-    let mut lives: HashMap<String, Live> = HashMap::new();
-
     let hello = AgentUp::Hello {
         hostname: hostname(),
         os: std::env::consts::OS.to_string(),
@@ -111,6 +115,9 @@ async fn serve_once(url: &str) -> anyhow::Result<()> {
                         sink.send(Message::Text(serde_json::to_string(&up)?.into())).await?;
                     }
                     Ok(InstanceEvent::StatusChanged { instance_id, status, .. }) => {
+                        if matches!(status, InstanceStatus::Stopped | InstanceStatus::Crashed) {
+                            if let Some(live) = lives.get_mut(&instance_id) { live.handle = None; }
+                        }
                         let pid = lives.get(&instance_id).and_then(|l| l.handle.as_ref()).map(|h| h.child_id).filter(|p| *p > 0);
                         let up = AgentUp::Status { instance_id, status, pid };
                         sink.send(Message::Text(serde_json::to_string(&up)?.into())).await?;
@@ -125,7 +132,7 @@ async fn serve_once(url: &str) -> anyhow::Result<()> {
                     Some(Ok(Message::Text(text))) => {
                         let down: AgentDown = serde_json::from_str(&text)?;
                         let seq = down.seq();
-                        apply_down(&mut lives, down, events.clone()).await;
+                        apply_down(lives, down, events.clone()).await;
                         if seq > 0 {
                             let ack = AgentUp::Ack { seq };
                             sink.send(Message::Text(serde_json::to_string(&ack)?.into())).await?;
@@ -161,7 +168,10 @@ async fn apply_down(
         AgentDown::Stop { instance_id, .. } => {
             if let Some(live) = lives.get_mut(&instance_id) {
                 live.spec.desired_running = false;
-                stop_live(live).await;
+                if let Err(e) = stop_live(live).await {
+                    warn!(%instance_id, error = %e, "agent stop unconfirmed");
+                    return;
+                }
                 let _ = events.send(InstanceEvent::StatusChanged {
                     instance_id,
                     status: InstanceStatus::Stopped,
@@ -198,6 +208,42 @@ async fn apply_one(
     entry.spec = inst.spec;
     entry.generation = inst.generation;
     if desired {
+        if let Some(handle) = entry.handle.as_ref() {
+            if !handle.available().await {
+                let alive = if let Some(name) = &handle.container_name {
+                    process::docker_container_running(name).await
+                } else {
+                    process::pid_is_alive(handle.child_id).await
+                };
+                match alive {
+                    Ok(true) => {
+                        match process::adopt_running(
+                            id.clone(),
+                            handle.child_id,
+                            handle.start_time,
+                            entry.spec.workdir.clone(),
+                            events.clone(),
+                            handle.container_name.clone(),
+                            true,
+                            entry.spec.port,
+                        )
+                        .await
+                        {
+                            Ok(handle) => entry.handle = Some(handle),
+                            Err(e) => {
+                                warn!(%id, error = %e, "agent reattach failed");
+                                return;
+                            }
+                        }
+                    }
+                    Ok(false) => entry.handle = None,
+                    Err(e) => {
+                        warn!(%id, error = %e, "agent runtime unavailable");
+                        return;
+                    }
+                }
+            }
+        }
         if entry.handle.is_none() {
             match spawn_live(&id, &entry.spec, events.clone()).await {
                 Ok(handle) => {
@@ -219,7 +265,10 @@ async fn apply_one(
             }
         }
     } else {
-        stop_live(entry).await;
+        if let Err(e) = stop_live(entry).await {
+            warn!(%id, error = %e, "agent stop unconfirmed");
+            return;
+        }
         let _ = events.send(InstanceEvent::StatusChanged {
             instance_id: id,
             status: InstanceStatus::Stopped,
@@ -228,10 +277,12 @@ async fn apply_one(
     }
 }
 
-async fn stop_live(live: &mut Live) {
-    if let Some(handle) = live.handle.take() {
-        handle.stop(StopMode::Graceful).await;
+async fn stop_live(live: &mut Live) -> anyhow::Result<()> {
+    if let Some(handle) = live.handle.as_ref() {
+        handle.stop(StopMode::Graceful).await?;
     }
+    live.handle = None;
+    Ok(())
 }
 
 async fn spawn_live(

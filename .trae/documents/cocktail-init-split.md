@@ -134,3 +134,13 @@
 - 不创建 README 或文档文件（除本 plan 文件外）
 - 不修改 git config
 - 阶段 1 不动打包脚本和 CI（先把 crate 立起来再谈发布）
+
+## Batch 2 落地（2026-10-07）
+
+- runtime/container/process 执行实现迁入 init；init registry 持有进程句柄，control registry 保留配置、鉴权与集群编排。
+- `process.launch/stop/command/status/lookup/snapshot/matches/alive` 与 `container.status/images/pull/pid/running` 通过已有 IPC 调用。
+- `instance.event` 携带单次启动 token，回传状态、日志和指标；control 代理绑定创建它的 init 连接，订阅先于启动，句柄释放时取消转发。
+- stop 等待终止确认；旧 token 不能操作新实例。IPC 不可达时保留进程身份，reconcile 从 init lookup 或保存的 PID/start-time 重接管，不把断线当成停止。
+- Windows stdin bridge 与平台辅助函数共享；init 提供 bridge 入口。agent 启动 init，并跨 WebSocket 重连保留句柄。
+- RPC 支持有界并发，镜像拉取/等待停止不再串行堵住其他请求。
+- 已补生命周期、重复启动/旧 token、接管身份、并发分发和真实 pipe 集成测试源码。按用户要求不在本地编译、不执行测试；仅完成 rustfmt 解析/格式、TOML 与锁文件依赖核对及 diff 检查。类型检查与运行验证待 CI。

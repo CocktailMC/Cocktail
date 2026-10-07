@@ -20,7 +20,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
-use tokio::sync::{Mutex, broadcast, oneshot};
+use tokio::sync::{Mutex, broadcast, oneshot, watch};
 use tracing::{debug, warn};
 
 use cocktail_shared::proto::Event;
@@ -65,6 +65,7 @@ struct Inner {
     next_id: Mutex<u64>,
     /// init→control 主动推送事件（Event 帧）的广播出口；订阅者按需 subscribe。
     events: broadcast::Sender<Event>,
+    closed: watch::Sender<bool>,
 }
 
 /// 一帧的 JSON-RPC 形状分类结果。
@@ -127,15 +128,19 @@ impl InitClient {
             pending: Mutex::new(HashMap::new()),
             next_id: Mutex::new(1),
             events,
+            closed: watch::channel(false).0,
         });
 
         // reader task：循环读帧，按 id 路由到 pending oneshot。EOF 时通知所有
         // pending 失败；进程退出/重启由 supervisor 的 watcher 负责。
         let reader_inner = Arc::clone(&inner);
         tokio::spawn(async move {
-            if let Err(e) = reader_loop(reader_inner, stdout).await {
+            if let Err(e) = reader_loop(Arc::clone(&reader_inner), stdout).await {
                 warn!(error = %e, "init reader task ended with error");
             }
+            reader_inner.closed.send_replace(true);
+            reader_inner.pending.lock().await.clear();
+            reader_inner.stdin.lock().await.take();
         });
 
         Ok((Arc::new(Self { inner }), child, stderr))
@@ -147,6 +152,12 @@ impl InitClient {
         method: &str,
         params: P,
     ) -> io::Result<serde_json::Value> {
+        if *self.inner.closed.borrow() {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "init connection closed",
+            ));
+        }
         let id = {
             let mut counter = self.inner.next_id.lock().await;
             let id = *counter;
@@ -166,32 +177,45 @@ impl InitClient {
 
         let body = serde_json::to_vec(&req).unwrap();
         let frame = frame_bytes(&body);
-        {
+        let write_result: io::Result<()> = async {
             let mut guard = self.inner.stdin.lock().await;
             let w = guard.as_mut().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::BrokenPipe, "init stdin already closed")
             })?;
             w.write_all(&frame).await?;
-            w.flush().await?;
+            w.flush().await
+        }
+        .await;
+        if let Err(e) = write_result {
+            self.inner.pending.lock().await.remove(&id);
+            return Err(e);
         }
 
-        let resp = match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(_)) => {
-                self.inner.pending.lock().await.remove(&id);
-                return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "init reader dropped response sender",
-                ));
-            }
-            Err(_) => {
-                self.inner.pending.lock().await.remove(&id);
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "init RPC timed out after 30s",
-                ));
-            }
+        let timeout_secs = match method {
+            "process.stop" => 60,
+            "process.launch" | "container.pull" => 1800,
+            _ => 30,
         };
+        let resp =
+            match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(_)) => {
+                    self.inner.pending.lock().await.remove(&id);
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "init reader dropped response sender",
+                    ));
+                }
+                Err(_) => {
+                    self.inner.pending.lock().await.remove(&id);
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "init RPC timed out after {timeout_secs}s; execution outcome is unknown"
+                        ),
+                    ));
+                }
+            };
 
         if let Some(err) = resp.error {
             return Err(io::Error::new(
@@ -224,10 +248,17 @@ impl InitClient {
         }
     }
 
-    /// 订阅 init 推送的事件（Event 帧）。
-    ///
-    /// 每次 spawn 生成一个新的广播 channel；init 停止/重启（`Inner` 被 drop）
-    /// 后旧 receiver 收到 `Closed`，调用方应重新调用本方法重建订阅。
+    /// 等待此连接断开，即使旧句柄仍持有 client 也能及时唤醒。
+    pub async fn closed(&self) {
+        let mut rx = self.inner.closed.subscribe();
+        while !*rx.borrow_and_update() {
+            if rx.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+
+    /// 订阅当前 init 会话的事件；生命周期代理同时监听 closed()。
     pub fn subscribe_events(&self) -> broadcast::Receiver<Event> {
         self.inner.events.subscribe()
     }

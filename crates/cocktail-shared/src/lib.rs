@@ -14,3 +14,9 @@ pub mod model;
 pub mod proto;
 pub mod sevenz;
 pub mod versions;
+
+pub mod runtime;
+pub mod runtime_util;
+pub mod stdin_bridge;
+pub mod wincompat;
+pub mod winnet;

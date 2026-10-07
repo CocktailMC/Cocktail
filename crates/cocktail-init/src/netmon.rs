@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::model::NetPeer;
+use cocktail_shared::model::NetPeer;
 
 #[derive(Debug, Clone, Default)]
 pub struct NetCounters {

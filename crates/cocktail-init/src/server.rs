@@ -84,7 +84,16 @@ impl Server {
             });
         }
 
+        let mut requests = tokio::task::JoinSet::new();
         loop {
+            while let Some(result) = requests.try_join_next() {
+                result.map_err(io::Error::other)??;
+            }
+            if requests.len() >= 64 {
+                if let Some(result) = requests.join_next().await {
+                    result.map_err(io::Error::other)??;
+                }
+            }
             let frame = match read_frame(&mut reader).await {
                 Ok(frame) => frame,
                 Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
@@ -104,13 +113,16 @@ impl Server {
                 }
             };
 
-            let id = req.id;
-            let result = server.call(&req.method, req.params).await;
-            let resp = match result {
-                Ok(v) => Response::success(id, v),
-                Err(e) => Response::error(id, e),
-            };
-            write_frame(&writer, &serde_json::to_vec(&resp)?).await?;
+            let server = Arc::clone(&server);
+            let writer = Arc::clone(&writer);
+            requests.spawn(async move {
+                let result = server.call(&req.method, req.params).await;
+                let resp = match result {
+                    Ok(v) => Response::success(req.id, v),
+                    Err(e) => Response::error(req.id, e),
+                };
+                write_frame(&writer, &serde_json::to_vec(&resp)?).await
+            });
         }
 
         Ok(())
@@ -164,4 +176,69 @@ where
 pub fn parse_params<T: DeserializeOwned>(params: serde_json::Value) -> Result<T, Error> {
     serde_json::from_value(params)
         .map_err(|e| Error::invalid_params(format!("invalid params: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::Notify;
+
+    #[tokio::test]
+    async fn slow_request_does_not_block_another_response() {
+        let release = Arc::new(Notify::new());
+        let mut server = Server::new();
+        let gate = Arc::clone(&release);
+        server.register("slow", move |_| {
+            let gate = Arc::clone(&gate);
+            async move {
+                gate.notified().await;
+                Ok(serde_json::json!("slow"))
+            }
+        });
+        server.register("fast", |_| async { Ok(serde_json::json!("fast")) });
+        let (client, peer) = tokio::io::duplex(8192);
+        let (reader, writer) = tokio::io::split(peer);
+        let task = tokio::spawn(server.run(reader, writer));
+        let (mut replies, requests) = tokio::io::split(client);
+        let requests = Arc::new(Mutex::new(BufWriter::new(requests)));
+        for (id, method) in [(1, "slow"), (2, "fast")] {
+            let body = serde_json::to_vec(
+                &serde_json::json!({"jsonrpc":"2.0", "id":id, "method":method, "params":{}}),
+            )
+            .unwrap();
+            write_frame(&requests, &body).await.unwrap();
+        }
+        let first = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let value: serde_json::Value =
+                    serde_json::from_slice(&read_frame(&mut replies).await.unwrap()).unwrap();
+                if value.get("result").is_some() {
+                    break value;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(first["id"], 2);
+        release.notify_one();
+        let second = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let value: serde_json::Value =
+                    serde_json::from_slice(&read_frame(&mut replies).await.unwrap()).unwrap();
+                if value.get("result").is_some() {
+                    break value;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(second["id"], 1);
+        requests.lock().await.shutdown().await.unwrap();
+        drop(requests);
+        tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
 }

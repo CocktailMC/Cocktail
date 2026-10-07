@@ -4,7 +4,6 @@ pub(crate) mod files;
 pub mod hangar;
 mod model;
 pub mod modrinth;
-mod netmon;
 pub mod players;
 pub(crate) mod process;
 mod registry;

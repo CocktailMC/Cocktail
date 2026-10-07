@@ -7,6 +7,9 @@ authors.workspace = true
 description = "Cocktail shared types across control plane and init subprocess"
 
 [dependencies]
+regex.workspace = true
+tokio.workspace = true
+libc.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 serde.workspace = true

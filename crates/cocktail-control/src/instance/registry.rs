@@ -264,7 +264,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
     };
 
     if stopping {
-        let alive = runtime_is_alive(pid, container.as_deref()).await;
+        let alive = runtime_is_alive(pid, container.as_deref()).await?;
         if alive {
             anyhow::bail!("instance is stopping");
         }
@@ -478,7 +478,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
     if let Some(proc) = instance.process.as_ref() {
         if proc.child_id > 0 {
             instance.last_pid = Some(proc.child_id);
-            instance.last_start_time = process::process_snapshot(proc.child_id).map(|(t, _)| t);
+            instance.last_start_time = proc.start_time;
         }
         instance.docker_container = proc.container_name.clone();
     }
@@ -518,14 +518,44 @@ pub async fn reattach_running(state: &std::sync::Arc<AppState>) {
             .collect()
     };
 
-    for (id, runtime, workdir, last_pid, start, container, port) in snapshot {
+    for (id, runtime, workdir, mut last_pid, mut start, mut container, port) in snapshot {
+        {
+            let guard = state.instances.read().await;
+            if let Some(handle) = guard.get(&id).and_then(|i| i.process.as_ref()) {
+                if handle.available().await {
+                    continue;
+                }
+            }
+        }
+        // A launch response can be lost after init has successfully created a child.
+        // Recover its existing identity before considering any new launch.
+        let owned = match process::lookup(&id).await {
+            Ok(owned) => owned,
+            Err(e) => {
+                tracing::warn!(%id, error = %e, "runtime lookup unavailable; retaining instance state");
+                continue;
+            }
+        };
+        if let Some(info) = &owned {
+            last_pid = Some(info.child_id);
+            start = info.start_time;
+            container = info.container_name.clone();
+        }
+        let alive = match runtime_is_alive(last_pid, container.as_deref()).await {
+            Ok(alive) => alive,
+            Err(e) => {
+                tracing::warn!(%id, error = %e, "reattach postponed until init is available");
+                continue;
+            }
+        };
         let adopted = match runtime {
             RuntimeKind::Docker | RuntimeKind::Podman => {
                 if let Some(name) = container.clone() {
-                    if let Some(pid) = process::docker_container_pid(&name).await {
+                    if let Some(pid) = process::docker_container_pid(&name).await.unwrap_or(None) {
                         match process::adopt_running(
                             id.clone(),
                             pid,
+                            start,
                             workdir,
                             state.events.clone(),
                             Some(name),
@@ -548,11 +578,16 @@ pub async fn reattach_running(state: &std::sync::Arc<AppState>) {
                 }
             }
             RuntimeKind::Process => {
-                if let Some(pid) = last_pid.filter(|p| *p > 0) {
-                    if process::process_matches(pid, start, &workdir) {
+                if let Some(pid) = last_pid.filter(|p| *p > 0 || owned.is_some()) {
+                    if owned.is_some()
+                        || process::process_matches(pid, start, &workdir)
+                            .await
+                            .unwrap_or(false)
+                    {
                         match process::adopt_running(
                             id.clone(),
                             pid,
+                            start,
                             workdir,
                             state.events.clone(),
                             None,
@@ -585,16 +620,19 @@ pub async fn reattach_running(state: &std::sync::Arc<AppState>) {
                     "reattached running instance"
                 );
                 inst.last_pid = Some(handle.child_id).filter(|p| *p > 0);
-                inst.last_start_time = process::process_snapshot(handle.child_id).map(|(t, _)| t);
+                inst.last_start_time = handle.start_time;
                 inst.docker_container = handle.container_name.clone();
                 inst.process = Some(handle);
                 inst.status = InstanceStatus::Running;
                 inst.updated_at = Utc::now();
+            } else if alive || owned.is_some() {
+                tracing::warn!(%id, "live instance could not be adopted; retaining identity");
             } else if matches!(
                 inst.status,
                 InstanceStatus::Running | InstanceStatus::Starting | InstanceStatus::Stopping
             ) {
                 inst.status = InstanceStatus::Stopped;
+                inst.process = None;
                 inst.last_pid = None;
                 inst.last_start_time = None;
                 inst.docker_container = None;
@@ -662,7 +700,16 @@ pub async fn stop_instance(state: &AppState, id: &str) -> anyhow::Result<Instanc
 
     if let Some(handle) = instance.process.take() {
         drop(guard);
-        handle.stop(StopMode::Graceful).await;
+        if let Err(e) = handle.stop(StopMode::Graceful).await {
+            // An IPC failure is not evidence that the process stopped. Keep its identity.
+            let mut guard = state.instances.write().await;
+            if let Some(inst) = guard.get_mut(id) {
+                inst.process = Some(handle);
+            }
+            drop(guard);
+            let _ = state.persist().await;
+            return Err(e);
+        }
         let mut guard = state.instances.write().await;
         if let Some(inst) = guard.get_mut(id) {
             if !inst.spec.desired_running {
@@ -692,6 +739,13 @@ pub async fn stop_instance(state: &AppState, id: &str) -> anyhow::Result<Instanc
         anyhow::bail!("instance not found after stop");
     }
 
+    if process::lookup(id).await?.is_some()
+        || runtime_is_alive(instance.last_pid, instance.docker_container.as_deref()).await?
+    {
+        anyhow::bail!(
+            "instance is still running; runtime handle must be reattached before stopping"
+        );
+    }
     instance.status = InstanceStatus::Stopped;
     instance.process = None;
     instance.last_pid = None;
@@ -716,7 +770,7 @@ pub async fn restart_instance(state: &AppState, id: &str) -> anyhow::Result<Inst
 }
 
 pub async fn delete_instance(state: &AppState, id: &str) -> anyhow::Result<()> {
-    let _ = stop_instance(state, id).await;
+    stop_instance(state, id).await?;
     let removed = state.instances.write().await.remove(id);
     if removed.is_none() {
         anyhow::bail!("instance not found");
@@ -787,6 +841,7 @@ pub async fn send_command(state: &AppState, id: &str, req: CommandRequest) -> an
 }
 
 pub async fn reconcile_local(state: &std::sync::Arc<AppState>) {
+    reattach_running(state).await;
     let ids: Vec<(String, bool, InstanceStatus)> = {
         let guard = state.instances.read().await;
         guard
@@ -830,11 +885,14 @@ pub async fn recover_stale_statuses(state: &std::sync::Arc<AppState>) {
     }
 }
 
-async fn runtime_is_alive(pid: Option<u32>, container: Option<&str>) -> bool {
+async fn runtime_is_alive(pid: Option<u32>, container: Option<&str>) -> anyhow::Result<bool> {
     if let Some(name) = container.filter(|s| !s.is_empty()) {
         return process::docker_container_running(name).await;
     }
-    pid.filter(|p| *p > 0).is_some_and(process::pid_is_alive)
+    match pid.filter(|p| *p > 0) {
+        Some(pid) => process::pid_is_alive(pid).await,
+        None => Ok(false),
+    }
 }
 
 async fn recover_stuck_stopping(state: &AppState, id: &str) {
@@ -851,8 +909,13 @@ async fn recover_stuck_stopping(state: &AppState, id: &str) {
         let pid = inst.process.as_ref().map(|h| h.child_id).or(inst.last_pid);
         (pid, container)
     };
-    if runtime_is_alive(pid, container.as_deref()).await {
-        return;
+    match runtime_is_alive(pid, container.as_deref()).await {
+        Ok(false) => {}
+        Ok(true) => return,
+        Err(e) => {
+            tracing::warn!(%id, error = %e, "cannot confirm stopped instance while init is unavailable");
+            return;
+        }
     }
     let mut guard = state.instances.write().await;
     let Some(inst) = guard.get_mut(id) else {

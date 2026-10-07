@@ -824,6 +824,7 @@ pub fn build_server() -> Server {
         }
     });
 
+    crate::registry::register(&mut server);
     server
 }
 

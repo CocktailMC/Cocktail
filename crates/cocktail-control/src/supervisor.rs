@@ -505,7 +505,7 @@ impl ServiceSupervisor {
         Some(client.subscribe_events())
     }
 
-    async fn ipc_client(&self, service: &str) -> io::Result<Arc<InitClient>> {
+    pub(crate) async fn ipc_client(&self, service: &str) -> io::Result<Arc<InitClient>> {
         let rt = self.runtime.read().await;
         rt.get(service)
             .and_then(|r| r.client.clone())

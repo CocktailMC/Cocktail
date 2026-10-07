@@ -291,7 +291,18 @@ fn spawn_init_event_consumer(state: SharedState) {
                 continue;
             };
             // channel 关闭（init 停止/重启）或 lagged 时退出内层循环并重订阅。
-            while let Ok(ev) = rx.recv().await {
+            loop {
+                let ev = match rx.recv().await {
+                    Ok(ev) => ev,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(n, "init event consumer lagged");
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+                if ev.method == cocktail_shared::runtime::INSTANCE_EVENT {
+                    continue;
+                }
                 cocktail_shared::logging::emit(
                     cocktail_shared::logfmt::Badge::Info,
                     "cocktail-event",
@@ -444,16 +455,7 @@ pub async fn run_plane() -> anyhow::Result<()> {
         tracing::warn!(error = %e, "cocktail-init subprocess unavailable; secrets will fallback to local file");
     }
 
-    match instance::runtime::ContainerRuntime::detect().await {
-        Ok(rt) => {
-            let engine = rt.engine.as_str();
-            tracing::info!(engine, "container runtime initialised");
-            instance::runtime::set_runtime(rt);
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "no container runtime detected; docker/podman instances unavailable");
-        }
-    }
+    // Container detection and execution belong to cocktail-init.
 
     state.spawn_event_applier();
     // 消费 init→control 的事件推送（log 打点 + 映射进实例事件总线）。

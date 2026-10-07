@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 /// 单个 Minecraft 实例的运行时实体。
 ///
-/// 持有 `ProcessHandle`（本地子进程句柄），不可跨进程序列化，
+/// 持有 `ProcessHandle`（绑定 init 会话的 RPC 代理），不可跨进程序列化，
 /// 因此留在 control 端；跨进程传递时通过 `InstanceView`/`InstanceSpec`。
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Instance {

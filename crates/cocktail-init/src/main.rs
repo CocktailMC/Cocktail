@@ -10,6 +10,11 @@ use cocktail_init::build_server;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::io::Result<()> {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("--stdin-bridge") {
+        return cocktail_init::stdin_bridge::run_stdin_bridge(&args.next().unwrap_or_default())
+            .map_err(|e| std::io::Error::other(e.to_string()));
+    }
     // 日志走 stderr（control 端转发到自己的 tracing）。
     let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
