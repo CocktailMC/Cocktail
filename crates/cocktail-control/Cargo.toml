@@ -45,6 +45,8 @@ cocktail-shared = { path = "../cocktail-shared" }
 [dev-dependencies]
 tempfile = "3"
 http-body-util = "0.1"
+# 测试环境无 init 子进程：init_call 退化为进程内直接 dispatch 同一份 handler。
+cocktail-init = { path = "../cocktail-init" }
 
 [target.'cfg(windows)'.dependencies]
 reqwest = { workspace = true, features = ["native-tls"] }

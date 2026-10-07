@@ -15,9 +15,11 @@ pub mod http;
 pub mod java;
 pub mod proto;
 pub mod rcon;
+pub mod rpc;
 pub mod secrets;
 pub mod server;
 pub mod sevenz;
 pub mod versions;
 
 pub use proto::{Error, Event, Request, Response, RpcResult};
+pub use rpc::build_server;

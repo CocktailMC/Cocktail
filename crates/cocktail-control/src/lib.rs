@@ -79,7 +79,9 @@ pub(crate) const INIT_SERVICE: &str = "cocktail-init";
 /// 全程用统一格式的实时行记录：进入 `request.running`，返回 `request.completed`，
 /// 失败 `request.failed`，耗时超 5s 追加一条 `request.slow`。
 ///
-/// TODO 阶段 3：对未启用的模块提供本地 fallback 而不是直接报错。
+/// 测试构建下（无 init 子进程）退化为进程内直接 dispatch
+/// [`cocktail_init::build_server`] 的同一份 handler，保证测试与子进程模式行为一致。
+/// TODO 阶段 3：生产侧的本地 fallback（单进程老部署）仍待实现。
 pub(crate) async fn init_call<P: serde::Serialize>(
     method: &str,
     params: P,
@@ -104,9 +106,28 @@ pub(crate) async fn init_call<P: serde::Serialize>(
     let sup = match SERVICE_SUPERVISOR.get() {
         Some(s) => s,
         None => {
-            let err = "cocktail-init subprocess not available (SERVICE_SUPERVISOR unset)";
-            live.fail("request.failed", err);
-            return Err(anyhow::anyhow!("{err}"));
+            // 无托管 init 子进程：测试构建走进程内同一份 handler，生产构建报错。
+            #[cfg(test)]
+            let result = inproc_init_call(method, &params).await;
+            #[cfg(not(test))]
+            let result: anyhow::Result<serde_json::Value> = {
+                let _ = &params;
+                Err(anyhow::anyhow!(
+                    "cocktail-init subprocess not available (SERVICE_SUPERVISOR unset)"
+                ))
+            };
+            match &result {
+                Ok(_) => live.done(
+                    "request.completed",
+                    vec![
+                        ("id".to_string(), id.to_string()),
+                        ("method".to_string(), method.to_string()),
+                        ("duration".to_string(), human_duration(started.elapsed())),
+                    ],
+                ),
+                Err(e) => live.fail("request.failed", &e.to_string()),
+            }
+            return result;
         }
     };
 
@@ -139,6 +160,21 @@ pub(crate) async fn init_call<P: serde::Serialize>(
             Err(anyhow::anyhow!("init RPC {method} failed: {e}"))
         }
     }
+}
+
+/// 测试环境兜底：init 子进程未托管时，进程内直接跑 [`cocktail_init::build_server`]
+/// 的同一份 handler，保证测试覆盖的是真实实现而非替身。
+#[cfg(test)]
+async fn inproc_init_call<P: serde::Serialize>(
+    method: &str,
+    params: &P,
+) -> anyhow::Result<serde_json::Value> {
+    let value = serde_json::to_value(params).unwrap_or(serde_json::Value::Null);
+    let server = cocktail_init::build_server();
+    server
+        .call(method, value)
+        .await
+        .map_err(|e| anyhow::anyhow!("in-process init {method} failed: {}", e.message))
 }
 
 /// 注册并启动 cocktail-init 服务（Transport::Ipc），随后握手拉取 master key。

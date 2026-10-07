@@ -450,6 +450,7 @@ dependencies = [
  "bollard",
  "bytes",
  "chrono",
+ "cocktail-init",
  "cocktail-shared",
  "extism",
  "flate2",

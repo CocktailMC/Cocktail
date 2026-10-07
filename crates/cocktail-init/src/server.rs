@@ -47,7 +47,9 @@ impl Server {
     }
 
     /// 按 method 路由到 handler。未注册返回 method_not_found。
-    async fn dispatch(&self, method: &str, params: serde_json::Value) -> RpcResult {
+    ///
+    /// pub 以便 control 侧进程内 fallback 直接复用同一份 handler 实现。
+    pub async fn call(&self, method: &str, params: serde_json::Value) -> RpcResult {
         match self.handlers.get(method) {
             Some(h) => h(params).await,
             None => Err(Error::method_not_found(method)),
@@ -103,7 +105,7 @@ impl Server {
             };
 
             let id = req.id;
-            let result = server.dispatch(&req.method, req.params).await;
+            let result = server.call(&req.method, req.params).await;
             let resp = match result {
                 Ok(v) => Response::success(id, v),
                 Err(e) => Response::error(id, e),
