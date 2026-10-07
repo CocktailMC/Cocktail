@@ -237,6 +237,80 @@ async fn shutdown_init() {
     }
 }
 
+/// 消费 cocktail-init 推送的 Event：按统一日志格式打点，并把可映射的事件
+/// 投递进实例事件总线（前端 `/api/v1/events/ws` 会转发 `InstanceEvent`）。
+///
+/// 订阅与一次 spawn 绑定：init respawn 后旧 broadcast channel 关闭，本任务
+/// 自动重新订阅（按 client 生命周期重建）。
+fn spawn_init_event_consumer(state: SharedState) {
+    let Some(sup) = SERVICE_SUPERVISOR.get().cloned() else {
+        tracing::warn!("init event consumer not started: supervisor unavailable");
+        return;
+    };
+    tokio::spawn(async move {
+        loop {
+            let Some(mut rx) = sup.subscribe_events(INIT_SERVICE).await else {
+                // init 未运行（未启动 / 正在重启）：稍后重试订阅。
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            };
+            // channel 关闭（init 停止/重启）或 lagged 时退出内层循环并重订阅。
+            while let Ok(ev) = rx.recv().await {
+                cocktail_shared::logging::emit(
+                    cocktail_shared::logfmt::Badge::Info,
+                    "cocktail-event",
+                    "event.received",
+                    vec![("method".to_string(), ev.method.clone())],
+                );
+                if let Some(ie) = map_init_event(&ev) {
+                    state.publish(ie);
+                }
+            }
+        }
+    });
+}
+
+/// 把 init 推送的 Event 映射到实例事件总线上的 `InstanceEvent`。
+///
+/// 当前只有 `http.download.*` 有对应变体（`DownloadProgress`）；其余事件仅打日志。
+fn map_init_event(ev: &cocktail_shared::proto::Event) -> Option<crate::instance::InstanceEvent> {
+    use crate::instance::InstanceEvent;
+    let phase = match ev.method.as_str() {
+        "download.started" | "download.progress" => "download",
+        "download.completed" => "done",
+        "download.failed" => "failed",
+        _ => return None,
+    };
+    let p = &ev.params;
+    let url = p.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let dest = p.get("dest").and_then(|v| v.as_str()).unwrap_or("");
+    let received = p
+        .get("received")
+        .and_then(|v| v.as_u64())
+        .or_else(|| p.get("bytes").and_then(|v| v.as_u64()))
+        .unwrap_or(0);
+    let total = p.get("total").and_then(|v| v.as_u64());
+    let pct = total
+        .filter(|t| *t > 0)
+        .map(|t| ((received as f64 / t as f64) * 100.0).clamp(0.0, 100.0) as f32);
+    Some(InstanceEvent::DownloadProgress {
+        id: if url.is_empty() {
+            "init".to_string()
+        } else {
+            url.to_string()
+        },
+        label: if dest.is_empty() {
+            url.to_string()
+        } else {
+            dest.to_string()
+        },
+        phase: phase.to_string(),
+        received,
+        total,
+        pct,
+    })
+}
+
 /// 等待 shutdown 信号（Ctrl+C / SIGTERM）。返回 () 后 axum::serve
 /// 进入 graceful shutdown：停止接受新连接，等待 in-flight 请求完成。
 async fn shutdown_signal() {
@@ -346,6 +420,8 @@ pub async fn run_plane() -> anyhow::Result<()> {
     }
 
     state.spawn_event_applier();
+    // 消费 init→control 的事件推送（log 打点 + 映射进实例事件总线）。
+    spawn_init_event_consumer(Arc::clone(&state));
     instance::reattach_running(&state).await;
     state.spawn_scheduler();
     state.spawn_reconciler();

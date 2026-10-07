@@ -1,8 +1,9 @@
 //! HTTP 下载与代理：阶段 2 起 cocktail-init 接管用户空间文件下载。
 //!
 //! control 端通过 IPC `http.download_to_path` 调用本模块。下载进度以统一格式的
-//! 实时行（`download.running`）输出到 stderr，由 control 端采集；跨进程的
-//! event push 通道（`Transfer::emit`）待阶段 2 就位后再补。
+//! 实时行（`download.running`）输出到 stderr，由 control 端采集；同时通过
+//! [`crate::events::emit`] 回推 `download.started/progress/completed/failed`
+//! 事件给 control（跨进程 event push 通道）。
 //!
 //! 代理检测策略与 control 端 `http.rs` 完全一致：读 `COCKTAIL_PROXY`
 //! 显式代理 → 否则若未设 `HTTPS_PROXY` 等环境变量则查 Windows IE 系统代理。
@@ -17,6 +18,8 @@ use tokio::io::AsyncWriteExt;
 
 use cocktail_shared::logfmt::{human_bytes, human_duration};
 use cocktail_shared::logging::LiveLine;
+
+use crate::events;
 
 const DEFAULT_UA: &str = "Cocktail-Manager/0.1 (https://github.com/CocktailMC/Cocktail)";
 
@@ -250,13 +253,27 @@ pub async fn download_to_path(url: &str, dest: &Path) -> anyhow::Result<u64> {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| dest.display().to_string());
     let started = Instant::now();
+    // 本地 stderr 实时行（给人看）与跨进程 event（回推 control/UI）并存。
+    events::emit(
+        "download.started",
+        serde_json::json!({ "url": url, "dest": dest_label.clone() }),
+    );
     let live = LiveLine::begin(
         "cocktail-http",
         "download.running",
-        vec![("dest".to_string(), dest_label)],
+        vec![("dest".to_string(), dest_label.clone())],
     );
     match download_to_path_inner(url, dest, &live).await {
         Ok(written) => {
+            events::emit(
+                "download.completed",
+                serde_json::json!({
+                    "url": url,
+                    "dest": dest_label,
+                    "bytes": written,
+                    "duration_ms": started.elapsed().as_millis() as u64,
+                }),
+            );
             live.done(
                 "download.completed",
                 vec![
@@ -267,6 +284,14 @@ pub async fn download_to_path(url: &str, dest: &Path) -> anyhow::Result<u64> {
             Ok(written)
         }
         Err(e) => {
+            events::emit(
+                "download.failed",
+                serde_json::json!({
+                    "url": url,
+                    "dest": dest_label,
+                    "error": format!("{e:#}"),
+                }),
+            );
             live.fail("download.failed", &format!("{e:#}"));
             Err(e)
         }
@@ -300,6 +325,7 @@ async fn download_to_path_inner(url: &str, dest: &Path, live: &LiveLine) -> anyh
     let mut stream = resp.bytes_stream();
     let mut written = 0u64;
     let mut last = Instant::now();
+    let mut last_bytes = 0u64;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| explain(e, url))?;
         written += chunk.len() as u64;
@@ -310,9 +336,18 @@ async fn download_to_path_inner(url: &str, dest: &Path, live: &LiveLine) -> anyh
                 written
             )
         })?;
-        if last.elapsed() >= Duration::from_millis(200) {
+        // 节流：≥200ms 或自上次刷新后新增 ≥256KiB 才更新实时行 + emit 一次
+        // progress，避免小 chunk 下载造成事件风暴。
+        if last.elapsed() >= Duration::from_millis(200)
+            || written.saturating_sub(last_bytes) >= 256 * 1024
+        {
             live.update(progress_kv(written, total));
+            events::emit(
+                "download.progress",
+                serde_json::json!({ "url": url, "received": written, "total": total }),
+            );
             last = Instant::now();
+            last_bytes = written;
         }
     }
     file.flush()

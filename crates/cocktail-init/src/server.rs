@@ -55,15 +55,32 @@ impl Server {
     }
 
     /// 主循环：从 reader 读帧，dispatch，写 Response 到 writer。
-    /// 同时允许其他任务通过 `write_event` 主动推送 Event。
+    /// 同时安装全局事件 sink 并起写任务，支持任意 handler 通过
+    /// [`crate::events::emit`] 主动推送 Event——Event 与 Response 复用同一
+    /// writer 锁，逐帧写入，不会交错撕裂。
     pub async fn run<R, W>(self, reader: R, writer: W) -> io::Result<()>
     where
         R: tokio::io::AsyncRead + Unpin,
-        W: tokio::io::AsyncWrite + Unpin,
+        W: tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
         let server = Arc::new(self);
         let mut reader = BufReader::new(reader);
         let writer = Arc::new(Mutex::new(BufWriter::new(writer)));
+
+        // 安装事件出口：起一个写任务消费 Event 队列，落到同一 writer。
+        let (sink, mut event_rx) = crate::events::channel();
+        crate::events::install(sink);
+        {
+            let writer = Arc::clone(&writer);
+            tokio::spawn(async move {
+                while let Some(event) = event_rx.recv().await {
+                    if let Err(e) = Server::write_event(&writer, event).await {
+                        tracing::warn!(error = %e, "failed to write init event frame");
+                        break;
+                    }
+                }
+            });
+        }
 
         loop {
             let frame = match read_frame(&mut reader).await {

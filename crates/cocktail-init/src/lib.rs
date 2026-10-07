@@ -9,6 +9,7 @@
 //! + try_rcon 验证管线。
 
 pub mod archive;
+pub mod events;
 pub mod files;
 pub mod http;
 pub mod java;

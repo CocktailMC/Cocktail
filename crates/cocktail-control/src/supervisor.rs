@@ -493,6 +493,18 @@ impl ServiceSupervisor {
         client.get_master_key().await
     }
 
+    /// 订阅 init 推送的事件。返回 `None` 表示该服务未启动 / 无 IPC client。
+    ///
+    /// 订阅与具体一次 spawn 绑定：服务重启后旧 receiver 会收到 `Closed`，
+    /// 调用方需重新调用本方法重建订阅。
+    pub async fn subscribe_events(
+        &self,
+        service: &str,
+    ) -> Option<tokio::sync::broadcast::Receiver<cocktail_shared::proto::Event>> {
+        let client = self.ipc_client(service).await.ok()?;
+        Some(client.subscribe_events())
+    }
+
     async fn ipc_client(&self, service: &str) -> io::Result<Arc<InitClient>> {
         let rt = self.runtime.read().await;
         rt.get(service)

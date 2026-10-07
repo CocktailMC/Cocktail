@@ -10,6 +10,37 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{InstanceSpec, InstanceStatus, LogLine, MetricSample};
 
+/// JSON-RPC 2.0 事件：init→control 的主动推送（notification 形状）。
+///
+/// 靠「有 method、无 result/error」与 Response 区分；`id` 通常为 null。
+/// 定义沉到共享层，保证 control 与 init 反序列化的是同一份结构。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Event {
+    #[serde(default = "default_jsonrpc")]
+    pub jsonrpc: String,
+    #[serde(default)]
+    pub id: Option<u64>,
+    pub method: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
+/// serde 默认值：JSON-RPC 版本号。
+fn default_jsonrpc() -> String {
+    "2.0".into()
+}
+
+impl Event {
+    pub fn new(method: impl Into<String>, params: serde_json::Value) -> Self {
+        Self {
+            jsonrpc: "2.0".into(),
+            id: None,
+            method: method.into(),
+            params,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyInstance {
     pub id: String,

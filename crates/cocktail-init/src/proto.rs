@@ -6,6 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// JSON-RPC 2.0 事件：init→control 主动推送。定义在共享层
+/// （`cocktail_shared::proto::Event`），此处 re-export，保证两进程同一份结构。
+pub use cocktail_shared::proto::Event;
+
 /// JSON-RPC 2.0 请求：control→init 的方法调用。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
@@ -26,18 +30,6 @@ pub struct Response {
     pub result: serde_json::Value,
     #[serde(default)]
     pub error: Option<Error>,
-}
-
-/// JSON-RPC 2.0 事件：init→control 的主动推送（id 固定为 0，与请求区分）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Event {
-    pub jsonrpc: String,
-    /// 事件推送固定 id=0；正常请求 id 从 1 开始。
-    #[serde(default)]
-    pub id: Option<u64>,
-    pub method: String,
-    #[serde(default)]
-    pub params: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,17 +81,6 @@ impl Response {
             id,
             result: serde_json::Value::Null,
             error: Some(err),
-        }
-    }
-}
-
-impl Event {
-    pub fn new(method: impl Into<String>, params: serde_json::Value) -> Self {
-        Self {
-            jsonrpc: "2.0".into(),
-            id: None,
-            method: method.into(),
-            params,
         }
     }
 }
