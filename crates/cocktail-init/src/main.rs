@@ -280,7 +280,10 @@ async fn main() -> std::io::Result<()> {
             Ok(v) => v,
             Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
         };
-        match sevenz::extract(std::path::Path::new(&p.archive), std::path::Path::new(&p.dest)) {
+        match sevenz::extract(
+            std::path::Path::new(&p.archive),
+            std::path::Path::new(&p.dest),
+        ) {
             Ok(()) => Ok(serde_json::Value::Null),
             Err(e) => Err(proto::Error::internal(format!("{e}"))),
         }
@@ -651,11 +654,12 @@ async fn main() -> std::io::Result<()> {
             Ok(v) => v,
             Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
         };
-        let image = match cocktail_shared::java::ImageType::parse(p.image_type.as_deref().unwrap_or("jre"))
-        {
-            Ok(v) => v,
-            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
-        };
+        let image =
+            match cocktail_shared::java::ImageType::parse(p.image_type.as_deref().unwrap_or("jre"))
+            {
+                Ok(v) => v,
+                Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+            };
         match java::install(p.major, image).await {
             Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
             Err(e) => Err(proto::Error::internal(format!("{e}"))),
@@ -731,7 +735,11 @@ async fn main() -> std::io::Result<()> {
             Ok(v) => v,
             Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
         };
-        let prefer = match p.prefer.as_deref().map(cocktail_shared::java::ImageType::parse).transpose()
+        let prefer = match p
+            .prefer
+            .as_deref()
+            .map(cocktail_shared::java::ImageType::parse)
+            .transpose()
         {
             Ok(v) => v,
             Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
@@ -775,7 +783,9 @@ async fn main() -> std::io::Result<()> {
             Ok(v) => v,
             Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
         };
-        match versions::download_and_install(&p.workdir, &p.core, &p.version, p.loader.as_deref()).await {
+        match versions::download_and_install(&p.workdir, &p.core, &p.version, p.loader.as_deref())
+            .await
+        {
             Ok((command, args)) => Ok(serde_json::json!({ "command": command, "args": args })),
             Err(e) => Err(proto::Error::internal(format!("{e}"))),
         }

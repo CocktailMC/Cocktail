@@ -7,7 +7,7 @@
 //! `From<&Instance>` 等需要本地运行时句柄的 impl 仍保留在 control 端。
 
 pub use cocktail_shared::proto::{
-    AgentDown, AgentUp, ApplyInstance, InstanceManifest, NicStat, TcpStates, PROTOCOL_VERSION,
+    AgentDown, AgentUp, ApplyInstance, InstanceManifest, NicStat, PROTOCOL_VERSION, TcpStates,
     api_version, default_protocol_version, kind_instance,
 };
 

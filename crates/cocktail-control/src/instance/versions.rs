@@ -37,7 +37,11 @@ pub fn core_needs_eula(core: &str) -> bool {
 
 /// 列出某核心的可用 MC 版本。
 pub async fn list_versions(core: &str) -> anyhow::Result<Vec<CoreVersion>> {
-    let v = crate::init_call("versions.list_versions", serde_json::json!({ "core": core })).await?;
+    let v = crate::init_call(
+        "versions.list_versions",
+        serde_json::json!({ "core": core }),
+    )
+    .await?;
     Ok(serde_json::from_value(v)?)
 }
 

@@ -64,7 +64,11 @@ pub fn reset_world(workdir: &str, world: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn export_world(instance_id: &str, workdir: &str, world: &str) -> anyhow::Result<BackupInfo> {
+pub async fn export_world(
+    instance_id: &str,
+    workdir: &str,
+    world: &str,
+) -> anyhow::Result<BackupInfo> {
     if world.contains("..") || world.contains('/') || world.contains('\\') {
         anyhow::bail!("invalid world name");
     }

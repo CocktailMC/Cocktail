@@ -69,9 +69,7 @@ pub async fn resolve_in_workdir(workdir: &str, relative: &str) -> anyhow::Result
         serde_json::json!({ "workdir": workdir, "relative": relative }),
     )
     .await?;
-    Ok(PathBuf::from(
-        v["path"].as_str().unwrap_or_else(|| ""),
-    ))
+    Ok(PathBuf::from(v["path"].as_str().unwrap_or_else(|| "")))
 }
 
 /// 列出 workdir/relative 目录下的条目。
@@ -121,11 +119,7 @@ pub async fn write_file(
 }
 
 /// 写入二进制文件。
-pub async fn write_bytes(
-    workdir: &str,
-    relative: &str,
-    bytes: &[u8],
-) -> anyhow::Result<FileEntry> {
+pub async fn write_bytes(workdir: &str, relative: &str, bytes: &[u8]) -> anyhow::Result<FileEntry> {
     let v = crate::init_call(
         "files.write_bytes",
         serde_json::json!({ "workdir": workdir, "relative": relative, "bytes": bytes }),
@@ -310,11 +304,7 @@ pub async fn copy_instance_tree(
 }
 
 /// 把 workdir/relative 子目录打包成 dest zip。
-pub async fn pack_subdir_zip(
-    workdir: &str,
-    relative: &str,
-    dest: &Path,
-) -> anyhow::Result<u64> {
+pub async fn pack_subdir_zip(workdir: &str, relative: &str, dest: &Path) -> anyhow::Result<u64> {
     let v = crate::init_call(
         "files.pack_subdir_zip",
         serde_json::json!({
@@ -328,11 +318,7 @@ pub async fn pack_subdir_zip(
 }
 
 /// 把 zip 字节流解压合并到 workdir/relative 下。
-pub async fn extract_zip_into(
-    workdir: &str,
-    relative: &str,
-    bytes: &[u8],
-) -> anyhow::Result<u32> {
+pub async fn extract_zip_into(workdir: &str, relative: &str, bytes: &[u8]) -> anyhow::Result<u32> {
     let v = crate::init_call(
         "files.extract_zip_into",
         serde_json::json!({
@@ -367,11 +353,7 @@ pub async fn write_mc_version_marker(workdir: &str, version: &str) -> anyhow::Re
 
 /// 递归统计某目录占用字节数。
 pub async fn total_dir_bytes(path: &str) -> anyhow::Result<u64> {
-    let v = crate::init_call(
-        "files.total_dir_bytes",
-        serde_json::json!({ "path": path }),
-    )
-    .await?;
+    let v = crate::init_call("files.total_dir_bytes", serde_json::json!({ "path": path })).await?;
     Ok(v["bytes"].as_u64().unwrap_or(0))
 }
 

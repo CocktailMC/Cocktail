@@ -54,8 +54,7 @@ pub fn ensure_bin() -> anyhow::Result<PathBuf> {
             Err(_) => true,
         };
         if stale {
-            fs::write(&dest, bytes)
-                .with_context(|| format!("write {}", dest.display()))?;
+            fs::write(&dest, bytes).with_context(|| format!("write {}", dest.display()))?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -66,8 +65,7 @@ pub fn ensure_bin() -> anyhow::Result<PathBuf> {
         }
         return Ok(dest);
     }
-    which_system()
-        .ok_or_else(|| anyhow::anyhow!("当前平台未内置 7z，且 PATH 中找不到 7za/7zz/7z"))
+    which_system().ok_or_else(|| anyhow::anyhow!("当前平台未内置 7z，且 PATH 中找不到 7za/7zz/7z"))
 }
 
 fn which_system() -> Option<PathBuf> {
