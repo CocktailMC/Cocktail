@@ -1,11 +1,10 @@
+use crate::api::handlers::{ErrorBody, bad_request, current_admin, db_conn, not_found};
+use crate::state::SharedState;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
-
-use crate::api::handlers::{ErrorBody, bad_request, current_admin, not_found};
-use crate::state::SharedState;
 
 #[derive(Serialize)]
 pub struct UserView {
@@ -70,7 +69,7 @@ pub async fn list_users(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
     let admin = session_admin(&state, &headers).await?;
     require_perm(&admin, "users")?;
-    let conn = state.db.get().expect("db pool");
+    let conn = db_conn(&state)?;
     let rows = crate::db::list_admins(&conn).map_err(|e| bad_request(e.to_string()))?;
     Ok(Json(
         rows.into_iter()
@@ -101,7 +100,7 @@ pub async fn create_user(
     let hash =
         crate::auth::hash_password(&body.password).map_err(|e| bad_request(e.to_string()))?;
     let now = chrono::Utc::now().to_rfc3339();
-    let conn = state.db.get().expect("db pool");
+    let conn = db_conn(&state)?;
     crate::db::insert_admin(&conn, &username, &hash, &role, &now)
         .map_err(|e| bad_request(e.to_string()))?;
     crate::util::audit(
@@ -127,7 +126,7 @@ pub async fn update_user(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
     let admin = session_admin(&state, &headers).await?;
     require_perm(&admin, "users")?;
-    let conn = state.db.get().expect("db pool");
+    let conn = db_conn(&state)?;
     let target = crate::db::admin_by_id(&conn, id)
         .map_err(|e| bad_request(e.to_string()))?
         .ok_or_else(|| not_found("用户不存在"))?;
@@ -174,7 +173,7 @@ pub async fn delete_user(
     if admin.id == id {
         return Err(bad_request("不能删除当前登录账号"));
     }
-    let conn = state.db.get().expect("db pool");
+    let conn = db_conn(&state)?;
     crate::db::delete_admin(&conn, id).map_err(|e| bad_request(e.to_string()))?;
     crate::util::audit(
         "user.delete",

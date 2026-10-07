@@ -42,13 +42,8 @@ mod workflow;
 
 pub use stdin_bridge::run_stdin_bridge;
 
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
-
+use crate::db::TryConn;
+use crate::state::{AppState, SharedState};
 use axum::Json;
 use axum::Router;
 use axum::body::Body;
@@ -57,12 +52,16 @@ use axum::http::{Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
-
-use crate::state::{AppState, SharedState};
 
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
@@ -724,7 +723,18 @@ async fn auth_middleware(
         return next.run(req).await;
     }
 
-    let conn = state.db.get().expect("db pool");
+    let Ok(conn) = state.db.try_conn() else {
+        tracing::warn!("auth middleware: database pool unavailable");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [("retry-after", "5")],
+            Json(json!({
+                "error": "服务暂时不可用：数据库连接繁忙，请稍后重试",
+                "code": "db_unavailable"
+            })),
+        )
+            .into_response();
+    };
     let needs_setup = crate::auth::setup_required(&conn).unwrap_or(true);
     drop(conn);
     if needs_setup {
@@ -778,9 +788,12 @@ async fn auth_middleware(
     let is_machine = state.env_api_token.as_ref().is_some_and(|t| t == &token)
         || (!state.plugin_token.is_empty() && state.plugin_token == token);
     let (role, csrf, actor) = if is_machine {
-        let owner = {
-            let conn = state.db.get().expect("db pool");
-            crate::db::superadmin(&conn).ok().flatten()
+        let owner = match state.db.try_conn() {
+            Ok(conn) => crate::db::superadmin(&conn).ok().flatten(),
+            Err(e) => {
+                tracing::warn!(error = %e, "auth middleware: pool unavailable for machine token");
+                None
+            }
         };
         match owner {
             Some(a) => (a.role, String::new(), "machine".to_string()),
@@ -793,9 +806,12 @@ async fn auth_middleware(
             }
         }
     } else {
-        let session = {
-            let conn = state.db.get().expect("db pool");
-            crate::db::session_lookup(&conn, &token).ok().flatten()
+        let session = match state.db.try_conn() {
+            Ok(conn) => crate::db::session_lookup(&conn, &token).ok().flatten(),
+            Err(e) => {
+                tracing::warn!(error = %e, "auth middleware: pool unavailable for session lookup");
+                None
+            }
         };
         match session {
             Some(s) => (s.admin.role, s.csrf_token, s.admin.username),

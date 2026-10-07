@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -7,6 +8,31 @@ use rusqlite::{Connection, OptionalExtension, params};
 pub const DB_PATH: &str = "data/cocktail.db";
 
 pub type DbPool = r2d2::Pool<SqliteConnectionManager>;
+
+#[derive(Debug)]
+pub struct PoolUnavailable {
+    pub detail: String,
+}
+
+impl std::fmt::Display for PoolUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "database pool unavailable: {}", self.detail)
+    }
+}
+
+impl std::error::Error for PoolUnavailable {}
+
+pub trait TryConn {
+    fn try_conn(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>, PoolUnavailable>;
+}
+
+impl TryConn for DbPool {
+    fn try_conn(&self) -> Result<r2d2::PooledConnection<SqliteConnectionManager>, PoolUnavailable> {
+        self.get().map_err(|e| PoolUnavailable {
+            detail: e.to_string(),
+        })
+    }
+}
 
 pub fn open() -> anyhow::Result<Connection> {
     fs::create_dir_all("data")?;
@@ -29,8 +55,11 @@ pub fn pool_at(path: &Path) -> anyhow::Result<DbPool> {
         init_connection(conn)?;
         Ok(())
     });
-    let pool = r2d2::Pool::builder().max_size(8).build(manager)?;
-    // Warm one connection so schema migration runs before first request.
+    let pool = r2d2::Pool::builder()
+        .max_size(16)
+        .min_idle(Some(2))
+        .connection_timeout(Duration::from_secs(10))
+        .build(manager)?;
     pool.get()?;
     Ok(pool)
 }
@@ -38,7 +67,7 @@ pub fn pool_at(path: &Path) -> anyhow::Result<DbPool> {
 fn init_connection(conn: &Connection) -> rusqlite::Result<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.pragma_update(None, "busy_timeout", 5000)?;
+    conn.pragma_update(None, "busy_timeout", 15000)?;
     migrate(conn)?;
     Ok(())
 }

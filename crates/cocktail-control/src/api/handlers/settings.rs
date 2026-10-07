@@ -1,11 +1,10 @@
+use crate::api::handlers::{bad_request, current_admin, db_conn};
+use crate::state::SharedState;
 use axum::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
-
-use crate::api::handlers::{bad_request, current_admin};
-use crate::state::SharedState;
 
 #[derive(Serialize)]
 pub struct SettingsResponse {
@@ -49,7 +48,10 @@ pub async fn get_settings(State(state): State<SharedState>, headers: HeaderMap) 
         Ok(a) => a,
         Err(resp) => return resp.into_response(),
     };
-    let conn = state.db.get().expect("db pool");
+    let conn = match db_conn(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp.into_response(),
+    };
     let Ok(panel) = crate::db::panel(&conn) else {
         return bad_request("无法读取面板设置").into_response();
     };
@@ -91,7 +93,10 @@ pub async fn update_settings(
         Ok(a) => a,
         Err(resp) => return resp.into_response(),
     };
-    let conn = state.db.get().expect("db pool");
+    let conn = match db_conn(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp.into_response(),
+    };
     let patch = crate::db::PanelPatch {
         panel_name: body.panel_name.clone(),
         webhook_url: body.webhook_url.as_ref().map(|s| Some(s.clone())),

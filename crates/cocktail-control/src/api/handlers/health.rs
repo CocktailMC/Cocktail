@@ -1,11 +1,10 @@
-use std::sync::OnceLock;
-
+use crate::api::handlers::db_conn;
+use crate::platform;
+use crate::state::SharedState;
 use axum::Json;
 use axum::extract::State;
 use serde::Serialize;
-
-use crate::platform;
-use crate::state::SharedState;
+use std::sync::OnceLock;
 
 /// 把 Cargo.toml 的 semver 版本（如 `26.4.11-DP` 或 `26.4.11-DP+B1842`）
 /// 转成 Cocktail 自定义格式 `26Q4.11.DP`。build metadata 不出现在 version 字段。
@@ -71,22 +70,29 @@ pub struct HealthResponse {
 
 pub async fn health(State(state): State<SharedState>) -> Json<HealthResponse> {
     let p = platform::detect();
-    let conn = state.db.get().expect("db pool");
-    let setup_required = crate::auth::setup_required(&conn).unwrap_or(true);
-    let panel_name = crate::db::panel(&conn)
-        .map(|r| r.panel_name)
-        .unwrap_or_else(|_| "Cocktail Manager".into());
-    let admin_username = crate::db::superadmin(&conn)
-        .ok()
-        .flatten()
-        .map(|a| a.username);
-    drop(conn);
+    let (setup_required, panel_name, admin_username, db_ok) = match db_conn(&state) {
+        Ok(conn) => {
+            let setup_required = crate::auth::setup_required(&conn).unwrap_or(true);
+            let panel_name = crate::db::panel(&conn)
+                .map(|r| r.panel_name)
+                .unwrap_or_else(|_| "Cocktail Manager".into());
+            let admin_username = crate::db::superadmin(&conn)
+                .ok()
+                .flatten()
+                .map(|a| a.username);
+            (setup_required, panel_name, admin_username, true)
+        }
+        Err(_) => {
+            tracing::warn!("health check: database pool unavailable");
+            (true, "Cocktail Manager".to_string(), None, false)
+        }
+    };
     let (plugin_host_ok, plugins) = crate::plugin_bridge::health_snapshot(&state).await;
     Json(HealthResponse {
         name: "cocktail-control",
         version: version_string(),
         release: release_string(),
-        status: "ok",
+        status: if db_ok { "ok" } else { "degraded" },
         auth_required: !setup_required || state.env_api_token.is_some(),
         setup_required,
         panel_name,
