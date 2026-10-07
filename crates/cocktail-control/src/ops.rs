@@ -1,13 +1,12 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use tokio::sync::Mutex;
-
+use crate::db::TryConn;
 use crate::hostnet::{self, HostNetPrev, HostNetSample, InstanceNetRow};
 use crate::instance::InstanceStatus;
 use crate::qqbot::{QqClient, QqConfig};
 use crate::state::SharedState;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 pub(crate) const HOST_NET_BUFFER: usize = 180;
 
@@ -55,7 +54,7 @@ pub fn spawn(state: &SharedState) {
 
 async fn tick(state: &SharedState) -> anyhow::Result<()> {
     let cfg = {
-        let conn = state.db.get().expect("db pool");
+        let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
         crate::db::panel(&conn)?
     };
     let prev = state.ops.prev.lock().await.clone();
@@ -234,7 +233,7 @@ fn fmt_bps(n: f32) -> String {
 
 pub async fn send_now(state: &SharedState, text: &str) -> anyhow::Result<()> {
     let cfg = {
-        let conn = state.db.get().expect("db pool");
+        let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
         crate::db::panel(&conn)?
     };
     let qq = QqConfig {
@@ -249,8 +248,13 @@ pub async fn send_now(state: &SharedState, text: &str) -> anyhow::Result<()> {
 
 pub async fn notify_event(state: &SharedState, title: &str, body: &str) {
     let cfg = {
-        let conn = state.db.get().expect("db pool");
-        crate::db::panel(&conn).ok()
+        match state.db.try_conn() {
+            Ok(conn) => crate::db::panel(&conn).ok(),
+            Err(e) => {
+                tracing::warn!(error = %e, "notify_event: database pool unavailable");
+                None
+            }
+        }
     };
     let Some(cfg) = cfg else {
         return;

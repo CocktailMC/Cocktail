@@ -1,3 +1,9 @@
+use crate::auth;
+use crate::db;
+use crate::db::TryConn;
+use crate::instance::InstanceEvent;
+use crate::proto::{AgentDown, AgentUp, ApplyInstance};
+use crate::state::SharedState;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Query, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
@@ -5,12 +11,6 @@ use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::mpsc;
-
-use crate::auth;
-use crate::db;
-use crate::instance::InstanceEvent;
-use crate::proto::{AgentDown, AgentUp, ApplyInstance};
-use crate::state::SharedState;
 
 #[derive(Deserialize)]
 pub struct AgentWsQuery {
@@ -23,7 +23,9 @@ pub async fn agent_ws(
     State(state): State<SharedState>,
 ) -> impl IntoResponse {
     let token = q.token;
-    let conn = state.db.get().expect("db pool");
+    let Ok(conn) = state.db.try_conn() else {
+        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
     let node = match find_agent_node(&conn, &token) {
         Ok(Some(n)) => n,
         _ => {
@@ -134,9 +136,9 @@ async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
             arch,
             protocol_version,
         } => {
-            let conn = state.db.get().expect("db pool");
-            let _ = db::set_node_protocol(&conn, node_id, protocol_version as i64);
-            drop(conn);
+            if let Ok(conn) = state.db.try_conn() {
+                let _ = db::set_node_protocol(&conn, node_id, protocol_version as i64);
+            }
             state
                 .node_live
                 .write()
@@ -144,8 +146,9 @@ async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
                 .entry(node_id.to_string())
                 .or_default()
                 .protocol_version = protocol_version;
-            let conn = state.db.get().expect("db pool");
-            let _ = db::touch_node(&conn, node_id, Some(&hostname), Some(&os), Some(&arch));
+            if let Ok(conn) = state.db.try_conn() {
+                let _ = db::touch_node(&conn, node_id, Some(&hostname), Some(&os), Some(&arch));
+            }
         }
         AgentUp::Heartbeat {
             cpu_pct,
@@ -155,9 +158,9 @@ async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
             nic_stats,
             tcp_states,
         } => {
-            let conn = state.db.get().expect("db pool");
-            let _ = db::touch_node(&conn, node_id, None, None, None);
-            drop(conn);
+            if let Ok(conn) = state.db.try_conn() {
+                let _ = db::touch_node(&conn, node_id, None, None, None);
+            }
             let mut live = state.node_live.write().await;
             let entry = live.entry(node_id.to_string()).or_default();
             entry.cpu_pct = cpu_pct;
@@ -220,9 +223,9 @@ async fn handle_up(state: &SharedState, node_id: &str, up: AgentUp) {
             }
         }
         AgentUp::Ack { seq } => {
-            let conn = state.db.get().expect("db pool");
-            let _ = db::set_node_seq(&conn, node_id, seq as i64);
-            drop(conn);
+            if let Ok(conn) = state.db.try_conn() {
+                let _ = db::set_node_seq(&conn, node_id, seq as i64);
+            }
             if let Some(entry) = state.node_live.write().await.get_mut(node_id) {
                 entry.last_ack_seq = seq;
             }
@@ -245,7 +248,7 @@ pub async fn send_down(
 }
 
 pub async fn list_views(state: &crate::state::AppState) -> anyhow::Result<Vec<db::NodeView>> {
-    let conn = state.db.get().expect("db pool");
+    let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
     let mut nodes = db::list_nodes(&conn)?;
     drop(conn);
     let agents = state.agents.lock().await;
@@ -293,7 +296,7 @@ pub async fn create_node(
     let token = format!("cn_{}", uuid::Uuid::new_v4());
     let hash = auth::hash_password(&token)?;
     let id = uuid::Uuid::new_v4().to_string();
-    let conn = state.db.get().expect("db pool");
+    let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
     db::insert_agent_node(&conn, &id, name, &hash)?;
     let row = db::get_node(&conn, &id)?.ok_or_else(|| anyhow::anyhow!("node insert failed"))?;
     drop(conn);
@@ -317,7 +320,7 @@ pub async fn delete_node(state: &crate::state::AppState, id: &str) -> anyhow::Re
     if used {
         anyhow::bail!("该节点上仍有实例，请先迁移或删除");
     }
-    let conn = state.db.get().expect("db pool");
+    let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
     db::delete_node(&conn, id)?;
     drop(conn);
     crate::util::audit("node.delete", None, serde_json::json!({ "id": id }), "api");
@@ -328,6 +331,8 @@ pub async fn node_exists(state: &crate::state::AppState, id: &str) -> bool {
     if crate::instance::is_local_node(id) {
         return true;
     }
-    let conn = state.db.get().expect("db pool");
+    let Ok(conn) = state.db.try_conn() else {
+        return true;
+    };
     db::get_node(&conn, id).ok().flatten().is_some()
 }

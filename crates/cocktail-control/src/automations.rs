@@ -1,12 +1,11 @@
-use std::time::{Duration, Instant};
-
-use chrono::{Timelike, Utc};
-use serde::Serialize;
-use uuid::Uuid;
-
 use crate::db::AutomationRow;
+use crate::db::TryConn;
 use crate::instance::{CommandRequest, InstanceStatus};
 use crate::state::SharedState;
+use chrono::{Timelike, Utc};
+use serde::Serialize;
+use std::time::{Duration, Instant};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PanelEvent {
@@ -88,15 +87,23 @@ pub async fn create(state: &SharedState, req: CreateAutomation) -> anyhow::Resul
     if row.name.is_empty() {
         anyhow::bail!("名称不能为空");
     }
-    let conn = state.db.get().expect("db pool");
+    let conn = state
+        .db
+        .try_conn()
+        .map_err(|e| anyhow::anyhow!("database pool unavailable: {}", e.detail))?;
     crate::db::insert_automation(&conn, &row)?;
     Ok(row)
 }
 
 pub async fn tick(state: &SharedState) {
     let rules = {
-        let conn = state.db.get().expect("db pool");
-        crate::db::list_automations(&conn, None).unwrap_or_default()
+        match state.db.try_conn() {
+            Ok(conn) => crate::db::list_automations(&conn, None).unwrap_or_default(),
+            Err(e) => {
+                tracing::warn!(error = %e, "automations tick skipped: database pool unavailable");
+                return;
+            }
+        }
     };
     for rule in rules {
         if !rule.enabled {
@@ -158,8 +165,13 @@ pub async fn on_crash(state: &SharedState, instance_id: &str, name: &str) {
     )
     .await;
     let rules = {
-        let conn = state.db.get().expect("db pool");
-        crate::db::list_automations(&conn, Some(instance_id)).unwrap_or_default()
+        match state.db.try_conn() {
+            Ok(conn) => crate::db::list_automations(&conn, Some(instance_id)).unwrap_or_default(),
+            Err(e) => {
+                tracing::warn!(error = %e, "crash automations skipped: database pool unavailable");
+                Vec::new()
+            }
+        }
     };
     for rule in rules {
         if rule.enabled && rule.condition == "crashed" {
@@ -182,8 +194,14 @@ async fn fire(state: &SharedState, rule: &AutomationRow) {
     }
     let now = Utc::now().to_rfc3339();
     {
-        let conn = state.db.get().expect("db pool");
-        let _ = crate::db::mark_automation_fired(&conn, &rule.id, &now);
+        match state.db.try_conn() {
+            Ok(conn) => {
+                let _ = crate::db::mark_automation_fired(&conn, &rule.id, &now);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "automation fire mark skipped: database pool unavailable");
+            }
+        }
     }
     emit(
         state,
