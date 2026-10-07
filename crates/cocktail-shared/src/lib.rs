@@ -8,6 +8,8 @@
 //! 与 control/src/proto.rs 抽取填充。
 
 pub mod java;
+pub mod logfmt;
+pub mod logging;
 pub mod model;
 pub mod proto;
 pub mod sevenz;

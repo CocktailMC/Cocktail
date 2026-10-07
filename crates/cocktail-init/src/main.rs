@@ -237,6 +237,7 @@ async fn main() -> std::io::Result<()> {
     // 阶段 1 用最简初始化：RUST_LOG=info 时输出到 stderr。
     let _ = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        .event_format(cocktail_shared::logging::CocktailFormat)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
 

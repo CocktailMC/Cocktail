@@ -16,7 +16,7 @@ use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use flate2::read::GzDecoder;
@@ -603,70 +603,100 @@ pub async fn install(major: u32, image: ImageType) -> anyhow::Result<InstalledRu
         return Ok(rt);
     }
 
-    let os = adoptium_os();
-    let arch = adoptium_arch();
-    let (url, filename, release_name) = resolve_asset(major, image, os, arch).await?;
-    tracing::info!(%url, major, image = image.as_str(), "downloading Adoptium Temurin");
+    use cocktail_shared::logfmt::{human_bytes, human_duration};
+    use cocktail_shared::logging::LiveLine;
 
-    fs::create_dir_all(root_dir())?;
-    let id = runtime_id(major, image);
-    let dest = runtime_dir(&id);
-    let staging = root_dir().join(format!("{id}.partial"));
-    let archive = root_dir().join(format!("{id}-{filename}"));
-    let _ = fs::remove_dir_all(&staging);
-    let _ = fs::remove_file(&archive);
-    fs::create_dir_all(&staging)?;
-
-    // TODO 阶段 2：进度推送通过 event push 通道回传 control。
-    // 原 control 端 `Transfer::new/emit/finish` 暂以 tracing 替代。
-    let label = format!("Temurin {major} {}", image.as_str().to_ascii_uppercase());
-    tracing::info!(%label, %url, "download starting");
-    download_to(&url, &archive)
-        .await
-        .with_context(|| format!("下载 Temurin {major} 失败"))?;
-    tracing::info!(%label, archive = %archive.display(), "extracting");
-    extract_archive(&archive, &staging)
-        .with_context(|| format!("解压 {} 失败", archive.display()))?;
-    let _ = fs::remove_file(&archive);
-    flatten_single_root(&staging)?;
-    let bin = locate_java(&staging)
-        .ok_or_else(|| anyhow::anyhow!("解压后找不到 {}（请检查 Adoptium 包结构）", java_exe()))?;
-    chmod_bin(bin.parent().unwrap_or(&staging))?;
-    let home = java_home_of(&bin);
-    let meta = RuntimeMeta {
-        id: id.clone(),
-        vendor: "temurin".into(),
-        major,
-        image_type: image,
-        release_name,
-        os: os.into(),
-        arch: arch.into(),
-        java_bin: bin.to_string_lossy().into(),
-        java_home: home.to_string_lossy().into(),
-    };
-    fs::write(
-        staging.join(".cocktail.json"),
-        serde_json::to_vec_pretty(&meta)?,
-    )?;
-
-    if dest.exists() {
-        fs::remove_dir_all(&dest)?;
-    }
-    if fs::rename(&staging, &dest).is_err() {
-        copy_dir(&staging, &dest)?;
-        fs::remove_dir_all(&staging)?;
-    }
-
-    let installed =
-        read_installed(&dest).ok_or_else(|| anyhow::anyhow!("安装完成但无法读取运行时"))?;
-    // TODO 阶段 2：原 `job.finish(installed.size_bytes, ...)` 改为 event push。
-    tracing::info!(
-        id = %installed.id,
-        bin = %installed.java_bin,
-        size = installed.size_bytes,
-        "Temurin installed"
+    // 安装过程可能持续数十秒，用实时行展示（下载阶段的进度由 http 模块的
+    // `download.running` 行接管终端行）。
+    let started = Instant::now();
+    let image_label = image.as_str().to_string();
+    let live = LiveLine::begin(
+        "cocktail-java",
+        "java.install.running",
+        vec![
+            ("major".to_string(), major.to_string()),
+            ("image".to_string(), image_label.clone()),
+        ],
     );
-    Ok(installed)
+
+    let result: anyhow::Result<InstalledRuntime> = async {
+        let os = adoptium_os();
+        let arch = adoptium_arch();
+        let (url, filename, release_name) = resolve_asset(major, image, os, arch).await?;
+
+        fs::create_dir_all(root_dir())?;
+        let id = runtime_id(major, image);
+        let dest = runtime_dir(&id);
+        let staging = root_dir().join(format!("{id}.partial"));
+        let archive = root_dir().join(format!("{id}-{filename}"));
+        let _ = fs::remove_dir_all(&staging);
+        let _ = fs::remove_file(&archive);
+        fs::create_dir_all(&staging)?;
+
+        live.update(vec![
+            ("phase".to_string(), "downloading".to_string()),
+            ("url".to_string(), url.clone()),
+        ]);
+        download_to(&url, &archive)
+            .await
+            .with_context(|| format!("下载 Temurin {major} 失败"))?;
+
+        live.update(vec![("phase".to_string(), "extracting".to_string())]);
+        extract_archive(&archive, &staging)
+            .with_context(|| format!("解压 {} 失败", archive.display()))?;
+        let _ = fs::remove_file(&archive);
+        flatten_single_root(&staging)?;
+        let bin = locate_java(&staging).ok_or_else(|| {
+            anyhow::anyhow!("解压后找不到 {}（请检查 Adoptium 包结构）", java_exe())
+        })?;
+        chmod_bin(bin.parent().unwrap_or(&staging))?;
+        let home = java_home_of(&bin);
+        let meta = RuntimeMeta {
+            id: id.clone(),
+            vendor: "temurin".into(),
+            major,
+            image_type: image,
+            release_name,
+            os: os.into(),
+            arch: arch.into(),
+            java_bin: bin.to_string_lossy().into(),
+            java_home: home.to_string_lossy().into(),
+        };
+        fs::write(
+            staging.join(".cocktail.json"),
+            serde_json::to_vec_pretty(&meta)?,
+        )?;
+
+        if dest.exists() {
+            fs::remove_dir_all(&dest)?;
+        }
+        if fs::rename(&staging, &dest).is_err() {
+            copy_dir(&staging, &dest)?;
+            fs::remove_dir_all(&staging)?;
+        }
+
+        read_installed(&dest).ok_or_else(|| anyhow::anyhow!("安装完成但无法读取运行时"))
+    }
+    .await;
+
+    match result {
+        Ok(installed) => {
+            live.done(
+                "java.install.completed",
+                vec![
+                    ("major".to_string(), major.to_string()),
+                    ("image".to_string(), image_label),
+                    ("bytes".to_string(), human_bytes(installed.size_bytes)),
+                    ("duration".to_string(), human_duration(started.elapsed())),
+                ],
+            );
+            Ok(installed)
+        }
+        Err(e) => {
+            live.fail("java.install_failed", &format!("{e:#}"));
+            Err(e)
+        }
+    }
 }
 
 pub fn remove(id: &str) -> anyhow::Result<()> {

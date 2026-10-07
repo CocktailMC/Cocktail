@@ -33,6 +33,7 @@ mod sevenz;
 mod state;
 mod stdin_bridge;
 mod storage;
+mod supervisor;
 mod totp;
 mod util;
 mod wincompat;
@@ -45,6 +46,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use axum::Json;
@@ -74,19 +76,69 @@ pub(crate) const INIT_SERVICE: &str = "cocktail-init";
 /// 调一个 cocktail-init RPC。失败（init 未启动 / IPC 失败 / RPC error / 正在重启）
 /// 时返回 Err，调用方决定是否 fallback 到本地实现。
 ///
+/// 全程用统一格式的实时行记录：进入 `request.running`，返回 `request.completed`，
+/// 失败 `request.failed`，耗时超 5s 追加一条 `request.slow`。
+///
 /// TODO 阶段 3：对未启用的模块提供本地 fallback 而不是直接报错。
 pub(crate) async fn init_call<P: serde::Serialize>(
     method: &str,
     params: P,
 ) -> anyhow::Result<serde_json::Value> {
-    let sup = SERVICE_SUPERVISOR.get().ok_or_else(|| {
-        anyhow::anyhow!("cocktail-init subprocess not available (SERVICE_SUPERVISOR unset)")
-    })?;
-    let v = sup
-        .ipc_call(INIT_SERVICE, method, params)
-        .await
-        .map_err(|e| anyhow::anyhow!("init RPC {method} failed: {e}"))?;
-    Ok(v)
+    use cocktail_shared::logfmt::{Badge, human_duration};
+    use cocktail_shared::logging::{LiveLine, emit};
+
+    // RPC 序号，便于在并发日志里区分同名方法调用。
+    static RPC_SEQ: AtomicU64 = AtomicU64::new(1);
+    let id = RPC_SEQ.fetch_add(1, Ordering::Relaxed);
+
+    let started = std::time::Instant::now();
+    let live = LiveLine::begin(
+        "cocktail-rpc",
+        "request.running",
+        vec![
+            ("id".to_string(), id.to_string()),
+            ("method".to_string(), method.to_string()),
+        ],
+    );
+
+    let sup = match SERVICE_SUPERVISOR.get() {
+        Some(s) => s,
+        None => {
+            let err = "cocktail-init subprocess not available (SERVICE_SUPERVISOR unset)";
+            live.fail("request.failed", err);
+            return Err(anyhow::anyhow!("{err}"));
+        }
+    };
+
+    match sup.ipc_call(INIT_SERVICE, method, params).await {
+        Ok(v) => {
+            let dur = started.elapsed();
+            live.done(
+                "request.completed",
+                vec![
+                    ("id".to_string(), id.to_string()),
+                    ("method".to_string(), method.to_string()),
+                    ("duration".to_string(), human_duration(dur)),
+                ],
+            );
+            if dur > std::time::Duration::from_secs(5) {
+                emit(
+                    Badge::Warn,
+                    "cocktail-rpc",
+                    "request.slow",
+                    vec![
+                        ("method".to_string(), method.to_string()),
+                        ("duration".to_string(), human_duration(dur)),
+                    ],
+                );
+            }
+            Ok(v)
+        }
+        Err(e) => {
+            live.fail("request.failed", &format!("{e}"));
+            Err(anyhow::anyhow!("init RPC {method} failed: {e}"))
+        }
+    }
 }
 
 /// 注册并启动 cocktail-init 服务（Transport::Ipc），随后握手拉取 master key。
@@ -265,6 +317,7 @@ fn read_password_line(prompt: &str) -> anyhow::Result<String> {
 pub async fn run_plane() -> anyhow::Result<()> {
     crate::wincompat::enable_utf8_console();
     tracing_subscriber::fmt()
+        .event_format(cocktail_shared::logging::CocktailFormat)
         .with_env_filter(
             EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| EnvFilter::new("cocktail_control=info,tower_http=info")),

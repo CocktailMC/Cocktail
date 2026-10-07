@@ -17,6 +17,9 @@ use bollard::{API_DEFAULT_VERSION, Docker};
 use futures_util::{Stream, StreamExt};
 use tokio::sync::Mutex;
 
+use cocktail_shared::logfmt::Badge;
+use cocktail_shared::logging;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerEngine {
     Docker,
@@ -76,6 +79,19 @@ pub struct ContainerStats {
 pub struct ContainerRuntime {
     docker: Arc<Docker>,
     pub engine: ContainerEngine,
+}
+
+/// 统一日志：容器启动失败（FAIL 徽章 + `instance`/`error` 键值对）。
+fn spawn_failed(instance: &str, err: &anyhow::Error) {
+    logging::emit(
+        Badge::Fail,
+        "cocktail-runtime",
+        "runtime.spawn_failed",
+        vec![
+            ("instance".to_string(), instance.to_string()),
+            ("error".to_string(), format!("{err:#}")),
+        ],
+    );
 }
 
 impl ContainerRuntime {
@@ -186,15 +202,25 @@ impl ContainerRuntime {
             ..Default::default()
         };
 
-        self.docker
+        if let Err(e) = self
+            .docker
             .create_container(Some(options), config)
             .await
-            .with_context(|| format!("create container {}", spec.name))?;
+            .with_context(|| format!("create container {}", spec.name))
+        {
+            spawn_failed(&spec.name, &e);
+            return Err(e);
+        }
 
-        self.docker
+        if let Err(e) = self
+            .docker
             .start_container(&spec.name, None::<StartContainerOptions>)
             .await
-            .with_context(|| format!("start container {}", spec.name))?;
+            .with_context(|| format!("start container {}", spec.name))
+        {
+            spawn_failed(&spec.name, &e);
+            return Err(e);
+        }
 
         Ok(SpawnedContainer { pid: 0 })
     }

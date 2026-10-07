@@ -1,19 +1,22 @@
 //! HTTP 下载与代理：阶段 2 起 cocktail-init 接管用户空间文件下载。
 //!
-//! control 端通过 IPC `http.download_to_path` 调用本模块。下载进度推送
-//! 留到阶段 2 event push 通道就位后再实现（当前只返最终字节数，
-//! control 端 `Transfer::finish` 只发一次"done"事件）。
+//! control 端通过 IPC `http.download_to_path` 调用本模块。下载进度以统一格式的
+//! 实时行（`download.running`）输出到 stderr，由 control 端采集；跨进程的
+//! event push 通道（`Transfer::emit`）待阶段 2 就位后再补。
 //!
 //! 代理检测策略与 control 端 `http.rs` 完全一致：读 `COCKTAIL_PROXY`
 //! 显式代理 → 否则若未设 `HTTPS_PROXY` 等环境变量则查 Windows IE 系统代理。
 //! init 子进程默认继承父进程 env，所以 control 设的代理变量会自动透传。
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
+
+use cocktail_shared::logfmt::{human_bytes, human_duration};
+use cocktail_shared::logging::LiveLine;
 
 const DEFAULT_UA: &str = "Cocktail-Manager/0.1 (https://github.com/CocktailMC/Cocktail)";
 
@@ -228,12 +231,50 @@ fn with_scheme(addr: &str, scheme: &str) -> String {
     }
 }
 
+/// 下载进度 kv：`received` 必有，`total` 未知时省略。
+fn progress_kv(written: u64, total: Option<u64>) -> Vec<(String, String)> {
+    let mut kv = vec![("received".to_string(), human_bytes(written))];
+    if let Some(t) = total {
+        kv.push(("total".to_string(), human_bytes(t)));
+    }
+    kv
+}
+
 /// 下载 url 到 dest。返回写入字节数。dest 不存在会自动创建父目录。
 ///
-/// TODO 阶段 2：通过 event push 把 init 端下载进度回推给 control 的
-/// `Transfer::emit`，目前 control 端只在完成后拿到字节数发一次 done。
+/// 进度以 `[ **** ][cocktail-http] download.running ...` 实时行输出到 stderr，
+/// 完成/失败分别收尾为 `download.completed` / `download.failed`。
 pub async fn download_to_path(url: &str, dest: &Path) -> anyhow::Result<u64> {
-    tracing::info!(%url, dest = %dest.display(), "download_to_path: sending request");
+    let dest_label = dest
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| dest.display().to_string());
+    let started = Instant::now();
+    let live = LiveLine::begin(
+        "cocktail-http",
+        "download.running",
+        vec![("dest".to_string(), dest_label)],
+    );
+    match download_to_path_inner(url, dest, &live).await {
+        Ok(written) => {
+            live.done(
+                "download.completed",
+                vec![
+                    ("bytes".to_string(), human_bytes(written)),
+                    ("duration".to_string(), human_duration(started.elapsed())),
+                ],
+            );
+            Ok(written)
+        }
+        Err(e) => {
+            live.fail("download.failed", &format!("{e:#}"));
+            Err(e)
+        }
+    }
+}
+
+/// `download_to_path` 的实际实现；进度通过 `live` 实时刷新。
+async fn download_to_path_inner(url: &str, dest: &Path, live: &LiveLine) -> anyhow::Result<u64> {
     let resp = client()
         .get(url)
         .send()
@@ -242,10 +283,8 @@ pub async fn download_to_path(url: &str, dest: &Path) -> anyhow::Result<u64> {
         .error_for_status()
         .map_err(|e| explain(e, url))?;
     let total = resp.content_length();
-    tracing::info!(%url, status = %resp.status(), content_length = total, dest = %dest.display(), "download_to_path: response received");
     if let Some(parent) = dest.parent() {
         if !parent.as_os_str().is_empty() {
-            tracing::debug!(parent = %parent.display(), "download_to_path: ensuring parent dir exists");
             tokio::fs::create_dir_all(parent).await.with_context(|| {
                 format!(
                     "create parent dir {} for {}",
@@ -255,12 +294,12 @@ pub async fn download_to_path(url: &str, dest: &Path) -> anyhow::Result<u64> {
             })?;
         }
     }
-    tracing::debug!(dest = %dest.display(), "download_to_path: creating file");
     let mut file = tokio::fs::File::create(dest)
         .await
         .with_context(|| format!("create file {}", dest.display()))?;
     let mut stream = resp.bytes_stream();
     let mut written = 0u64;
+    let mut last = Instant::now();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| explain(e, url))?;
         written += chunk.len() as u64;
@@ -271,20 +310,46 @@ pub async fn download_to_path(url: &str, dest: &Path) -> anyhow::Result<u64> {
                 written
             )
         })?;
+        if last.elapsed() >= Duration::from_millis(200) {
+            live.update(progress_kv(written, total));
+            last = Instant::now();
+        }
     }
     file.flush()
         .await
         .with_context(|| format!("flush file {}", dest.display()))?;
-    tracing::info!(%url, dest = %dest.display(), written, "download_to_path: complete");
     Ok(written)
 }
 
 /// 下载 url 到内存 Vec<u8>，超过 max_bytes 上限会提前 bail。
 ///
-/// TODO 阶段 2：通过 event push 把 init 端下载进度回推给 control 的
-/// `Transfer::emit`，目前只在 tracing 里记录起止。
+/// 进度同上，以 `download.running` 实时行输出到 stderr。
 pub async fn download_vec(url: &str, max_bytes: u64) -> anyhow::Result<Vec<u8>> {
-    tracing::info!(%url, "download_vec: sending request");
+    let started = Instant::now();
+    let live = LiveLine::begin(
+        "cocktail-http",
+        "download.running",
+        vec![("url".to_string(), url.to_string())],
+    );
+    match download_vec_inner(url, max_bytes, &live).await {
+        Ok(buf) => {
+            live.done(
+                "download.completed",
+                vec![
+                    ("bytes".to_string(), human_bytes(buf.len() as u64)),
+                    ("duration".to_string(), human_duration(started.elapsed())),
+                ],
+            );
+            Ok(buf)
+        }
+        Err(e) => {
+            live.fail("download.failed", &format!("{e:#}"));
+            Err(e)
+        }
+    }
+}
+
+async fn download_vec_inner(url: &str, max_bytes: u64, live: &LiveLine) -> anyhow::Result<Vec<u8>> {
     let resp = client()
         .get(url)
         .send()
@@ -293,26 +358,22 @@ pub async fn download_vec(url: &str, max_bytes: u64) -> anyhow::Result<Vec<u8>> 
         .error_for_status()
         .map_err(|e| explain(e, url))?;
     let total = resp.content_length();
-    tracing::info!(
-        %url,
-        status = %resp.status(),
-        content_length = total,
-        "download_vec: response received"
-    );
     let mut stream = resp.bytes_stream();
     let mut buf = Vec::new();
     if let Some(t) = total.filter(|n| *n > 0 && *n <= max_bytes) {
         buf.reserve(t as usize);
     }
+    let mut last = Instant::now();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| explain(e, url))?;
         buf.extend_from_slice(&chunk);
         if buf.len() as u64 > max_bytes {
             anyhow::bail!("下载超过 {} bytes 上限", max_bytes);
         }
-        // TODO 阶段 2：通过 event push 把 init 端下载进度回推给 control 的 Transfer::emit。
+        if last.elapsed() >= Duration::from_millis(200) {
+            live.update(progress_kv(buf.len() as u64, total));
+            last = Instant::now();
+        }
     }
-    let n = buf.len() as u64;
-    tracing::info!(%url, bytes = n, "download_vec: complete");
     Ok(buf)
 }

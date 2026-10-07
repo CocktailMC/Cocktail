@@ -20,6 +20,7 @@ struct Live {
 pub async fn run_agent() -> anyhow::Result<()> {
     crate::wincompat::enable_utf8_console();
     tracing_subscriber::fmt()
+        .event_format(cocktail_shared::logging::CocktailFormat)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("cocktail_control=info")),

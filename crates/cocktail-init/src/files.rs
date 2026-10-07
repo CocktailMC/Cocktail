@@ -11,7 +11,7 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Utc};
 use zip::write::SimpleFileOptions;
@@ -464,6 +464,9 @@ pub fn delete_backup(instance_id: &str, backup_id: &str) -> anyhow::Result<()> {
 }
 
 pub fn restore_backup(instance_id: &str, backup_id: &str, workdir: &str) -> anyhow::Result<()> {
+    use cocktail_shared::logfmt::{Badge, human_duration};
+    use cocktail_shared::logging::{self, LiveLine};
+
     let src = PathBuf::from("data")
         .join("backups")
         .join(instance_id)
@@ -471,13 +474,68 @@ pub fn restore_backup(instance_id: &str, backup_id: &str, workdir: &str) -> anyh
     if !src.exists() {
         anyhow::bail!("backup not found");
     }
-    clear_dir_contents(workdir)?;
-    if src.is_dir() {
-        copy_dir_recursive(&src, Path::new(workdir))?;
-    } else {
-        unzip_to(&src, Path::new(workdir))?;
+    let started = Instant::now();
+    let live = LiveLine::begin(
+        "cocktail-files",
+        "backup.restoring",
+        vec![("instance".to_string(), instance_id.to_string())],
+    );
+    let result = (|| -> anyhow::Result<()> {
+        clear_dir_contents(workdir)?;
+        if src.is_dir() {
+            copy_dir_recursive(&src, Path::new(workdir))?;
+        } else {
+            unzip_to(&src, Path::new(workdir))?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            let files = count_files(Path::new(workdir));
+            let dur = started.elapsed();
+            live.done(
+                "backup.restored",
+                vec![
+                    ("instance".to_string(), instance_id.to_string()),
+                    ("files".to_string(), files.to_string()),
+                    ("duration".to_string(), human_duration(dur)),
+                ],
+            );
+            if dur >= Duration::from_secs(1) {
+                logging::emit(
+                    Badge::Warn,
+                    "cocktail-files",
+                    "backup.restore_slow",
+                    vec![
+                        ("instance".to_string(), instance_id.to_string()),
+                        ("duration".to_string(), human_duration(dur)),
+                    ],
+                );
+            }
+            Ok(())
+        }
+        Err(e) => {
+            live.fail("backup.restore_failed", &format!("{e:#}"));
+            Err(e)
+        }
     }
-    Ok(())
+}
+
+/// 递归统计目录下文件数量（不跟随符号链接），用于 `backup.restored` 的 `files=`。
+fn count_files(root: &Path) -> u64 {
+    let mut n = 0u64;
+    let Ok(entries) = fs::read_dir(root) else {
+        return n;
+    };
+    for ent in entries.flatten() {
+        let p = ent.path();
+        if p.is_dir() {
+            n += count_files(&p);
+        } else {
+            n += 1;
+        }
+    }
+    n
 }
 
 pub fn unzip_archive(zip_path: &Path, dest: &Path) -> anyhow::Result<()> {

@@ -12,7 +12,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -22,10 +22,24 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tracing::{debug, info, warn};
 
+use cocktail_shared::logfmt::{self, Badge};
+use cocktail_shared::logging::{self, LiveLine};
+
 use crate::init_client::InitClient;
 
 /// 服务名（也是注册 key 与日志文件名）。
 pub type ServiceName = String;
+
+/// 服务短名：`cocktail-init` → `init`，用于派生事件名前缀（如 `init.waiting`）。
+fn short_name(name: &str) -> String {
+    name.strip_prefix("cocktail-").unwrap_or(name).to_string()
+}
+
+/// 退出码文本，未知用 `-`。
+fn code_text(code: Option<i32>) -> String {
+    code.map(|c| c.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
 
 // ---------------------------------------------------------------------------
 // A. 纯逻辑层
@@ -530,7 +544,12 @@ impl ServiceSupervisor {
         if let Err(e) = spec.boundary.validate(&spec.program, spec.cwd.as_deref()) {
             self.mark_failed(name, Some(format!("permission boundary rejected: {e}")))
                 .await;
-            warn!(service = %name, error = %e, "service boundary check failed");
+            logging::emit(
+                Badge::Fail,
+                name,
+                &format!("{}.failed", short_name(name)),
+                vec![("error".to_string(), e.to_string())],
+            );
             self.cascade_failure(name, "permission boundary rejected")
                 .await;
             return Err(anyhow::anyhow!(
@@ -554,32 +573,56 @@ impl ServiceSupervisor {
 
         let log_path = self.log_path(&spec);
 
-        let (child, client) = match spec.transport {
-            Transport::Ipc => {
-                let (client, child, stderr) = InitClient::spawn(&mut cmd)
-                    .map_err(|e| anyhow::anyhow!("spawn {}: {e}", spec.program.display()))?;
-                let writer = Arc::new(Mutex::new(
-                    LogWriter::open(log_path.clone(), spec.log_max_bytes, spec.log_keep).await?,
-                ));
-                // init 的 stderr 是日志通道
-                tokio::spawn(pipe_to_log(stderr, writer));
-                (child, Some(client))
+        // 统一日志：WAIT → 实时 starting 行 → DONE started
+        let short = short_name(name);
+        let started = Instant::now();
+        logging::emit(
+            Badge::Wait,
+            name,
+            &format!("{short}.waiting"),
+            vec![("parent".to_string(), "control".to_string())],
+        );
+        let live = LiveLine::begin(name.to_string(), format!("{short}.starting"), Vec::new());
+
+        let spawned: anyhow::Result<(Child, Option<Arc<InitClient>>)> = async {
+            match spec.transport {
+                Transport::Ipc => {
+                    let (client, child, stderr) = InitClient::spawn(&mut cmd)
+                        .map_err(|e| anyhow::anyhow!("spawn {}: {e}", spec.program.display()))?;
+                    let writer = Arc::new(Mutex::new(
+                        LogWriter::open(log_path.clone(), spec.log_max_bytes, spec.log_keep)
+                            .await?,
+                    ));
+                    // init 的 stderr 是日志通道
+                    tokio::spawn(pipe_to_log(stderr, writer));
+                    Ok((child, Some(client)))
+                }
+                Transport::Log => {
+                    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+                    let mut child = cmd
+                        .spawn()
+                        .map_err(|e| anyhow::anyhow!("spawn {}: {e}", spec.program.display()))?;
+                    let writer = Arc::new(Mutex::new(
+                        LogWriter::open(log_path.clone(), spec.log_max_bytes, spec.log_keep)
+                            .await?,
+                    ));
+                    if let Some(out) = child.stdout.take() {
+                        tokio::spawn(pipe_to_log(out, Arc::clone(&writer)));
+                    }
+                    if let Some(err) = child.stderr.take() {
+                        tokio::spawn(pipe_to_log(err, Arc::clone(&writer)));
+                    }
+                    Ok((child, None))
+                }
             }
-            Transport::Log => {
-                cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-                let mut child = cmd
-                    .spawn()
-                    .map_err(|e| anyhow::anyhow!("spawn {}: {e}", spec.program.display()))?;
-                let writer = Arc::new(Mutex::new(
-                    LogWriter::open(log_path.clone(), spec.log_max_bytes, spec.log_keep).await?,
-                ));
-                if let Some(out) = child.stdout.take() {
-                    tokio::spawn(pipe_to_log(out, Arc::clone(&writer)));
-                }
-                if let Some(err) = child.stderr.take() {
-                    tokio::spawn(pipe_to_log(err, Arc::clone(&writer)));
-                }
-                (child, None)
+        }
+        .await;
+
+        let (child, client) = match spawned {
+            Ok(v) => v,
+            Err(e) => {
+                live.fail(&format!("{short}.failed"), &format!("{e:#}"));
+                return Err(e);
             }
         };
 
@@ -599,7 +642,20 @@ impl ServiceSupervisor {
             r.generation
         };
 
-        info!(service = %name, pid = ?pid, "service started");
+        live.done(
+            &format!("{short}.started"),
+            vec![
+                (
+                    "pid".to_string(),
+                    pid.map(|p| p.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                (
+                    "duration".to_string(),
+                    logfmt::human_duration(started.elapsed()),
+                ),
+            ],
+        );
 
         // 资源监控（仅在声明了限制时启用）
         if let Some(pid) = pid {
@@ -713,6 +769,7 @@ impl ServiceSupervisor {
     ) {
         let mut schedule: Option<Duration> = None;
         let mut failed = false;
+        let mut attempts = 0u64;
         {
             let mut rt = self.runtime.write().await;
             let Some(r) = rt.get_mut(name) else {
@@ -730,12 +787,18 @@ impl ServiceSupervisor {
                 r.state = ServiceState::Stopped;
                 r.stopping = false;
                 r.since = Utc::now();
-                info!(service = %name, code = ?code, "service stopped");
+                logging::emit(
+                    Badge::Done,
+                    name,
+                    &format!("{}.stopped", short_name(name)),
+                    vec![("code".to_string(), code_text(code))],
+                );
                 return;
             }
             match decide_restart(&spec.restart, code, r.restarts) {
                 RestartDecision::NoRestart { failed: f } => {
                     failed = f;
+                    attempts = r.restarts;
                     r.state = if f {
                         ServiceState::Failed
                     } else {
@@ -748,6 +811,7 @@ impl ServiceSupervisor {
                 }
                 RestartDecision::Restart { delay } => {
                     r.restarts += 1;
+                    attempts = r.restarts;
                     r.state = ServiceState::Backoff;
                     r.since = Utc::now();
                     schedule = Some(delay);
@@ -757,11 +821,14 @@ impl ServiceSupervisor {
 
         match schedule {
             Some(delay) => {
-                warn!(
-                    service = %name,
-                    code = ?code,
-                    delay_ms = delay.as_millis() as u64,
-                    "service exited; restart scheduled"
+                logging::emit(
+                    Badge::Warn,
+                    name,
+                    &format!("{}.restarting", short_name(name)),
+                    vec![
+                        ("attempt".to_string(), attempts.to_string()),
+                        ("delay".to_string(), logfmt::human_duration(delay)),
+                    ],
                 );
                 let Some(sup) = self.arc() else { return };
                 let name = name.to_string();
@@ -772,10 +839,20 @@ impl ServiceSupervisor {
             }
             None => {
                 if failed {
-                    warn!(service = %name, code = ?code, "service failed (no restart)");
+                    logging::emit(
+                        Badge::Fail,
+                        name,
+                        &format!("{}.failed", short_name(name)),
+                        vec![("attempts".to_string(), attempts.to_string())],
+                    );
                     self.cascade_failure(name, "upstream failed").await;
                 } else {
-                    info!(service = %name, code = ?code, "service exited");
+                    logging::emit(
+                        Badge::Done,
+                        name,
+                        &format!("{}.stopped", short_name(name)),
+                        vec![("code".to_string(), code_text(code))],
+                    );
                 }
             }
         }
