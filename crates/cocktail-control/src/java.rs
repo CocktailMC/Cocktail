@@ -10,7 +10,7 @@
 //!   control 本地算比走 RPC 便宜，且 `apply_isolated_env` 要在 control
 //!   spawn 子进程前直接注入 env。
 //!
-//! `ImageType` / `RuntimeMeta` / `InstalledRuntime` / `SystemJava` /
+//! `ImageType` / `InstalledRuntime` / `SystemJava` /
 //! `JavaInventory` / `InstallJavaRequest` / `EnsureJavaRequest` /
 //! `EnsureJavaResponse` 全部从 `cocktail_shared::java` re-export，
 //! 跨进程复用同一份定义，调用方 `crate::java::ImageType` 等无需改动。
@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 pub use cocktail_shared::java::{
     EnsureJavaRequest, EnsureJavaResponse, ImageType, InstallJavaRequest, InstalledRuntime,
-    JavaInventory, RuntimeMeta, SystemJava,
+    JavaInventory, SystemJava,
 };
 
 /// 根据 Minecraft 版本号推荐 Java 主版本（无 IO，control 本地算）。

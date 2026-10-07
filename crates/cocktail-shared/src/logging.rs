@@ -5,7 +5,7 @@
 //! 是 RPC 通道，日志只能走 stderr，这里正是为此设计。
 
 use std::fmt;
-use std::fmt::Write as _;
+
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -67,7 +67,6 @@ pub fn emit(badge: Badge, source: &str, event: &str, kv: Vec<(String, String)>) 
 pub struct LiveLine {
     id: u64,
     source: String,
-    event: String,
     kv: Arc<Mutex<Vec<(String, String)>>>,
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
@@ -134,7 +133,6 @@ impl LiveLine {
         Self {
             id,
             source,
-            event,
             kv,
             stop,
             handle,

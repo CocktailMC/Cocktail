@@ -491,7 +491,8 @@ pub fn restore_backup(instance_id: &str, backup_id: &str, workdir: &str) -> anyh
     })();
     match result {
         Ok(()) => {
-            let files = count_files(Path::new(workdir));
+            // 复用下方带深度上限 + 符号链接保护的 count_files（返回 Result，统计失败按 0 记）
+            let files = count_files(Path::new(workdir)).unwrap_or(0);
             let dur = started.elapsed();
             live.done(
                 "backup.restored",
@@ -519,23 +520,6 @@ pub fn restore_backup(instance_id: &str, backup_id: &str, workdir: &str) -> anyh
             Err(e)
         }
     }
-}
-
-/// 递归统计目录下文件数量（不跟随符号链接），用于 `backup.restored` 的 `files=`。
-fn count_files(root: &Path) -> u64 {
-    let mut n = 0u64;
-    let Ok(entries) = fs::read_dir(root) else {
-        return n;
-    };
-    for ent in entries.flatten() {
-        let p = ent.path();
-        if p.is_dir() {
-            n += count_files(&p);
-        } else {
-            n += 1;
-        }
-    }
-    n
 }
 
 pub fn unzip_archive(zip_path: &Path, dest: &Path) -> anyhow::Result<()> {

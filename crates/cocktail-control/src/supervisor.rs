@@ -781,7 +781,7 @@ impl ServiceSupervisor {
     ) {
         let mut schedule: Option<Duration> = None;
         let mut failed = false;
-        let mut attempts = 0u64;
+        let attempts;
         {
             let mut rt = self.runtime.write().await;
             let Some(r) = rt.get_mut(name) else {

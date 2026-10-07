@@ -25,8 +25,8 @@ use tokio::sync::Mutex;
 use zip::ZipArchive;
 
 use cocktail_shared::java::{
-    EnsureJavaRequest, EnsureJavaResponse, ImageType, InstallJavaRequest, InstalledRuntime,
-    JavaInventory, RuntimeMeta, SystemJava,
+    EnsureJavaRequest, EnsureJavaResponse, ImageType, InstalledRuntime, JavaInventory, RuntimeMeta,
+    SystemJava,
 };
 
 const USER_AGENT: &str = "Cocktail-Manager/0.1 (Adoptium runtime manager)";

@@ -8,7 +8,7 @@
 
 pub use cocktail_shared::proto::{
     AgentDown, AgentUp, ApplyInstance, InstanceManifest, NicStat, PROTOCOL_VERSION, TcpStates,
-    api_version, default_protocol_version, kind_instance,
+    api_version, kind_instance,
 };
 
 use crate::instance::Instance;
@@ -25,14 +25,15 @@ impl From<&Instance> for ApplyInstance {
     }
 }
 
-impl InstanceManifest {
-    pub fn from_instance(i: &Instance) -> Self {
-        Self {
-            api_version: api_version(),
-            kind: kind_instance(),
-            id: i.id.clone(),
-            spec: i.spec.clone(),
-        }
+/// 从本地 `Instance` 派生 `InstanceManifest`（跨进程 IPC 友好）。
+/// `InstanceManifest` 定义在 `cocktail_shared::proto`，孤儿规则不允许在 control
+/// 写固有 impl，故改为自由函数。
+pub fn manifest_from_instance(i: &Instance) -> InstanceManifest {
+    InstanceManifest {
+        api_version: api_version(),
+        kind: kind_instance(),
+        id: i.id.clone(),
+        spec: i.spec.clone(),
     }
 }
 

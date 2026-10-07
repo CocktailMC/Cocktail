@@ -181,9 +181,10 @@ async fn unwrap_nested_tarball(dest: &Path) -> anyhow::Result<()> {
     crate::sevenz::extract(&inner, dest)?;
     let _ = fs::remove_file(&inner);
     if name.ends_with(".xz") && !name.ends_with(".tar.xz") {
-        unwrap_nested_tarball(dest).await?;
+        // 递归 async fn 必须装箱，否则 future 尺寸无限
+        Box::pin(unwrap_nested_tarball(dest)).await?;
     } else if name.ends_with(".tar.xz") || name.ends_with(".xz") {
-        unwrap_nested_tarball(dest).await?;
+        Box::pin(unwrap_nested_tarball(dest)).await?;
     }
     Ok(())
 }

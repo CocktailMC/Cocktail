@@ -5,7 +5,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::cluster;
-use crate::proto::{AgentDown, ApplyInstance, InstanceManifest};
+use crate::proto::{AgentDown, ApplyInstance, InstanceManifest, manifest_from_instance};
 use crate::state::AppState;
 use crate::util;
 
@@ -883,8 +883,7 @@ pub async fn spec_yaml(state: &AppState, id: &str) -> anyhow::Result<String> {
     let inst = guard
         .get(id)
         .ok_or_else(|| anyhow::anyhow!("instance not found"))?;
-    serde_yaml::to_string(&InstanceManifest::from_instance(inst))
-        .map_err(|e| anyhow::anyhow!("yaml: {e}"))
+    serde_yaml::to_string(&manifest_from_instance(inst)).map_err(|e| anyhow::anyhow!("yaml: {e}"))
 }
 
 pub async fn apply_spec_body(
