@@ -95,6 +95,19 @@ async fn main() -> std::io::Result<()> {
         Ok(serde_json::to_value(r).unwrap_or(serde_json::Value::Null))
     });
 
+    // http.download_to_path：下载 url 到 dest（init 端构建 client，含代理检测）。
+    // 进度推送留到阶段 2 event push 通道就位后再实现。
+    server.register("http.download_to_path", |params| async move {
+        let p: DownloadParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match http::download_to_path(&p.url, std::path::Path::new(&p.dest)).await {
+            Ok(n) => Ok(serde_json::json!({ "written": n })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
     // 用 stdin/stdout 跑主循环
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();

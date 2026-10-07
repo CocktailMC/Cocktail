@@ -13,7 +13,12 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 rand_core = { workspace = true, features = ["getrandom"] }
+reqwest = { workspace = true }
+futures-util.workspace = true
 cocktail-shared = { path = "../cocktail-shared" }
+
+[target.'cfg(windows)'.dependencies]
+reqwest = { workspace = true, features = ["native-tls"] }
 
 [dev-dependencies]
 tempfile = "3"

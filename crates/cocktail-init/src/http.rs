@@ -1,19 +1,21 @@
+//! HTTP 下载与代理：阶段 2 起 cocktail-init 接管用户空间文件下载。
+//!
+//! control 端通过 IPC `http.download_to_path` 调用本模块。下载进度推送
+//! 留到阶段 2 event push 通道就位后再实现（当前只返最终字节数，
+//! control 端 `Transfer::finish` 只发一次"done"事件）。
+//!
+//! 代理检测策略与 control 端 `http.rs` 完全一致：读 `COCKTAIL_PROXY`
+//! 显式代理 → 否则若未设 `HTTPS_PROXY` 等环境变量则查 Windows IE 系统代理。
+//! init 子进程默认继承父进程 env，所以 control 设的代理变量会自动透传。
+
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use anyhow::Context as _;
 use futures_util::StreamExt;
-use tokio::sync::broadcast;
-
-use crate::instance::InstanceEvent;
+use tokio::io::AsyncWriteExt;
 
 const DEFAULT_UA: &str = "Cocktail-Manager/0.1 (https://github.com/CocktailMC/Cocktail)";
-
-static EVENTS: OnceLock<broadcast::Sender<InstanceEvent>> = OnceLock::new();
-
-pub fn attach_events(tx: broadcast::Sender<InstanceEvent>) {
-    let _ = EVENTS.set(tx);
-}
 
 pub fn builder() -> reqwest::ClientBuilder {
     let mut b = reqwest::Client::builder()
@@ -226,102 +228,13 @@ fn with_scheme(addr: &str, scheme: &str) -> String {
     }
 }
 
-pub struct Transfer {
-    pub id: String,
-    pub label: String,
-    last: Mutex<(Instant, u64)>,
-}
-
-impl Transfer {
-    pub fn new(label: impl Into<String>) -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            label: label.into(),
-            last: Mutex::new((Instant::now() - Duration::from_secs(1), 0)),
-        }
-    }
-
-    pub fn emit(&self, phase: &str, received: u64, total: Option<u64>) {
-        let pct = total
-            .filter(|t| *t > 0)
-            .map(|t| ((received as f64 / t as f64) * 100.0).clamp(0.0, 100.0) as f32);
-        let force = phase != "download";
-        let should = force || {
-            let Ok(mut g) = self.last.lock() else {
-                return;
-            };
-            let (at, prev) = *g;
-            let due = at.elapsed() >= Duration::from_millis(120)
-                || received.saturating_sub(prev) >= 256 * 1024
-                || total.is_some_and(|t| received >= t);
-            if due {
-                *g = (Instant::now(), received);
-            }
-            due
-        };
-        if !should {
-            return;
-        }
-        let Some(tx) = EVENTS.get() else {
-            return;
-        };
-        let _ = tx.send(InstanceEvent::DownloadProgress {
-            id: self.id.clone(),
-            label: self.label.clone(),
-            phase: phase.to_string(),
-            received,
-            total,
-            pct,
-        });
-    }
-
-    pub fn finish(&self, received: u64, total: Option<u64>) {
-        self.emit("done", received, total.or(Some(received)));
-    }
-}
-
-pub async fn download_to_path(
-    _client: &reqwest::Client,
-    url: &str,
-    dest: &Path,
-    job: &Transfer,
-) -> anyhow::Result<u64> {
-    // 阶段 2：实际下载搬到 cocktail-init 子进程。control 端只做 RPC 客户端，
-    // 代理检测、TLS、reqwest::Client 构建都在 init 端完成（init 默认继承父进程 env，
-    // COCKTAIL_PROXY / HTTPS_PROXY 自动透传）。
-    //
-    // TODO 阶段 2：用 event push 把 init 端下载进度回推给本 Transfer::emit。
-    // 当前只在完成后发一次 done 事件（UI 会从 0% 直接跳到 100%）。
-    job.emit("download", 0, None);
-    #[derive(serde::Serialize)]
-    struct Params<'a> {
-        url: &'a str,
-        dest: &'a str,
-    }
-    let params = Params {
-        url,
-        dest: &dest.to_string_lossy(),
-    };
-    let v = crate::init_call("http.download_to_path", params).await?;
-    #[derive(serde::Deserialize)]
-    struct R {
-        written: u64,
-    }
-    let r: R = serde_json::from_value(v)
-        .map_err(|e| anyhow::anyhow!("parse http.download_to_path response: {e}"))?;
-    job.finish(r.written, Some(r.written));
-    Ok(r.written)
-}
-
-pub async fn download_vec(
-    client: &reqwest::Client,
-    url: &str,
-    job: &Transfer,
-    max_bytes: u64,
-) -> anyhow::Result<Vec<u8>> {
-    job.emit("download", 0, None);
-    tracing::info!(%url, "download_vec: sending request");
-    let resp = client
+/// 下载 url 到 dest。返回写入字节数。dest 不存在会自动创建父目录。
+///
+/// TODO 阶段 2：通过 event push 把 init 端下载进度回推给 control 的
+/// `Transfer::emit`，目前 control 端只在完成后拿到字节数发一次 done。
+pub async fn download_to_path(url: &str, dest: &Path) -> anyhow::Result<u64> {
+    tracing::info!(%url, dest = %dest.display(), "download_to_path: sending request");
+    let resp = client()
         .get(url)
         .send()
         .await
@@ -329,22 +242,39 @@ pub async fn download_vec(
         .error_for_status()
         .map_err(|e| explain(e, url))?;
     let total = resp.content_length();
-    tracing::info!(%url, status = %resp.status(), content_length = total, "download_vec: response received");
-    let mut stream = resp.bytes_stream();
-    let mut buf = Vec::new();
-    if let Some(t) = total.filter(|n| *n > 0 && *n <= max_bytes) {
-        buf.reserve(t as usize);
+    tracing::info!(%url, status = %resp.status(), content_length = total, dest = %dest.display(), "download_to_path: response received");
+    if let Some(parent) = dest.parent() {
+        if !parent.as_os_str().is_empty() {
+            tracing::debug!(parent = %parent.display(), "download_to_path: ensuring parent dir exists");
+            tokio::fs::create_dir_all(parent).await.with_context(|| {
+                format!(
+                    "create parent dir {} for {}",
+                    parent.display(),
+                    dest.display()
+                )
+            })?;
+        }
     }
+    tracing::debug!(dest = %dest.display(), "download_to_path: creating file");
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .with_context(|| format!("create file {}", dest.display()))?;
+    let mut stream = resp.bytes_stream();
+    let mut written = 0u64;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| explain(e, url))?;
-        buf.extend_from_slice(&chunk);
-        if buf.len() as u64 > max_bytes {
-            anyhow::bail!("下载超过 {} bytes 上限", max_bytes);
-        }
-        job.emit("download", buf.len() as u64, total);
+        written += chunk.len() as u64;
+        file.write_all(&chunk).await.with_context(|| {
+            format!(
+                "write to file {} ({} bytes written)",
+                dest.display(),
+                written
+            )
+        })?;
     }
-    let n = buf.len() as u64;
-    tracing::info!(%url, bytes = n, "download_vec: complete");
-    job.finish(n, total.or(Some(n)));
-    Ok(buf)
+    file.flush()
+        .await
+        .with_context(|| format!("flush file {}", dest.display()))?;
+    tracing::info!(%url, dest = %dest.display(), written, "download_to_path: complete");
+    Ok(written)
 }
