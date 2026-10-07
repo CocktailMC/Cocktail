@@ -450,6 +450,7 @@ dependencies = [
  "bollard",
  "bytes",
  "chrono",
+ "cocktail-shared",
  "extism",
  "flate2",
  "futures-util",
@@ -482,6 +483,7 @@ name = "cocktail-init"
 version = "26.4.11-DP"
 dependencies = [
  "anyhow",
+ "cocktail-shared",
  "rand_core 0.6.4",
  "serde",
  "serde_json",
@@ -540,6 +542,16 @@ dependencies = [
  "extism-pdk",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cocktail-shared"
+version = "26.4.11-DP"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

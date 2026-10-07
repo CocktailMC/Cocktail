@@ -40,6 +40,7 @@ extism = "1.10"
 bollard = { workspace = true }
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"
+cocktail-shared = { path = "../cocktail-shared" }
 
 [dev-dependencies]
 tempfile = "3"

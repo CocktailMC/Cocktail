@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/cocktail-shared",
     "crates/cocktail-control",
     "crates/cocktail-init",
     "crates/cocktail-plugin-sdk",

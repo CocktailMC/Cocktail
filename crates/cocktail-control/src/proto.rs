@@ -1,14 +1,20 @@
-use serde::{Deserialize, Serialize};
+//! control ↔ 远程 agent 节点的 JSON over WS 协议。
+//!
+//! 阶段 2 拆分后：纯协议类型（`AgentUp`/`AgentDown`/`ApplyInstance`/
+//! `InstanceManifest`/`NicStat`/`TcpStates`/`PROTOCOL_VERSION`）已抽到
+//! `cocktail_shared::proto`，本模块通过 `pub use` 重新导出，保持现有
+//! `use crate::proto::AgentUp` 等调用路径不变。
+//! `From<&Instance>` 等需要本地运行时句柄的 impl 仍保留在 control 端。
 
-use crate::instance::{Instance, InstanceSpec, InstanceStatus, LogLine, MetricSample};
+pub use cocktail_shared::proto::{
+    AgentDown, AgentUp, ApplyInstance, InstanceManifest, NicStat, TcpStates, PROTOCOL_VERSION,
+    api_version, default_protocol_version, kind_instance,
+};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApplyInstance {
-    pub id: String,
-    pub spec: InstanceSpec,
-    pub generation: u64,
-}
+use crate::instance::Instance;
 
+/// 从本地 `Instance` 派生 `ApplyInstance`（跨进程 IPC 友好）。
+/// 因为 `Instance` 留 control，此 impl 也留 control。
 impl From<&Instance> for ApplyInstance {
     fn from(i: &Instance) -> Self {
         Self {
@@ -17,127 +23,6 @@ impl From<&Instance> for ApplyInstance {
             generation: i.generation,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum AgentDown {
-    Welcome {
-        node_id: String,
-        instances: Vec<ApplyInstance>,
-        #[serde(default = "default_protocol_version")]
-        protocol_version: u32,
-    },
-    Apply {
-        instance: ApplyInstance,
-        #[serde(default)]
-        seq: u64,
-    },
-    Stop {
-        instance_id: String,
-        #[serde(default)]
-        seq: u64,
-    },
-    Command {
-        instance_id: String,
-        command: String,
-        #[serde(default)]
-        seq: u64,
-    },
-}
-
-impl AgentDown {
-    pub fn with_seq(self, seq: u64) -> Self {
-        match self {
-            AgentDown::Apply { instance, .. } => AgentDown::Apply { instance, seq },
-            AgentDown::Stop { instance_id, .. } => AgentDown::Stop { instance_id, seq },
-            AgentDown::Command {
-                instance_id,
-                command,
-                ..
-            } => AgentDown::Command {
-                instance_id,
-                command,
-                seq,
-            },
-            other => other,
-        }
-    }
-
-    pub fn seq(&self) -> u64 {
-        match self {
-            AgentDown::Apply { seq, .. }
-            | AgentDown::Stop { seq, .. }
-            | AgentDown::Command { seq, .. } => *seq,
-            AgentDown::Welcome { .. } => 0,
-        }
-    }
-}
-
-pub const PROTOCOL_VERSION: u32 = 1;
-
-fn default_protocol_version() -> u32 {
-    PROTOCOL_VERSION
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum AgentUp {
-    Hello {
-        hostname: String,
-        os: String,
-        arch: String,
-        #[serde(default = "default_protocol_version")]
-        protocol_version: u32,
-    },
-    Heartbeat {
-        #[serde(default)]
-        cpu_pct: f32,
-        #[serde(default)]
-        memory_mib: f32,
-        #[serde(default)]
-        rx_bps: f32,
-        #[serde(default)]
-        tx_bps: f32,
-        #[serde(default)]
-        nic_stats: Vec<NicStat>,
-        #[serde(default)]
-        tcp_states: TcpStates,
-    },
-    Ack {
-        seq: u64,
-    },
-    Status {
-        instance_id: String,
-        status: InstanceStatus,
-        pid: Option<u32>,
-    },
-    Log {
-        instance_id: String,
-        line: LogLine,
-    },
-    Metric {
-        instance_id: String,
-        sample: MetricSample,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InstanceManifest {
-    #[serde(rename = "apiVersion", default = "api_version")]
-    pub api_version: String,
-    #[serde(default = "kind_instance")]
-    pub kind: String,
-    pub id: String,
-    pub spec: InstanceSpec,
-}
-
-fn api_version() -> String {
-    "cocktail.mc/v1".into()
-}
-
-fn kind_instance() -> String {
-    "Instance".into()
 }
 
 impl InstanceManifest {
@@ -151,79 +36,42 @@ impl InstanceManifest {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct NicStat {
-    pub name: String,
-    pub rx_bytes: u64,
-    pub tx_bytes: u64,
-    pub rx_pkts: u64,
-    pub tx_pkts: u64,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TcpStates {
-    pub estab: u32,
-    pub syn_recv: u32,
-    pub time_wait: u32,
-}
-
 #[cfg(test)]
 mod tests {
+    // 共享层测试已在 cocktail-shared/src/proto.rs 覆盖。
+    // 这里保留一个简单的 end-to-end 校验：从 Instance 派生 ApplyInstance 不丢字段。
     use super::*;
+    use crate::instance::InstanceSpec;
 
     #[test]
-    fn ack_roundtrip() {
-        let msg = AgentUp::Ack { seq: 42 };
-        let s = serde_json::to_string(&msg).unwrap();
-        assert!(s.contains("\"seq\":42"));
-        let back: AgentUp = serde_json::from_str(&s).unwrap();
-        match back {
-            AgentUp::Ack { seq } => assert_eq!(seq, 42),
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
-    fn legacy_apply_without_seq_defaults_zero() {
-        let raw = r#"{"type":"stop","instance_id":"abc"}"#;
-        let msg: AgentDown = serde_json::from_str(raw).unwrap();
-        match msg {
-            AgentDown::Stop { instance_id, seq } => {
-                assert_eq!(instance_id, "abc");
-                assert_eq!(seq, 0);
-            }
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
-    fn legacy_heartbeat_without_net_stats() {
-        let raw = r#"{"type":"heartbeat","cpu_pct":1.5}"#;
-        let msg: AgentUp = serde_json::from_str(raw).unwrap();
-        match msg {
-            AgentUp::Heartbeat {
-                nic_stats,
-                tcp_states,
-                ..
-            } => {
-                assert!(nic_stats.is_empty());
-                assert_eq!(tcp_states.estab, 0);
-            }
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
-    fn welcome_carries_protocol_version() {
-        let raw = r#"{"type":"welcome","node_id":"n1","instances":[]}"#;
-        let msg: AgentDown = serde_json::from_str(raw).unwrap();
-        match msg {
-            AgentDown::Welcome {
-                protocol_version, ..
-            } => {
-                assert_eq!(protocol_version, PROTOCOL_VERSION);
-            }
-            _ => panic!("wrong variant"),
-        }
+    fn apply_from_instance_roundtrip() {
+        let spec = InstanceSpec {
+            name: "demo".into(),
+            workdir: "data/instances/demo".into(),
+            command: None,
+            args: Vec::new(),
+            memory_mib: 1024,
+            core: "demo".into(),
+            port: 25565,
+            auto_restart: false,
+            eula_accepted: false,
+            webhook_url: None,
+            runtime: Default::default(),
+            docker_image: None,
+            cpu_limit: None,
+            tags: Vec::new(),
+            group: None,
+            node_id: "local".into(),
+            desired_running: false,
+            backup_keep: 7,
+            backup_hour: None,
+            java_major: None,
+            mc_version: None,
+        };
+        let inst = Instance::new(spec);
+        let apply = ApplyInstance::from(&inst);
+        assert_eq!(apply.id, inst.id);
+        assert_eq!(apply.generation, inst.generation);
+        assert_eq!(apply.spec.name, "demo");
     }
 }

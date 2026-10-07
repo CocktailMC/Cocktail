@@ -1,0 +1,17 @@
+[package]
+name = "cocktail-shared"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Cocktail shared types across control plane and init subprocess"
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[lib]
+name = "cocktail_shared"
+path = "src/lib.rs"
