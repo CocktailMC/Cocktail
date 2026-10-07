@@ -1,38 +1,27 @@
 //! cocktail-init 子进程 IPC client。
 //!
-//! control 启动时调 `InitSupervisor::spawn_initial()` fork+exec cocktail-init
-//! 子进程，通过 stdin/stdout pipe + 长度前缀 JSON-RPC 2.0 双向通信。
+//! `InitClient` 是 JSON-RPC over stdin/stdout 的 **IPC 传输原语**：负责 fork+exec
+//! 子进程、4 字节 big-endian 长度前缀组帧、按 id 路由响应。
 //!
-//! 生命周期（阶段 2 起）：
-//! - `InitSupervisor` 持有可更新句柄 `RwLock<Option<Arc<InitClient>>>`，
-//!   init 崩溃（reader_loop EOF）后由 supervisor respawn，重建握手；
-//! - respawn 限流：30s 冷却，防止 init 反复崩溃导致 respawn 风暴；
-//! - `shutdown()` 主动关闭 stdin pipe，init 端 reader EOF 自然退出。
+//! 生命周期管理（spawn / respawn / 停止）已上移到通用
+//! [`crate::supervisor::ServiceSupervisor`]：`InitClient::spawn` 只负责建立 pipe
+//! 与 reader task，并把 `Child` 所有权交回 supervisor 做 watcher。
 //!
 //! fallback 设计：spawn 或 call 失败时返回 Err，调用方退化到本地函数
 //! （如 secrets::load_or_create 直接读文件），保证 init 不可达时
 //! control 仍能鉴权与运行（兼容单进程老部署）。
-//!
-//! TODO 阶段 3：watchdog 周期 ping init，超时触发 respawn（当前只在
-//! reader EOF 时 respawn，init 卡死但未退出时无法检测）。
 
 use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::process::{Child, ChildStdin, ChildStdout};
-use tokio::sync::{Mutex, RwLock, oneshot};
-use tracing::{debug, error, info, warn};
-
-/// respawn 冷却时间：两次 respawn 之间至少间隔 30s，防止 init 反复崩溃
-/// 导致 respawn 风暴。冷却期间 init_call 返 NotConnected 错。
-const RESPAWN_COOLDOWN: Duration = Duration::from_secs(30);
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::sync::{Mutex, oneshot};
+use tracing::{debug, warn};
 
 /// JSON-RPC 2.0 请求帧（control→init）。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -60,212 +49,30 @@ struct RpcError {
     message: String,
 }
 
-/// IPC client to cocktail-init subprocess.
+/// IPC client to cocktail-init subprocess。
+///
+/// stdout 是 RPC 应答通道（不可用于抓日志）；日志走 stderr，由 supervisor 采集。
 pub struct InitClient {
     inner: Arc<Inner>,
-    /// 持有 child，drop 时自动 kill。
-    _child: Child,
 }
 
 struct Inner {
-    stdin: Mutex<BufWriter<ChildStdin>>,
+    /// `None` 表示 stdin 已关闭（优雅停止或管道断开）。
+    stdin: Mutex<Option<BufWriter<ChildStdin>>>,
     pending: Mutex<HashMap<u64, oneshot::Sender<Response>>>,
     next_id: Mutex<u64>,
 }
 
-/// init 子进程 supervisor：持有可更新句柄，崩溃后自动 respawn。
-///
-/// 生命周期：
-/// - `spawn_initial` 首次启动时由 `try_spawn_init` 调用一次；
-/// - init 崩溃后 reader_loop 收到 EOF，调 `handle_exit` 清空 current 并
-///   在冷却时间外 respawn 新进程 + 重新握手 master key；
-/// - control 退出时调 `shutdown` 主动关闭 stdin pipe，init 端 reader EOF
-///   自然退出（不需要 kill_on_drop）。
-pub struct InitSupervisor {
-    /// 当前 init client 句柄。None 表示 init 未启动 / 正在 respawn / 已 shutdown。
-    /// RwLock 让 init_call 读不阻塞 respawn 写。
-    current: RwLock<Option<Arc<InitClient>>>,
-    /// 上次 respawn 时间，用于 30s 冷却限流。
-    last_respawn: Mutex<Option<Instant>>,
-    /// 累计 respawn 次数，用于日志诊断。
-    respawn_count: AtomicU64,
-}
-
-impl InitSupervisor {
-    /// 创建 supervisor。调用方拿到 Arc 后再调 `spawn_initial(&Arc)` 启动子进程。
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            current: RwLock::new(None),
-            last_respawn: Mutex::new(None),
-            respawn_count: AtomicU64::new(0),
-        })
-    }
-
-    /// 首次启动 init 子进程并握手 master key。成功后 current=Some(client)。
-    /// 握手失败仅记日志（init 仍可用，secrets fallback 到本地）。
-    pub async fn spawn_initial(self: &Arc<Self>) -> io::Result<()> {
-        let client = InitClient::spawn(Arc::downgrade(self)).await?;
-        *self.current.write().await = Some(Arc::new(client));
-        self.handshake_master_key().await;
-        Ok(())
-    }
-
-    /// 调一个 RPC method。current 为 None 时返 NotConnected（init 重启中 / 已 shutdown）。
-    pub async fn call<P: Serialize>(
-        &self,
-        method: &str,
-        params: P,
-    ) -> io::Result<serde_json::Value> {
-        let client = self.get().await?;
-        client.call(method, params).await
-    }
-
-    /// 取当前 client 句柄。None 时返 NotConnected。
-    pub async fn get(&self) -> io::Result<Arc<InitClient>> {
-        self.current
-            .read()
-            .await
-            .clone()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "init not available (respawning or shutdown)"))
-    }
-
-    /// 便捷封装：调 get_master_key，返回 32 字节密钥。
-    pub async fn get_master_key(&self) -> io::Result<Vec<u8>> {
-        let client = self.get().await?;
-        client.get_master_key().await
-    }
-
-    /// reader_loop EOF 时调用：清空 current，触发 respawn（如未冷却）。
-    /// 此方法由 reader task 的 EOF 分支 `tokio::spawn` 调用，必须 self: Arc
-    /// 持有所有权，避免 supervisor 在 respawn 期间被 drop。
-    pub async fn handle_exit(self: Arc<Self>) {
-        // 清空 current，让 init_call 立即返 NotConnected
-        let dropped = self.current.write().await.take();
-        if dropped.is_none() {
-            // 已经被清空（可能 shutdown 主动触发），不再 respawn
-            return;
-        }
-        info!(pid = ?std::process::id(), "cocktail-init subprocess exited; evaluating respawn");
-
-        // 冷却检查：30s 内不重复 respawn
-        let now = Instant::now();
-        {
-            let mut last = self.last_respawn.lock().await;
-            if let Some(t) = *last {
-                let elapsed = now.duration_since(t);
-                if elapsed < RESPAWN_COOLDOWN {
-                    let remain = RESPAWN_COOLDOWN - elapsed;
-                    warn!(
-                        remain_secs = remain.as_secs(),
-                        "init respawn skipped: cooldown (recent crash within 30s)"
-                    );
-                    return;
-                }
-            }
-            *last = Some(now);
-        }
-
-        // respawn 新进程
-        let count = self.respawn_count.fetch_add(1, Ordering::Relaxed) + 1;
-        info!(respawn_count = count, "respawning cocktail-init subprocess");
-        match InitClient::spawn(Arc::downgrade(&self)).await {
-            Ok(client) => {
-                *self.current.write().await = Some(Arc::new(client));
-                // 重新握手 master key（init 从文件读同一份 key，set_init_key
-                // 已 set 时丢弃新值，但值相同所以无影响）
-                self.handshake_master_key().await;
-                info!(respawn_count = count, "cocktail-init respawn succeeded");
-            }
-            Err(e) => {
-                error!(error = %e, respawn_count = count, "init respawn failed; will retry on next EOF (no auto-retry without watchdog)");
-            }
-        }
-    }
-
-    /// 主动 shutdown：关闭 stdin pipe，init 端 reader 收到 EOF 自然退出。
-    /// 由 control graceful shutdown 调用。幂等（已 shutdown 时 current=None）。
-    pub async fn shutdown(&self) {
-        let dropped = self.current.write().await.take();
-        if let Some(client) = dropped {
-            // drop client 会关闭 BufWriter<ChildStdin>，进而关闭 stdin pipe。
-            // init 端 server.rs::run 读到 EOF 后 break，正常退出。
-            drop(client);
-            debug!("init shutdown: stdin pipe closed, subprocess will exit on EOF");
-        }
-    }
-
-    /// 与 init 子进程握手拉 master key 并注入 secrets。失败仅记日志
-    /// （init 仍可用，secrets fallback 到本地 load_or_create）。
-    async fn handshake_master_key(&self) {
-        match self.get_master_key().await {
-            Ok(key) if key.len() == 32 => {
-                tracing::info!(
-                    source = "init-rpc",
-                    "master key loaded from cocktail-init subprocess"
-                );
-                crate::secrets::set_init_key(key);
-            }
-            Ok(other) => {
-                tracing::warn!(
-                    len = other.len(),
-                    "cocktail-init returned master key with unexpected length; fallback to local file"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "cocktail-init get_master_key failed; fallback to local file");
-            }
-        }
-    }
-}
-
-/// 找 cocktail-init 可执行文件：env COCKTAIL_INIT_PATH > 当前 exe 同目录 > PATH。
-fn resolve_init_binary() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("COCKTAIL_INIT_PATH") {
-        let path = PathBuf::from(p);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    let name = if cfg!(windows) {
-        "cocktail-init.exe"
-    } else {
-        "cocktail-init"
-    };
-    let candidate = dir.join(name);
-    if candidate.exists() {
-        return Some(candidate);
-    }
-    // PATH 查找
-    if let Ok(paths) = std::env::var("PATH") {
-        for entry in paths.split(if cfg!(windows) { ';' } else { ':' }) {
-            let p = PathBuf::from(entry).join(name);
-            if p.exists() {
-                return Some(p);
-            }
-        }
-    }
-    None
-}
-
 impl InitClient {
-    /// fork+exec cocktail-init 子进程，建立 stdin/stdout pipe，启动 reader task。
-    /// `weak_supervisor` 用于 reader EOF 时通知 supervisor 触发 respawn。
-    pub async fn spawn(weak_supervisor: Weak<InitSupervisor>) -> io::Result<Self> {
-        let bin = resolve_init_binary().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "cocktail-init binary not found (checked COCKTAIL_INIT_PATH, current exe dir, PATH)",
-            )
-        })?;
-        debug!(path = %bin.display(), "spawning cocktail-init subprocess");
-
-        let mut cmd = tokio::process::Command::new(&bin);
+    /// 启动子进程并建立 stdin/stdout pipe，返回 `(client, Child, stderr)`。
+    ///
+    /// `cmd` 由集成方（supervisor）构造好 program / args / cwd / env；
+    /// 本函数只负责设置 stdio、spawn、启动 reader task，并把 `Child` 与 `stderr`
+    /// 交回调用方（supervisor 持有 `Child` 做 watcher，持有 `stderr` 采集日志）。
+    pub fn spawn(cmd: &mut Command) -> io::Result<(Arc<Self>, Child, ChildStderr)> {
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()); // init 的 stderr 日志直接继承，由 control 的终端显示
-
+            .stderr(Stdio::piped());
         let mut child = cmd.spawn()?;
         let stdin = child
             .stdin
@@ -275,39 +82,27 @@ impl InitClient {
             .stdout
             .take()
             .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "init stdout not piped"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "init stderr not piped"))?;
 
         let inner = Arc::new(Inner {
-            stdin: Mutex::new(BufWriter::new(stdin)),
+            stdin: Mutex::new(Some(BufWriter::new(stdin))),
             pending: Mutex::new(HashMap::new()),
             next_id: Mutex::new(1),
         });
 
-        // 启动 reader task：循环读帧，按 id 路由到 pending oneshot。
-        // reader EOF 时通过 weak_supervisor 通知 supervisor 触发 respawn
-        // （cooldown 内不重复 respawn）。weak ref 避免 reader task 持有
-        // supervisor 导致循环引用。
+        // reader task：循环读帧，按 id 路由到 pending oneshot。EOF 时通知所有
+        // pending 失败；进程退出/重启由 supervisor 的 watcher 负责。
         let reader_inner = Arc::clone(&inner);
         tokio::spawn(async move {
-            match reader_loop(reader_inner, stdout).await {
-                Ok(()) => {
-                    // 正常 EOF：尝试通知 supervisor respawn（如未 cooldown）
-                    if let Some(sup) = weak_supervisor.upgrade() {
-                        tokio::spawn(async move { sup.handle_exit().await; });
-                    }
-                }
-                Err(e) => {
-                    warn!(error = %e, "init reader task ended with error");
-                    if let Some(sup) = weak_supervisor.upgrade() {
-                        tokio::spawn(async move { sup.handle_exit().await; });
-                    }
-                }
+            if let Err(e) = reader_loop(reader_inner, stdout).await {
+                warn!(error = %e, "init reader task ended with error");
             }
         });
 
-        Ok(Self {
-            inner,
-            _child: child,
-        })
+        Ok((Arc::new(Self { inner }), child, stderr))
     }
 
     /// 调一个 RPC method，返回 result 或 Err（IPC 失败 / RPC error）。
@@ -336,7 +131,10 @@ impl InitClient {
         let body = serde_json::to_vec(&req).unwrap();
         let frame = frame_bytes(&body);
         {
-            let mut w = self.inner.stdin.lock().await;
+            let mut guard = self.inner.stdin.lock().await;
+            let w = guard.as_mut().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::BrokenPipe, "init stdin already closed")
+            })?;
             w.write_all(&frame).await?;
             w.flush().await?;
         }
@@ -380,6 +178,46 @@ impl InitClient {
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing key_hex"))?;
         hex_decode(hex)
     }
+
+    /// 关闭 stdin pipe（drop `BufWriter<ChildStdin>`）。init 端 reader 收到 EOF
+    /// 后自然退出，用于优雅停止。幂等。
+    pub async fn close_stdin(&self) {
+        let taken = self.inner.stdin.lock().await.take();
+        if taken.is_some() {
+            debug!("init stdin closed; subprocess will exit on EOF");
+        }
+    }
+}
+
+/// 找 cocktail-init 可执行文件：env COCKTAIL_INIT_PATH > 当前 exe 同目录 > PATH。
+pub(crate) fn resolve_init_binary() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("COCKTAIL_INIT_PATH") {
+        let path = PathBuf::from(p);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let name = if cfg!(windows) {
+        "cocktail-init.exe"
+    } else {
+        "cocktail-init"
+    };
+    let candidate = dir.join(name);
+    if candidate.exists() {
+        return Some(candidate);
+    }
+    // PATH 查找
+    if let Ok(paths) = std::env::var("PATH") {
+        for entry in paths.split(if cfg!(windows) { ';' } else { ':' }) {
+            let p = PathBuf::from(entry).join(name);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    None
 }
 
 /// reader task：循环读帧，按 id 路由到 pending oneshot。

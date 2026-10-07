@@ -45,6 +45,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
@@ -63,12 +64,14 @@ use crate::state::{AppState, SharedState};
 
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
-/// cocktail-init 子进程 supervisor。run_plane 启动时 spawn_initial；
-/// init 崩溃后 supervisor 自动 respawn（30s 冷却限流）。
-/// control 退出时调 shutdown 主动关闭 stdin pipe，init 端 reader EOF 退出。
-pub(crate) static INIT_CLIENT: OnceLock<Arc<init_client::InitSupervisor>> = OnceLock::new();
+/// 通用本地服务管理器：托管 cocktail-init 等本地子进程。
+pub(crate) static SERVICE_SUPERVISOR: OnceLock<Arc<supervisor::ServiceSupervisor>> =
+    OnceLock::new();
 
-/// 调一个 cocktail-init RPC。失败（init 未启动 / IPC 失败 / RPC error / 正在 respawn）
+/// 托管服务名：cocktail-init。
+pub(crate) const INIT_SERVICE: &str = "cocktail-init";
+
+/// 调一个 cocktail-init RPC。失败（init 未启动 / IPC 失败 / RPC error / 正在重启）
 /// 时返回 Err，调用方决定是否 fallback 到本地实现。
 ///
 /// TODO 阶段 3：对未启用的模块提供本地 fallback 而不是直接报错。
@@ -76,37 +79,109 @@ pub(crate) async fn init_call<P: serde::Serialize>(
     method: &str,
     params: P,
 ) -> anyhow::Result<serde_json::Value> {
-    let sup = INIT_CLIENT.get().ok_or_else(|| {
-        anyhow::anyhow!("cocktail-init subprocess not available (INIT_CLIENT unset)")
+    let sup = SERVICE_SUPERVISOR.get().ok_or_else(|| {
+        anyhow::anyhow!("cocktail-init subprocess not available (SERVICE_SUPERVISOR unset)")
     })?;
     let v = sup
-        .call(method, params)
+        .ipc_call(INIT_SERVICE, method, params)
         .await
         .map_err(|e| anyhow::anyhow!("init RPC {method} failed: {e}"))?;
     Ok(v)
 }
 
-/// 尝试 fork+exec cocktail-init 子进程并握手拉取 master key。
-/// 成功后把 InitSupervisor 存入 INIT_CLIENT 全局。
+/// 注册并启动 cocktail-init 服务（Transport::Ipc），随后握手拉取 master key。
 /// 失败不致命：secrets::master_key() fallback 到本地 load_or_create()，
-/// 但 init_call 会返 NotConnected 错直到 control 重启或下次 respawn（但 respawn
-/// 需要 init 至少启动过一次，故 spawn_initial 失败后不进 respawn 循环）。
+/// 兼容单进程老部署与 init 二进制缺失场景。
 async fn try_spawn_init() -> anyhow::Result<()> {
-    let sup = init_client::InitSupervisor::new();
-    sup.spawn_initial()
+    use crate::supervisor::{
+        PermissionBoundary, ResourceLimits, RestartPolicy, ServiceSpec, Transport,
+    };
+
+    let program = init_client::resolve_init_binary().ok_or_else(|| {
+        anyhow::anyhow!(
+            "cocktail-init binary not found (checked COCKTAIL_INIT_PATH, current exe dir, PATH)"
+        )
+    })?;
+
+    // 权限边界：可执行文件只能来自当前 exe 目录或 COCKTAIL_INIT_PATH 的父目录。
+    let mut allowed_bin_roots = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            allowed_bin_roots.push(dir.to_path_buf());
+        }
+    }
+    if let Ok(p) = std::env::var("COCKTAIL_INIT_PATH") {
+        if let Some(parent) = PathBuf::from(p).parent() {
+            allowed_bin_roots.push(parent.to_path_buf());
+        }
+    }
+
+    let spec = ServiceSpec {
+        name: INIT_SERVICE.to_string(),
+        program,
+        args: Vec::new(),
+        cwd: None,
+        env: Vec::new(),
+        transport: Transport::Ipc,
+        depends_on: Vec::new(),
+        restart: RestartPolicy::OnFailure {
+            max_attempts: 5,
+            backoff_ms: 1000,
+            max_backoff_ms: 30000,
+        },
+        limits: ResourceLimits::default(),
+        boundary: PermissionBoundary {
+            allowed_bin_roots,
+            allowed_workdir_roots: Vec::new(),
+            // 剔除敏感变量，避免子进程继承 control 的密钥
+            env_denylist: vec![
+                "COCKTAIL_MASTER_KEY".to_string(),
+                "COCKTAIL_INIT_KEY".to_string(),
+            ],
+        },
+        log_dir: None,
+        log_max_bytes: 8 * 1024 * 1024,
+        log_keep: 3,
+        stop_timeout: Duration::from_secs(15),
+    };
+
+    let sup = supervisor::ServiceSupervisor::new();
+    sup.register(spec)
         .await
-        .map_err(|e| anyhow::anyhow!("spawn cocktail-init: {e}"))?;
-    // 存入全局供后续 RPC 使用 + reader_loop respawn 找回 supervisor。
-    // OnceLock 已 set 时（理论不会）丢弃新的。
-    let _ = INIT_CLIENT.set(sup);
+        .map_err(|e| anyhow::anyhow!("register cocktail-init: {e}"))?;
+    // 存入全局，供 init_call 与 watcher / monitor 任务使用（Weak 升级）。
+    let _ = SERVICE_SUPERVISOR.set(Arc::clone(&sup));
+    sup.start(INIT_SERVICE)
+        .await
+        .map_err(|e| anyhow::anyhow!("start cocktail-init: {e}"))?;
+
+    // 握手 master key 并注入 secrets。失败仅记日志（init 仍可用，secrets fallback）。
+    match sup.ipc_get_master_key(INIT_SERVICE).await {
+        Ok(key) if key.len() == 32 => {
+            tracing::info!(
+                source = "init-rpc",
+                "master key loaded from cocktail-init subprocess"
+            );
+            crate::secrets::set_init_key(key);
+        }
+        Ok(other) => {
+            tracing::warn!(
+                len = other.len(),
+                "cocktail-init returned master key with unexpected length; fallback to local file"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "cocktail-init get_master_key failed; fallback to local file");
+        }
+    }
     Ok(())
 }
 
-/// graceful shutdown：通知 init 子进程退出（关闭 stdin pipe 触发 EOF）。
-/// 由 run_plane 的 signal handler 在 axum::serve 退出后调用。幂等。
+/// graceful shutdown：按依赖反向序停止所有托管服务（cocktail-init 关闭 stdin
+/// 触发 EOF 自然退出）。由 run_plane 的 signal handler 在 axum::serve 退出后调用。
 async fn shutdown_init() {
-    if let Some(sup) = INIT_CLIENT.get() {
-        sup.shutdown().await;
+    if let Some(sup) = SERVICE_SUPERVISOR.get() {
+        sup.shutdown_all().await;
     }
 }
 
