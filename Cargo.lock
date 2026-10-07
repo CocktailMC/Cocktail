@@ -478,6 +478,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cocktail-init"
+version = "26.4.11-DP"
+dependencies = [
+ "anyhow",
+ "rand_core 0.6.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cocktail-plugin-esplus"
 version = "26.4.11-DP"
 dependencies = [

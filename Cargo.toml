@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/cocktail-control",
+    "crates/cocktail-init",
     "crates/cocktail-plugin-sdk",
     "crates/plugins/watchdog",
     "crates/plugins/speclint",

@@ -13,6 +13,7 @@ mod hostnet;
 mod http;
 mod i18n;
 mod identity;
+mod init_client;
 mod instance;
 mod java;
 mod metrics;
@@ -43,6 +44,7 @@ pub use stdin_bridge::run_stdin_bridge;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use axum::Json;
 use axum::Router;
@@ -60,6 +62,45 @@ use tracing_subscriber::EnvFilter;
 use crate::state::{AppState, SharedState};
 
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// cocktail-init 子进程句柄。run_plane 启动时尝试 spawn；失败则 None，
+/// secrets 与后续用户空间操作 fallback 到本地实现（兼容单进程老部署）。
+static INIT_CLIENT: OnceLock<init_client::InitClient> = OnceLock::new();
+
+/// 尝试 fork+exec cocktail-init 子进程并握手拉取 master key。
+/// 成功后把 InitClient 存入 INIT_CLIENT 全局、把密钥注入 secrets。
+/// 失败不致命：调用方 fallback 到本地 load_or_create()。
+async fn try_spawn_init() -> anyhow::Result<()> {
+    let client = init_client::InitClient::spawn()
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn cocktail-init: {e}"))?;
+
+    // 握手拉取 master key。失败则记日志但仍保留 child（init 可能只 secrets 失败，
+    // 其他 RPC 仍可用）。
+    match client.get_master_key().await {
+        Ok(key) if key.len() == 32 => {
+            tracing::info!(
+                source = "init-rpc",
+                pid = ?std::process::id(),
+                "master key loaded from cocktail-init subprocess"
+            );
+            secrets::set_init_key(key);
+        }
+        Ok(other) => {
+            tracing::warn!(
+                len = other.len(),
+                "cocktail-init returned master key with unexpected length; fallback to local file"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "cocktail-init get_master_key failed; fallback to local file");
+        }
+    }
+
+    // 存入全局供后续 RPC 使用。OnceLock 已 set 时（理论不会）丢弃新的。
+    let _ = INIT_CLIENT.set(client);
+    Ok(())
+}
 
 pub fn run_reset_password() -> anyhow::Result<()> {
     use std::io::{self, Write};
@@ -116,6 +157,13 @@ pub async fn run_plane() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState::new());
     crate::util::migrate_audit_jsonl();
+
+    // 尝试 fork+exec cocktail-init 子进程并握手拉取 master key。
+    // 失败不致命：secrets::master_key() 会 fallback 到本地 load_or_create()，
+    // 兼容单进程老部署与 init 二进制缺失场景。
+    if let Err(e) = try_spawn_init().await {
+        tracing::warn!(error = %e, "cocktail-init subprocess unavailable; secrets will fallback to local file");
+    }
 
     match instance::runtime::ContainerRuntime::detect().await {
         Ok(rt) => {

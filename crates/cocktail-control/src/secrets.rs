@@ -8,6 +8,15 @@ const SALT_FILE: &str = "data/master.salt";
 const PREFIX: &str = "enc:v1:";
 
 static MASTER: OnceLock<Vec<u8>> = OnceLock::new();
+/// 从 cocktail-init 子进程拉来的 32 字节密钥。lib.rs 启动时若 init 可达
+/// 则 set 此 OnceLock；不可达时留空，master_key() fallback 到 load_or_create()。
+static INIT_KEY: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// lib.rs 启动握手成功后调用：把从 init 子进程 get_master_key RPC 拉来的
+/// 32 字节密钥注入进来。失败时不调用，master_key() 自动 fallback 文件。
+pub fn set_init_key(key: Vec<u8>) {
+    let _ = INIT_KEY.set(key);
+}
 
 fn key_path() -> PathBuf {
     PathBuf::from(KEY_FILE)
@@ -90,6 +99,12 @@ fn load_or_create() -> Vec<u8> {
 }
 
 pub fn master_key() -> &'static [u8] {
+    // 优先用从 cocktail-init 子进程拉来的密钥（init 可达时由 lib.rs 启动握手注入）。
+    // INIT_KEY 未 set（init 不可达 / fallback 模式）时退化到 load_or_create()，
+    // 兼容单进程老部署与 init 故障降级。
+    if let Some(k) = INIT_KEY.get() {
+        return k.as_slice();
+    }
     MASTER.get_or_init(load_or_create)
 }
 

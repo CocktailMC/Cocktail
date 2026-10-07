@@ -1,0 +1,26 @@
+[package]
+name = "cocktail-init"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rand_core = { workspace = true, features = ["getrandom"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lib]
+name = "cocktail_init"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cocktail-init"
+path = "src/main.rs"
