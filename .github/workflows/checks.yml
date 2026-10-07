@@ -16,9 +16,9 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy
-        run: cargo clippy -p cocktail-control --all-targets
+        run: cargo clippy -p cocktail-control -p cocktail-init -p cocktail-shared --all-targets
       - name: test
-        run: cargo test -p cocktail-control
+        run: cargo test -p cocktail-control -p cocktail-init -p cocktail-shared
 
   wasm:
     name: WASM plugins
