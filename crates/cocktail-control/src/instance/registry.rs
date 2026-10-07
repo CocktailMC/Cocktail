@@ -59,7 +59,7 @@ pub async fn create_instance(
     ensure_exclusive_workdir(state, &workdir, None).await?;
 
     if is_local_node(&node_id) {
-        files::ensure_seed_files(&workdir, req.port, req.eula_accepted)?;
+        files::ensure_seed_files(&workdir, req.port, req.eula_accepted).await?;
     }
 
     let docker_image = match req.runtime {
@@ -147,7 +147,7 @@ pub async fn update_instance(
     }
     if let Some(p) = req.port {
         instance.spec.port = p;
-        files::sync_port(&instance.spec.workdir, p)?;
+        files::sync_port(&instance.spec.workdir, p).await?;
     }
     if let Some(ar) = req.auto_restart {
         instance.spec.auto_restart = ar;
@@ -361,7 +361,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
     let workdir_path = std::path::Path::new(&workdir);
     if command.as_deref() == Some("java")
         && args.iter().any(|a| a == "-jar" || a.contains("server.jar"))
-        && !files::jar_exists(&workdir, "server.jar")
+        && !files::jar_exists(&workdir, "server.jar").await?
         && super::versions::has_modloader_startup(workdir_path)
     {
         if let Some((cmd, a)) = super::versions::detect_modloader_startup(workdir_path) {
@@ -377,7 +377,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
     }
 
     if command.is_none() || (command.as_deref() == Some("java") && args.is_empty()) {
-        if files::jar_exists(&workdir, "server.jar") {
+        if files::jar_exists(&workdir, "server.jar").await? {
             let (cmd, a) = util::java_jar_startup("server.jar");
             command = Some(cmd.clone());
             args = a.clone();
@@ -401,7 +401,7 @@ pub async fn start_instance(state: &AppState, id: &str) -> anyhow::Result<Instan
         RuntimeKind::Docker | RuntimeKind::Podman => 25565,
         RuntimeKind::Process => port,
     };
-    files::ensure_seed_files(&workdir, seed_port, eula)?;
+    files::ensure_seed_files(&workdir, seed_port, eula).await?;
 
     state.publish(InstanceEvent::StatusChanged {
         instance_id: instance_id.clone(),
@@ -977,12 +977,12 @@ fn parse_manifest(id: &str, body: &str) -> anyhow::Result<InstanceManifest> {
 
 pub async fn list_files(state: &AppState, id: &str, path: &str) -> anyhow::Result<Vec<FileEntry>> {
     let workdir = workdir_of(state, id).await?;
-    files::list_files(&workdir, path)
+    files::list_files(&workdir, path).await
 }
 
 pub async fn read_file(state: &AppState, id: &str, path: &str) -> anyhow::Result<FileContent> {
     let workdir = workdir_of(state, id).await?;
-    files::read_file(&workdir, path)
+    files::read_file(&workdir, path).await
 }
 
 pub async fn read_bytes(
@@ -991,7 +991,7 @@ pub async fn read_bytes(
     path: &str,
 ) -> anyhow::Result<(String, Vec<u8>)> {
     let workdir = workdir_of(state, id).await?;
-    files::read_bytes(&workdir, path)
+    files::read_bytes(&workdir, path).await
 }
 
 pub async fn write_file(
@@ -1001,7 +1001,7 @@ pub async fn write_file(
     content: &str,
 ) -> anyhow::Result<FileContent> {
     let workdir = workdir_of(state, id).await?;
-    let out = files::write_file(&workdir, path, content)?;
+    let out = files::write_file(&workdir, path, content).await?;
     util::audit("file.write", Some(id), json!({ "path": path }), "api");
     Ok(out)
 }
@@ -1013,7 +1013,7 @@ pub async fn write_bytes(
     bytes: &[u8],
 ) -> anyhow::Result<FileEntry> {
     let workdir = workdir_of(state, id).await?;
-    let out = files::write_bytes(&workdir, path, bytes)?;
+    let out = files::write_bytes(&workdir, path, bytes).await?;
     util::audit(
         "file.upload",
         Some(id),
@@ -1025,14 +1025,14 @@ pub async fn write_bytes(
 
 pub async fn delete_file(state: &AppState, id: &str, path: &str) -> anyhow::Result<()> {
     let workdir = workdir_of(state, id).await?;
-    files::delete_path(&workdir, path)?;
+    files::delete_path(&workdir, path).await?;
     util::audit("file.delete", Some(id), json!({ "path": path }), "api");
     Ok(())
 }
 
 pub async fn mkdir(state: &AppState, id: &str, path: &str) -> anyhow::Result<FileEntry> {
     let workdir = workdir_of(state, id).await?;
-    let out = files::mkdir(&workdir, path)?;
+    let out = files::mkdir(&workdir, path).await?;
     util::audit("file.mkdir", Some(id), json!({ "path": path }), "api");
     Ok(out)
 }
@@ -1069,7 +1069,7 @@ pub async fn install_local_jar(
         anyhow::bail!("jar file is empty");
     }
 
-    files::write_bytes(&view.spec.workdir, &jar_rel, bytes)?;
+    files::write_bytes(&view.spec.workdir, &jar_rel, bytes).await?;
     let (command, args) = util::java_jar_startup(&jar_rel);
 
     let mut guard = state.instances.write().await;
@@ -1119,7 +1119,7 @@ pub async fn set_startup_jar(
     if jar_rel.is_empty() || !jar_rel.to_ascii_lowercase().ends_with(".jar") {
         anyhow::bail!("jar_path must end with .jar");
     }
-    if !files::jar_exists(&view.spec.workdir, &jar_rel) {
+    if !files::jar_exists(&view.spec.workdir, &jar_rel).await? {
         anyhow::bail!("jar not found: {jar_rel}");
     }
     let (command, args) = util::java_jar_startup(&jar_rel);
@@ -1147,12 +1147,12 @@ pub async fn set_startup_jar(
 
 pub async fn create_backup(state: &AppState, id: &str) -> anyhow::Result<BackupInfo> {
     let workdir = workdir_of(state, id).await?;
-    let bak = files::create_backup(id, &workdir)?;
+    let bak = files::create_backup(id, &workdir).await?;
     let keep = get_instance(state, id)
         .await
         .map(|v| v.spec.backup_keep.max(1))
         .unwrap_or(7);
-    let _ = files::prune_backups(id, keep);
+    let _ = files::prune_backups(id, keep).await;
     util::audit("backup.create", Some(id), json!({ "id": bak.id }), "api");
     Ok(bak)
 }
@@ -1161,14 +1161,14 @@ pub async fn list_backups(state: &AppState, id: &str) -> anyhow::Result<Vec<Back
     if get_instance(state, id).await.is_none() {
         anyhow::bail!("instance not found");
     }
-    files::list_backups(id)
+    files::list_backups(id).await
 }
 
 pub async fn delete_backup(state: &AppState, id: &str, backup_id: &str) -> anyhow::Result<()> {
     if get_instance(state, id).await.is_none() {
         anyhow::bail!("instance not found");
     }
-    files::delete_backup(id, backup_id)?;
+    files::delete_backup(id, backup_id).await?;
     util::audit("backup.delete", Some(id), json!({ "id": backup_id }), "api");
     Ok(())
 }
@@ -1183,7 +1183,7 @@ pub async fn restore_backup(state: &AppState, id: &str, backup_id: &str) -> anyh
     ) {
         anyhow::bail!("stop the instance before restore");
     }
-    files::restore_backup(id, backup_id, &view.spec.workdir)?;
+    files::restore_backup(id, backup_id, &view.spec.workdir).await?;
     util::audit(
         "backup.restore",
         Some(id),
@@ -1326,7 +1326,7 @@ pub async fn install_modrinth(
 
     let bytes = super::modrinth::download_bytes(&version.primary_url, &safe_name).await?;
     let rel = format!("{target}/{safe_name}");
-    files::write_bytes(&view.spec.workdir, &rel, &bytes)?;
+    files::write_bytes(&view.spec.workdir, &rel, &bytes).await?;
     util::audit(
         "modrinth.install",
         Some(id),
@@ -1366,7 +1366,7 @@ pub async fn install_hangar(
         .to_string();
     let bytes = super::hangar::download_bytes(&version.download_url, &safe_name).await?;
     let rel = format!("plugins/{safe_name}");
-    files::write_bytes(&view.spec.workdir, &rel, &bytes)?;
+    files::write_bytes(&view.spec.workdir, &rel, &bytes).await?;
     util::audit(
         "hangar.install",
         Some(id),
@@ -1404,7 +1404,7 @@ pub async fn install_spiget(
         .unwrap_or("spiget.jar")
         .to_string();
     let rel = format!("plugins/{safe_name}");
-    files::write_bytes(&view.spec.workdir, &rel, &bytes)?;
+    files::write_bytes(&view.spec.workdir, &rel, &bytes).await?;
     util::audit(
         "spiget.install",
         Some(id),
@@ -1702,7 +1702,7 @@ pub async fn reset_world(state: &AppState, id: &str, world: &str) -> anyhow::Res
 
 pub async fn export_world(state: &AppState, id: &str, world: &str) -> anyhow::Result<BackupInfo> {
     let workdir = workdir_of(state, id).await?;
-    let bak = super::worlds::export_world(id, &workdir, world)?;
+    let bak = super::worlds::export_world(id, &workdir, world).await?;
     util::audit("world.export", Some(id), json!({ "world": world }), "api");
     Ok(bak)
 }
@@ -1722,7 +1722,7 @@ pub async fn import_world(
     ) {
         anyhow::bail!("stop the instance before importing a world");
     }
-    super::worlds::import_world(&view.spec.workdir, world, bytes)?;
+    super::worlds::import_world(&view.spec.workdir, world, bytes).await?;
     util::audit("world.import", Some(id), json!({ "world": world }), "api");
     Ok(())
 }
@@ -1821,7 +1821,7 @@ pub async fn run_due_schedules(state: &std::sync::Arc<AppState>) {
                     .await
                     .map(|v| v.spec.backup_keep.max(1))
                     .unwrap_or(7);
-                let _ = files::prune_backups(&sched.instance_id, keep);
+                let _ = files::prune_backups(&sched.instance_id, keep).await;
             }
             ScheduleKind::Restart => {
                 let _ = restart_instance(state, &sched.instance_id).await;
@@ -1951,18 +1951,12 @@ pub async fn clone_instance(
     ensure_exclusive_workdir(state, &workdir, None).await?;
 
     let copy_data = req.copy_data.unwrap_or(true);
-    let src_dir = src_workdir.clone();
-    let dst_dir = workdir.clone();
     let skip_logs = req.skip_logs.unwrap_or(true);
-    tokio::task::spawn_blocking(move || {
-        files::copy_instance_tree(&src_dir, &dst_dir, copy_data, skip_logs)
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("复制任务失败：{e}"))??;
+    files::copy_instance_tree(&src_workdir, &workdir, copy_data, skip_logs).await?;
 
     if is_local_node(&node_id) {
-        files::ensure_seed_files(&workdir, port, src.spec.eula_accepted)?;
-        files::sync_port(&workdir, port)?;
+        files::ensure_seed_files(&workdir, port, src.spec.eula_accepted).await?;
+        files::sync_port(&workdir, port).await?;
     }
 
     let mut spec = src.spec.clone();
@@ -2119,7 +2113,7 @@ pub async fn preflight_start(state: &AppState, id: &str) -> anyhow::Result<Vec<S
     if !view.spec.eula_accepted && view.spec.core != "demo" {
         warnings.push("EULA 尚未接受".to_string());
     }
-    if view.spec.command.is_none() && !files::jar_exists(&view.spec.workdir, "server.jar") {
+    if view.spec.command.is_none() && !files::jar_exists(&view.spec.workdir, "server.jar").await? {
         warnings.push("未配置启动命令且找不到 server.jar".to_string());
     }
     Ok(warnings)
@@ -2132,7 +2126,7 @@ pub async fn detect_mc_version(state: &AppState, id: &str) -> anyhow::Result<Opt
     if !is_local_node(&view.spec.node_id) {
         return Ok(None);
     }
-    let found = files::guess_mc_version(&view.spec.workdir);
+    let found = files::guess_mc_version(&view.spec.workdir).await?;
     if let Some(v) = found.as_deref() {
         let mut guard = state.instances.write().await;
         if let Some(inst) = guard.get_mut(id) {
@@ -2173,12 +2167,9 @@ pub async fn backup_preview(
     backup_id: &str,
 ) -> anyhow::Result<RestorePreview> {
     let workdir = workdir_of(state, id).await?;
-    let meta = files::backup_meta(id, backup_id)?;
-    let path = files::backup_path(id, backup_id)?;
-    let target = path.clone();
-    let scan = tokio::task::spawn_blocking(move || files::inspect_backup_zip(&target))
-        .await
-        .map_err(|e| anyhow::anyhow!("读取备份失败：{e}"))??;
+    let meta = files::backup_meta(id, backup_id).await?;
+    let path = files::backup_path(id, backup_id).await?;
+    let scan = files::inspect_backup_zip(&path).await?;
     let mut warnings = Vec::new();
     if !scan.has_server_properties {
         warnings.push("备份内没有 server.properties，恢复后端口与配置可能被重置".to_string());
@@ -2189,7 +2180,7 @@ pub async fn backup_preview(
     if scan.plugin_count == 0 {
         warnings.push("备份内没有插件，恢复后功能可能缺失".to_string());
     }
-    let current = files::total_dir_bytes(&workdir);
+    let current = files::total_dir_bytes(&workdir).await?;
     if current > scan.size_bytes.saturating_mul(4).max(64 * 1024 * 1024) {
         warnings.push(format!(
             "当前目录 {} MiB 明显大于备份 {} MiB，恢复会丢弃新增内容",
@@ -2278,10 +2269,7 @@ pub async fn world_download(
     let dest = dir.join(&filename);
     let workdir = view.spec.workdir.clone();
     let rel = world.to_string();
-    let dest_clone = dest.clone();
-    tokio::task::spawn_blocking(move || files::pack_subdir_zip(&workdir, &rel, &dest_clone))
-        .await
-        .map_err(|e| anyhow::anyhow!("打包失败：{e}"))??;
+    files::pack_subdir_zip(&workdir, &rel, &dest).await?;
     util::audit(
         "world.download",
         Some(id),
@@ -2311,11 +2299,7 @@ pub async fn world_upload(
     }
     let workdir = view.spec.workdir.clone();
     let rel = world.to_string();
-    let owned = bytes.to_vec();
-    let count =
-        tokio::task::spawn_blocking(move || files::extract_zip_into(&workdir, &rel, &owned))
-            .await
-            .map_err(|e| anyhow::anyhow!("解压失败：{e}"))??;
+    let count = files::extract_zip_into(&workdir, &rel, bytes).await?;
     util::audit(
         "world.upload",
         Some(id),
@@ -2331,7 +2315,7 @@ pub async fn rescan_version(state: &AppState, id: &str) -> anyhow::Result<Option
         let view = get_instance(state, id).await;
         if let Some(view) = view {
             if is_local_node(&view.spec.node_id) {
-                let _ = files::write_mc_version_marker(&view.spec.workdir, v);
+                let _ = files::write_mc_version_marker(&view.spec.workdir, v).await;
             }
         }
     }
@@ -2346,7 +2330,7 @@ pub async fn prune_instance_backups(
     if get_instance(state, id).await.is_none() {
         anyhow::bail!("instance not found");
     }
-    files::prune_backups(id, keep.max(1))
+    files::prune_backups(id, keep.max(1)).await
 }
 
 pub async fn bulk_action(state: &AppState, req: BulkActionRequest) -> BulkActionResult {

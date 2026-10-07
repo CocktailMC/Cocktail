@@ -365,7 +365,7 @@ pub struct EulaRequest {
     pub accepted: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileEntry {
     pub name: String,
     pub path: String,
@@ -373,7 +373,7 @@ pub struct FileEntry {
     pub size: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileContent {
     pub path: String,
     pub content: String,
@@ -385,12 +385,24 @@ pub struct WriteFileRequest {
     pub content: String,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BackupInfo {
     pub id: String,
     pub created_at: DateTime<Utc>,
     pub path: String,
     pub size_bytes: u64,
+}
+
+/// 备份内容扫描结果：由 init 端 `files::inspect_backup_zip` 产出，
+/// control 端消费以构建 `RestorePreview`。跨进程 IPC 友好的纯数据。
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct BackupScan {
+    pub entries: u32,
+    pub size_bytes: u64,
+    pub world_bytes: u64,
+    pub plugin_count: u32,
+    pub has_server_properties: bool,
+    pub has_level_dat: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

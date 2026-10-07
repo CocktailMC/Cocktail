@@ -133,8 +133,8 @@ pub async fn import_archive(
 
     job.emit("extract", 1, Some(1));
 
-    files::ensure_seed_files(&workdir, port, opts.accept_eula || view.spec.eula_accepted)?;
-    files::sync_port(&workdir, port)?;
+    files::ensure_seed_files(&workdir, port, opts.accept_eula || view.spec.eula_accepted).await?;
+    files::sync_port(&workdir, port).await?;
     if opts.accept_eula {
         util::write_eula(&workdir, true)?;
     }
@@ -214,7 +214,7 @@ async fn extract_pack(archive: &Path, workdir: &Path, filename: &str) -> anyhow:
 async fn extract_archive(archive: &Path, dest: &Path, filename: &str) -> anyhow::Result<()> {
     let name = filename.to_ascii_lowercase();
     if name.ends_with(".zip") {
-        files::unzip_archive(archive, dest)
+        files::unzip_archive(archive, dest).await
     } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
         extract_tar_gz(archive, dest)
     } else if name.ends_with(".tar") {

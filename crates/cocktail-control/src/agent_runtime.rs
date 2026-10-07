@@ -242,7 +242,7 @@ async fn spawn_live(
     let mut command = spec.command.clone();
     let mut args = spec.args.clone();
     if command.is_none() || (command.as_deref() == Some("java") && args.is_empty()) {
-        if files::jar_exists(&workdir, "server.jar") {
+        if files::jar_exists(&workdir, "server.jar").await? {
             let (cmd, a) = util::java_jar_startup("server.jar");
             command = Some(cmd);
             args = a;
@@ -254,7 +254,7 @@ async fn spawn_live(
         RuntimeKind::Docker | RuntimeKind::Podman => 25565,
         RuntimeKind::Process => spec.port,
     };
-    files::ensure_seed_files(&workdir, seed_port, spec.eula_accepted)?;
+    files::ensure_seed_files(&workdir, seed_port, spec.eula_accepted).await?;
     let docker_image = spec
         .docker_image
         .clone()

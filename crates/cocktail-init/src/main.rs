@@ -4,9 +4,10 @@
 //! control 退出时关闭 stdin，本进程读到 EOF 自然退出。
 
 use cocktail_init::server::Server;
-use cocktail_init::{proto, rcon, secrets, sevenz};
+use cocktail_init::{files, http, proto, rcon, secrets, sevenz};
 
 use serde::Deserialize;
+use std::path::Path;
 
 /// sevenz.extract RPC 参数。
 #[derive(Debug, Deserialize)]
@@ -19,6 +20,142 @@ struct ExtractParams {
 #[derive(Debug, Deserialize)]
 struct NameParams {
     name: String,
+}
+
+/// http.download_to_path RPC 参数。
+#[derive(Debug, Deserialize)]
+struct DownloadParams {
+    url: String,
+    dest: String,
+}
+
+/// 通用参数：workdir + relative（list_files/read_file/write_file 等共用）。
+#[derive(Debug, Deserialize)]
+struct WorkdirRelativeParams {
+    workdir: String,
+    relative: String,
+}
+
+/// 通用参数：仅 instance_id（list_backups 等共用）。
+#[derive(Debug, Deserialize)]
+struct InstanceIdParams {
+    instance_id: String,
+}
+
+/// write_file 参数。
+#[derive(Debug, Deserialize)]
+struct WriteFileParams {
+    workdir: String,
+    relative: String,
+    content: String,
+}
+
+/// write_bytes / extract_zip_into 参数（字节走 Vec<u8>）。
+#[derive(Debug, Deserialize)]
+struct WriteBytesParams {
+    workdir: String,
+    relative: String,
+    bytes: Vec<u8>,
+}
+
+/// ensure_seed_files 参数。
+#[derive(Debug, Deserialize)]
+struct EnsureSeedParams {
+    workdir: String,
+    port: u16,
+    eula_accepted: bool,
+}
+
+/// sync_port 参数。
+#[derive(Debug, Deserialize)]
+struct SyncPortParams {
+    workdir: String,
+    port: u16,
+}
+
+/// create_backup 参数。
+#[derive(Debug, Deserialize)]
+struct CreateBackupParams {
+    instance_id: String,
+    workdir: String,
+}
+
+/// prune_backups 参数。
+#[derive(Debug, Deserialize)]
+struct PruneBackupsParams {
+    instance_id: String,
+    keep: u32,
+}
+
+/// backup_path / backup_meta 参数。
+#[derive(Debug, Deserialize)]
+struct BackupRefParams {
+    instance_id: String,
+    backup_id: String,
+}
+
+/// restore_backup 参数。
+#[derive(Debug, Deserialize)]
+struct RestoreBackupParams {
+    instance_id: String,
+    backup_id: String,
+    workdir: String,
+}
+
+/// inspect_backup_zip 参数。
+#[derive(Debug, Deserialize)]
+struct InspectBackupZipParams {
+    path: String,
+}
+
+/// unzip_archive 参数。
+#[derive(Debug, Deserialize)]
+struct UnzipArchiveParams {
+    zip_path: String,
+    dest: String,
+}
+
+/// copy_instance_tree 参数。
+#[derive(Debug, Deserialize)]
+struct CopyInstanceTreeParams {
+    src: String,
+    dst: String,
+    copy_data: bool,
+    skip_logs: bool,
+}
+
+/// pack_subdir_zip 参数。
+#[derive(Debug, Deserialize)]
+struct PackSubdirZipParams {
+    workdir: String,
+    relative: String,
+    dest: String,
+}
+
+/// default_instance_root 参数。
+#[derive(Debug, Deserialize)]
+struct DefaultInstanceRootParams {
+    id: String,
+}
+
+/// workdirs_conflict 参数。
+#[derive(Debug, Deserialize)]
+struct WorkdirsConflictParams {
+    a: String,
+    b: String,
+}
+
+/// total_dir_bytes 参数。
+#[derive(Debug, Deserialize)]
+struct TotalDirBytesParams {
+    path: String,
+}
+
+/// write_mc_version_marker 参数。
+#[derive(Debug, Deserialize)]
+struct WriteMcVersionMarkerParams {
+    workdir: String,
+    version: String,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -106,6 +243,327 @@ async fn main() -> std::io::Result<()> {
             Ok(n) => Ok(serde_json::json!({ "written": n })),
             Err(e) => Err(proto::Error::internal(format!("{e}"))),
         }
+    });
+
+    // files.resolve_in_workdir：在 workdir 内解析相对路径，做 zip-slip 防护。
+    server.register("files.resolve_in_workdir", |params| async move {
+        let p: WorkdirRelativeParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::resolve_in_workdir(&p.workdir, &p.relative) {
+            Ok(path) => Ok(serde_json::json!({ "path": path.to_string_lossy() })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.list_files：列出 workdir/relative 目录下的条目。
+    server.register("files.list_files", |params| async move {
+        let p: WorkdirRelativeParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::list_files(&p.workdir, &p.relative) {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.read_file：读取文本文件（≤2MiB）。
+    server.register("files.read_file", |params| async move {
+        let p: WorkdirRelativeParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::read_file(&p.workdir, &p.relative) {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.read_bytes：读取二进制文件（≤512MiB）。返回 { path, bytes }。
+    server.register("files.read_bytes", |params| async move {
+        let p: WorkdirRelativeParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::read_bytes(&p.workdir, &p.relative) {
+            Ok((path, bytes)) => Ok(serde_json::json!({ "path": path, "bytes": bytes })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.write_file：写入文本文件。
+    server.register("files.write_file", |params| async move {
+        let p: WriteFileParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::write_file(&p.workdir, &p.relative, &p.content) {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.write_bytes：写入二进制文件。
+    server.register("files.write_bytes", |params| async move {
+        let p: WriteBytesParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::write_bytes(&p.workdir, &p.relative, &p.bytes) {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.delete_path：删除 workdir 内的相对路径。
+    server.register("files.delete_path", |params| async move {
+        let p: WorkdirRelativeParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::delete_path(&p.workdir, &p.relative) {
+            Ok(()) => Ok(serde_json::Value::Null),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.mkdir：在 workdir 内创建目录。
+    server.register("files.mkdir", |params| async move {
+        let p: WorkdirRelativeParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::mkdir(&p.workdir, &p.relative) {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.jar_exists：检查 workdir/relative 是否为已存在的 jar 文件。
+    server.register("files.jar_exists", |params| async move {
+        let p: WorkdirRelativeParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        Ok(serde_json::json!({ "exists": files::jar_exists(&p.workdir, &p.relative) }))
+    });
+
+    // files.default_instance_root：算出某实例 id 的默认 data/instances/<id> 路径。
+    server.register("files.default_instance_root", |params| async move {
+        let p: DefaultInstanceRootParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        Ok(serde_json::json!({ "root": files::default_instance_root(&p.id) }))
+    });
+
+    // files.workdirs_conflict：判断两个 workdir 是否重叠（component-aware）。
+    server.register("files.workdirs_conflict", |params| async move {
+        let p: WorkdirsConflictParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        Ok(serde_json::json!({ "conflict": files::workdirs_conflict(&p.a, &p.b) }))
+    });
+
+    // files.ensure_seed_files：建好实例种子目录结构与 server.properties/eula.txt。
+    server.register("files.ensure_seed_files", |params| async move {
+        let p: EnsureSeedParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::ensure_seed_files(&p.workdir, p.port, p.eula_accepted) {
+            Ok(()) => Ok(serde_json::Value::Null),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.sync_port：把 server-port= 同步进 server.properties。
+    server.register("files.sync_port", |params| async move {
+        let p: SyncPortParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::sync_port(&p.workdir, p.port) {
+            Ok(()) => Ok(serde_json::Value::Null),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.create_backup：把 workdir 打包成 data/backups/<id>/<stamp>.zip。
+    server.register("files.create_backup", |params| async move {
+        let p: CreateBackupParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::create_backup(&p.instance_id, &p.workdir) {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.prune_backups：保留最近 keep 个备份，删其余。
+    server.register("files.prune_backups", |params| async move {
+        let p: PruneBackupsParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::prune_backups(&p.instance_id, p.keep) {
+            Ok(n) => Ok(serde_json::json!({ "pruned": n })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.backup_path：返回某备份的绝对 PathBuf（带 file_name 防穿越）。
+    server.register("files.backup_path", |params| async move {
+        let p: BackupRefParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::backup_path(&p.instance_id, &p.backup_id) {
+            Ok(path) => Ok(serde_json::json!({ "path": path.to_string_lossy() })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.backup_meta：返回某备份的 BackupInfo（id/created_at/path/size）。
+    server.register("files.backup_meta", |params| async move {
+        let p: BackupRefParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::backup_meta(&p.instance_id, &p.backup_id) {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.inspect_backup_zip：扫描备份内容（zip 或目录），返回 BackupScan。
+    server.register("files.inspect_backup_zip", |params| async move {
+        let p: InspectBackupZipParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::inspect_backup_zip(Path::new(&p.path)) {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.list_backups：列出某实例的所有备份。
+    server.register("files.list_backups", |params| async move {
+        let p: InstanceIdParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::list_backups(&p.instance_id) {
+            Ok(v) => Ok(serde_json::to_value(&v).unwrap_or(serde_json::Value::Null)),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.delete_backup：删除某实例的指定备份。
+    server.register("files.delete_backup", |params| async move {
+        let p: BackupRefParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::delete_backup(&p.instance_id, &p.backup_id) {
+            Ok(()) => Ok(serde_json::Value::Null),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.restore_backup：把备份内容解压/复制回 workdir。
+    server.register("files.restore_backup", |params| async move {
+        let p: RestoreBackupParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::restore_backup(&p.instance_id, &p.backup_id, &p.workdir) {
+            Ok(()) => Ok(serde_json::Value::Null),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.unzip_archive：通用解压 zip 到 dest。
+    server.register("files.unzip_archive", |params| async move {
+        let p: UnzipArchiveParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::unzip_archive(Path::new(&p.zip_path), Path::new(&p.dest)) {
+            Ok(()) => Ok(serde_json::Value::Null),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.copy_instance_tree：复制实例目录树（带 skip_logs/copy_data 选项）。
+    server.register("files.copy_instance_tree", |params| async move {
+        let p: CopyInstanceTreeParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::copy_instance_tree(&p.src, &p.dst, p.copy_data, p.skip_logs) {
+            Ok(n) => Ok(serde_json::json!({ "copied": n })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.pack_subdir_zip：把 workdir/relative 子目录打包成 dest zip。
+    server.register("files.pack_subdir_zip", |params| async move {
+        let p: PackSubdirZipParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::pack_subdir_zip(&p.workdir, &p.relative, Path::new(&p.dest)) {
+            Ok(n) => Ok(serde_json::json!({ "size": n })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.extract_zip_into：把 zip 字节流解压合并到 workdir/relative 下。
+    server.register("files.extract_zip_into", |params| async move {
+        let p: WriteBytesParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::extract_zip_into(&p.workdir, &p.relative, &p.bytes) {
+            Ok(n) => Ok(serde_json::json!({ "files": n })),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.guess_mc_version：根据 properties/jars/logs 推断 MC 版本。
+    server.register("files.guess_mc_version", |params| async move {
+        let p: WorkdirRelativeParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        Ok(serde_json::json!({ "version": files::guess_mc_version(&p.workdir) }))
+    });
+
+    // files.write_mc_version_marker：把 cocktail-mc-version= 写进 server.properties。
+    server.register("files.write_mc_version_marker", |params| async move {
+        let p: WriteMcVersionMarkerParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        match files::write_mc_version_marker(&p.workdir, &p.version) {
+            Ok(()) => Ok(serde_json::Value::Null),
+            Err(e) => Err(proto::Error::internal(format!("{e}"))),
+        }
+    });
+
+    // files.total_dir_bytes：递归统计某目录占用字节数。
+    server.register("files.total_dir_bytes", |params| async move {
+        let p: TotalDirBytesParams = match serde_json::from_value(params) {
+            Ok(v) => v,
+            Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
+        };
+        Ok(serde_json::json!({ "bytes": files::total_dir_bytes(&p.path) }))
     });
 
     // 用 stdin/stdout 跑主循环

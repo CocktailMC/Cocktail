@@ -64,7 +64,7 @@ pub fn reset_world(workdir: &str, world: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn export_world(instance_id: &str, workdir: &str, world: &str) -> anyhow::Result<BackupInfo> {
+pub async fn export_world(instance_id: &str, workdir: &str, world: &str) -> anyhow::Result<BackupInfo> {
     if world.contains("..") || world.contains('/') || world.contains('\\') {
         anyhow::bail!("invalid world name");
     }
@@ -82,7 +82,8 @@ pub fn export_world(instance_id: &str, workdir: &str, world: &str) -> anyhow::Re
     let bak = create_backup(
         &format!("{instance_id}-world-{world}"),
         staging.to_str().unwrap_or("."),
-    )?;
+    )
+    .await?;
     let _ = fs::remove_dir_all(&staging);
     Ok(BackupInfo {
         id: format!("world-{world}-{}", bak.id),
@@ -92,7 +93,7 @@ pub fn export_world(instance_id: &str, workdir: &str, world: &str) -> anyhow::Re
     })
 }
 
-pub fn import_world(workdir: &str, world: &str, zip_bytes: &[u8]) -> anyhow::Result<()> {
+pub async fn import_world(workdir: &str, world: &str, zip_bytes: &[u8]) -> anyhow::Result<()> {
     if world.contains("..") || world.contains('/') || world.contains('\\') {
         anyhow::bail!("invalid world name");
     }
@@ -108,7 +109,7 @@ pub fn import_world(workdir: &str, world: &str, zip_bytes: &[u8]) -> anyhow::Res
     }
     fs::write(&tmp_zip, zip_bytes)?;
     let extract_to = PathBuf::from(workdir).join(format!(".import-{world}"));
-    files::unzip_archive(&tmp_zip, &extract_to)?;
+    files::unzip_archive(&tmp_zip, &extract_to).await?;
 
     let entries: Vec<_> = fs::read_dir(&extract_to)?.filter_map(|e| e.ok()).collect();
     if entries.len() == 1 && entries[0].path().is_dir() {

@@ -1,183 +1,20 @@
-use std::fs::{self, File};
-use std::io::{Read, Write};
+//! 实例工作区文件操作的 RPC 客户端封装。
+//!
+//! 阶段 2 起，纯文件操作下沉到 cocktail-init 子进程；本模块仅保留：
+//! - async RPC 客户端封装：每个 pub async fn 调 `crate::init_call("files.*", ...)`
+//!   跨进程完成实际文件读写；
+//! - 本地纯函数 `default_instance_root` / `workdirs_conflict`
+//!   （含 `comparable_workdir` / `lexical_normalize`）：纯字符串/路径逻辑，
+//!   control 本地算比走 RPC 便宜。
+//!
+//! `BackupScan` / `FileEntry` / `FileContent` / `BackupInfo` 全部从
+//! `cocktail_shared::model` re-export，跨进程复用同一份定义。
+
 use std::path::{Component, Path, PathBuf};
-use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
-use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipArchive, ZipWriter};
+pub use cocktail_shared::model::{BackupInfo, BackupScan, FileContent, FileEntry};
 
-use super::model::{BackupInfo, FileContent, FileEntry};
-use crate::util;
-
-const MAX_TEXT_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024;
-
-pub fn resolve_in_workdir(workdir: &str, relative: &str) -> anyhow::Result<PathBuf> {
-    let root = fs::canonicalize(workdir).unwrap_or_else(|_| PathBuf::from(workdir));
-    if !root.exists() {
-        fs::create_dir_all(&root)?;
-    }
-    let root = fs::canonicalize(&root)?;
-
-    let rel = Path::new(relative.trim_start_matches(['/', '\\']));
-    for c in rel.components() {
-        match c {
-            Component::Normal(_) | Component::CurDir => {}
-            _ => anyhow::bail!("invalid path"),
-        }
-    }
-
-    let candidate = if relative.is_empty() || relative == "." {
-        root.clone()
-    } else {
-        root.join(rel)
-    };
-
-    if candidate.exists() {
-        let canon = fs::canonicalize(&candidate)?;
-        if !canon.starts_with(&root) {
-            anyhow::bail!("path escapes workdir");
-        }
-        Ok(canon)
-    } else {
-        let parent = candidate.parent().unwrap_or(&root);
-        fs::create_dir_all(parent)?;
-        let parent = fs::canonicalize(parent)?;
-        if !parent.starts_with(&root) {
-            anyhow::bail!("path escapes workdir");
-        }
-        Ok(parent.join(candidate.file_name().unwrap_or_default()))
-    }
-}
-
-pub fn list_files(workdir: &str, relative: &str) -> anyhow::Result<Vec<FileEntry>> {
-    let dir = resolve_in_workdir(workdir, relative)?;
-    if !dir.is_dir() {
-        anyhow::bail!("not a directory");
-    }
-    let root = fs::canonicalize(workdir)?;
-    let mut entries = Vec::new();
-    for ent in fs::read_dir(&dir)? {
-        let ent = ent?;
-        let meta = ent.metadata()?;
-        let full = ent.path();
-        let rel = full
-            .strip_prefix(&root)
-            .unwrap_or(&full)
-            .to_string_lossy()
-            .replace('\\', "/");
-        entries.push(FileEntry {
-            name: ent.file_name().to_string_lossy().into_owned(),
-            path: rel,
-            is_dir: meta.is_dir(),
-            size: if meta.is_file() { meta.len() } else { 0 },
-        });
-    }
-    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
-    Ok(entries)
-}
-
-pub fn read_file(workdir: &str, relative: &str) -> anyhow::Result<FileContent> {
-    let path = resolve_in_workdir(workdir, relative)?;
-    if !path.is_file() {
-        anyhow::bail!("not a file");
-    }
-    let meta = fs::metadata(&path)?;
-    if meta.len() > MAX_TEXT_BYTES {
-        anyhow::bail!("file too large for text edit (>2MiB); use download");
-    }
-    let content = fs::read_to_string(&path)?;
-    Ok(FileContent {
-        path: rel_path(workdir, &path)?,
-        content,
-    })
-}
-
-pub fn read_bytes(workdir: &str, relative: &str) -> anyhow::Result<(String, Vec<u8>)> {
-    let path = resolve_in_workdir(workdir, relative)?;
-    if !path.is_file() {
-        anyhow::bail!("not a file");
-    }
-    let meta = fs::metadata(&path)?;
-    if meta.len() > MAX_UPLOAD_BYTES {
-        anyhow::bail!("file too large");
-    }
-    Ok((rel_path(workdir, &path)?, fs::read(&path)?))
-}
-
-pub fn write_file(workdir: &str, relative: &str, content: &str) -> anyhow::Result<FileContent> {
-    if content.len() as u64 > MAX_TEXT_BYTES {
-        anyhow::bail!("content too large (>2MiB)");
-    }
-    let path = resolve_in_workdir(workdir, relative)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&path, content)?;
-    read_file(workdir, relative)
-}
-
-pub fn write_bytes(workdir: &str, relative: &str, bytes: &[u8]) -> anyhow::Result<FileEntry> {
-    if bytes.len() as u64 > MAX_UPLOAD_BYTES {
-        anyhow::bail!("upload too large (>512MiB)");
-    }
-    let path = resolve_in_workdir(workdir, relative)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&path, bytes)?;
-    let meta = fs::metadata(&path)?;
-    Ok(FileEntry {
-        name: path
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        path: rel_path(workdir, &path)?,
-        is_dir: false,
-        size: meta.len(),
-    })
-}
-
-pub fn delete_path(workdir: &str, relative: &str) -> anyhow::Result<()> {
-    if relative.is_empty() || relative == "." {
-        anyhow::bail!("cannot delete workdir root");
-    }
-    let path = resolve_in_workdir(workdir, relative)?;
-    if path.is_dir() {
-        fs::remove_dir_all(path)?;
-    } else if path.is_file() {
-        fs::remove_file(path)?;
-    } else {
-        anyhow::bail!("path not found");
-    }
-    Ok(())
-}
-
-pub fn mkdir(workdir: &str, relative: &str) -> anyhow::Result<FileEntry> {
-    let rel = relative.trim().trim_matches(['/', '\\']);
-    if rel.is_empty() {
-        anyhow::bail!("directory name is required");
-    }
-    let path = resolve_in_workdir(workdir, rel)?;
-    fs::create_dir_all(&path)?;
-    Ok(FileEntry {
-        name: path
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        path: rel_path(workdir, &path)?,
-        is_dir: true,
-        size: 0,
-    })
-}
-
-pub fn jar_exists(workdir: &str, relative: &str) -> bool {
-    resolve_in_workdir(workdir, relative)
-        .map(|p| p.is_file())
-        .unwrap_or(false)
-}
-
+/// 默认实例根：`data/instances/<id>`（路径分隔符统一成正斜杠）。
 pub fn default_instance_root(id: &str) -> String {
     PathBuf::from("data")
         .join("instances")
@@ -225,773 +62,317 @@ pub fn workdirs_conflict(a: &str, b: &str) -> bool {
     a == b || a.starts_with(&b) || b.starts_with(&a)
 }
 
-pub fn ensure_seed_files(workdir: &str, port: u16, eula_accepted: bool) -> anyhow::Result<()> {
-    fs::create_dir_all(workdir)?;
-    fs::create_dir_all(Path::new(workdir).join("plugins"))?;
-    fs::create_dir_all(Path::new(workdir).join("mods"))?;
-    fs::create_dir_all(Path::new(workdir).join("cache"))?;
-    fs::create_dir_all(Path::new(workdir).join("libraries"))?;
-    fs::create_dir_all(Path::new(workdir).join("logs"))?;
-    fs::create_dir_all(Path::new(workdir).join("runtime"))?;
-    fs::create_dir_all(Path::new(workdir).join(".cocktail").join("tmp"))?;
-    fs::create_dir_all(Path::new(workdir).join(".cocktail").join("appdata"))?;
-    let props = PathBuf::from(workdir).join("server.properties");
-    if !props.exists() {
-        fs::write(
-            &props,
-            format!(
-                "\
-# Cocktail Manager seed
-motd=A Cocktail Minecraft Server
-server-port={port}
-max-players=20
-gamemode=survival
-difficulty=easy
-online-mode=true
-white-list=false
-"
-            ),
-        )?;
-    } else {
-        util::set_property_file(&props, "server-port", &port.to_string())?;
-    }
-    let eula = PathBuf::from(workdir).join("eula.txt");
-    if !eula.exists() || eula_accepted {
-        util::write_eula(workdir, eula_accepted)?;
-    }
+/// 在 workdir 内解析相对路径，做 zip-slip / 路径穿越防护。
+pub async fn resolve_in_workdir(workdir: &str, relative: &str) -> anyhow::Result<PathBuf> {
+    let v = crate::init_call(
+        "files.resolve_in_workdir",
+        serde_json::json!({ "workdir": workdir, "relative": relative }),
+    )
+    .await?;
+    Ok(PathBuf::from(
+        v["path"].as_str().unwrap_or_else(|| ""),
+    ))
+}
+
+/// 列出 workdir/relative 目录下的条目。
+pub async fn list_files(workdir: &str, relative: &str) -> anyhow::Result<Vec<FileEntry>> {
+    let v = crate::init_call(
+        "files.list_files",
+        serde_json::json!({ "workdir": workdir, "relative": relative }),
+    )
+    .await?;
+    Ok(serde_json::from_value(v)?)
+}
+
+/// 读取文本文件（≤2MiB）。
+pub async fn read_file(workdir: &str, relative: &str) -> anyhow::Result<FileContent> {
+    let v = crate::init_call(
+        "files.read_file",
+        serde_json::json!({ "workdir": workdir, "relative": relative }),
+    )
+    .await?;
+    Ok(serde_json::from_value(v)?)
+}
+
+/// 读取二进制文件（≤512MiB）。
+pub async fn read_bytes(workdir: &str, relative: &str) -> anyhow::Result<(String, Vec<u8>)> {
+    let v = crate::init_call(
+        "files.read_bytes",
+        serde_json::json!({ "workdir": workdir, "relative": relative }),
+    )
+    .await?;
+    let path = v["path"].as_str().unwrap_or("").to_string();
+    let bytes: Vec<u8> = serde_json::from_value(v["bytes"].clone())?;
+    Ok((path, bytes))
+}
+
+/// 写入文本文件。
+pub async fn write_file(
+    workdir: &str,
+    relative: &str,
+    content: &str,
+) -> anyhow::Result<FileContent> {
+    let v = crate::init_call(
+        "files.write_file",
+        serde_json::json!({ "workdir": workdir, "relative": relative, "content": content }),
+    )
+    .await?;
+    Ok(serde_json::from_value(v)?)
+}
+
+/// 写入二进制文件。
+pub async fn write_bytes(
+    workdir: &str,
+    relative: &str,
+    bytes: &[u8],
+) -> anyhow::Result<FileEntry> {
+    let v = crate::init_call(
+        "files.write_bytes",
+        serde_json::json!({ "workdir": workdir, "relative": relative, "bytes": bytes }),
+    )
+    .await?;
+    Ok(serde_json::from_value(v)?)
+}
+
+/// 删除 workdir 内的相对路径。
+pub async fn delete_path(workdir: &str, relative: &str) -> anyhow::Result<()> {
+    let _ = crate::init_call(
+        "files.delete_path",
+        serde_json::json!({ "workdir": workdir, "relative": relative }),
+    )
+    .await?;
     Ok(())
 }
 
-pub fn sync_port(workdir: &str, port: u16) -> anyhow::Result<()> {
-    let props = PathBuf::from(workdir).join("server.properties");
-    util::set_property_file(&props, "server-port", &port.to_string())
+/// 在 workdir 内创建目录。
+pub async fn mkdir(workdir: &str, relative: &str) -> anyhow::Result<FileEntry> {
+    let v = crate::init_call(
+        "files.mkdir",
+        serde_json::json!({ "workdir": workdir, "relative": relative }),
+    )
+    .await?;
+    Ok(serde_json::from_value(v)?)
 }
 
-pub fn create_backup(instance_id: &str, workdir: &str) -> anyhow::Result<BackupInfo> {
-    let stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
-    let dir = PathBuf::from("data").join("backups").join(instance_id);
-    fs::create_dir_all(&dir)?;
-    let dest = dir.join(format!("{stamp}.zip"));
-    zip_dir(Path::new(workdir), &dest)?;
-    let size = fs::metadata(&dest)?.len();
-    let created_at = file_created_at(&dest).unwrap_or_else(Utc::now);
-    Ok(BackupInfo {
-        id: format!("{stamp}.zip"),
-        created_at,
-        path: dest.to_string_lossy().replace('\\', "/"),
-        size_bytes: size,
-    })
+/// 检查 workdir/relative 是否为已存在的 jar 文件。
+pub async fn jar_exists(workdir: &str, relative: &str) -> anyhow::Result<bool> {
+    let v = crate::init_call(
+        "files.jar_exists",
+        serde_json::json!({ "workdir": workdir, "relative": relative }),
+    )
+    .await?;
+    Ok(v["exists"].as_bool().unwrap_or(false))
 }
 
-pub fn prune_backups(instance_id: &str, keep: u32) -> anyhow::Result<usize> {
-    let mut list = list_backups(instance_id)?;
-    if keep == 0 || list.len() <= keep as usize {
-        return Ok(0);
-    }
-    list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    let mut n = 0;
-    for bak in list.into_iter().skip(keep as usize) {
-        delete_backup(instance_id, &bak.id)?;
-        n += 1;
-    }
-    Ok(n)
-}
-
-pub fn backup_path(instance_id: &str, backup_id: &str) -> anyhow::Result<PathBuf> {
-    let safe = Path::new(backup_id)
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .ok_or_else(|| anyhow::anyhow!("非法备份名"))?;
-    if safe != backup_id || safe.contains("..") {
-        anyhow::bail!("非法备份名");
-    }
-    let path = PathBuf::from("data")
-        .join("backups")
-        .join(instance_id)
-        .join(&safe);
-    if !path.exists() {
-        anyhow::bail!("backup not found");
-    }
-    Ok(path)
-}
-
-pub fn backup_meta(instance_id: &str, backup_id: &str) -> anyhow::Result<BackupInfo> {
-    let path = backup_path(instance_id, backup_id)?;
-    let meta = fs::metadata(&path)?;
-    let size = if meta.is_dir() {
-        dir_size(&path).unwrap_or(0)
-    } else {
-        meta.len()
-    };
-    Ok(BackupInfo {
-        id: backup_id.to_string(),
-        created_at: file_created_at(&path).unwrap_or_else(Utc::now),
-        path: path.to_string_lossy().replace('\\', "/"),
-        size_bytes: size,
-    })
-}
-
-pub struct BackupScan {
-    pub entries: u32,
-    pub size_bytes: u64,
-    pub world_bytes: u64,
-    pub plugin_count: u32,
-    pub has_server_properties: bool,
-    pub has_level_dat: bool,
-}
-
-impl Default for BackupScan {
-    fn default() -> Self {
-        Self {
-            entries: 0,
-            size_bytes: 0,
-            world_bytes: 0,
-            plugin_count: 0,
-            has_server_properties: false,
-            has_level_dat: false,
-        }
-    }
-}
-
-pub fn inspect_backup_zip(path: &Path) -> anyhow::Result<BackupScan> {
-    if path.is_dir() {
-        let mut scan = BackupScan {
-            entries: 0,
-            size_bytes: dir_size(path).unwrap_or(0),
-            world_bytes: 0,
-            plugin_count: 0,
-            has_server_properties: path.join("server.properties").is_file(),
-            has_level_dat: path.join("world").join("level.dat").is_file(),
-            ..Default::default()
-        };
-        let mut stack = vec![path.to_path_buf()];
-        while let Some(dir) = stack.pop() {
-            let Ok(entries) = fs::read_dir(&dir) else {
-                continue;
-            };
-            for ent in entries.flatten() {
-                let p = ent.path();
-                if p.is_symlink() {
-                    continue;
-                }
-                if p.is_dir() {
-                    stack.push(p);
-                    continue;
-                }
-                scan.entries += 1;
-                let rel = p
-                    .strip_prefix(path)
-                    .map(|r| r.to_string_lossy().replace('\\', "/"))
-                    .unwrap_or_default();
-                if rel.starts_with("world/") {
-                    scan.world_bytes += p.metadata().map(|m| m.len()).unwrap_or(0);
-                }
-                if rel.starts_with("plugins/") && rel.ends_with(".jar") {
-                    scan.plugin_count += 1;
-                }
-            }
-        }
-        return Ok(scan);
-    }
-    let file = File::open(path)?;
-    let mut zip = ZipArchive::new(file)?;
-    let mut scan = BackupScan {
-        entries: 0,
-        size_bytes: fs::metadata(path)?.len(),
-        world_bytes: 0,
-        plugin_count: 0,
-        has_server_properties: false,
-        has_level_dat: false,
-    };
-    for i in 0..zip.len() {
-        let Ok(entry) = zip.by_index(i) else {
-            continue;
-        };
-        let name = entry.name().to_string();
-        if name.ends_with('/') {
-            continue;
-        }
-        scan.entries += 1;
-        if name == "server.properties" {
-            scan.has_server_properties = true;
-        }
-        if name == "world/level.dat" {
-            scan.has_level_dat = true;
-        }
-        if name.starts_with("world/") {
-            scan.world_bytes += entry.size();
-        }
-        if name.starts_with("plugins/") && name.ends_with(".jar") {
-            scan.plugin_count += 1;
-        }
-    }
-    Ok(scan)
-}
-
-pub fn list_backups(instance_id: &str) -> anyhow::Result<Vec<BackupInfo>> {
-    let root = PathBuf::from("data").join("backups").join(instance_id);
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for ent in fs::read_dir(&root)? {
-        let ent = ent?;
-        let path = ent.path();
-        let name = ent.file_name().to_string_lossy().into_owned();
-        let meta = ent.metadata()?;
-        let (is_backup, size) = if meta.is_file() && name.ends_with(".zip") {
-            (true, meta.len())
-        } else if meta.is_dir() {
-            (true, dir_size(&path).unwrap_or(0))
-        } else {
-            (false, 0)
-        };
-        if !is_backup {
-            continue;
-        }
-        out.push(BackupInfo {
-            id: name,
-            created_at: file_created_at(&path).unwrap_or_else(Utc::now),
-            path: path.to_string_lossy().replace('\\', "/"),
-            size_bytes: size,
-        });
-    }
-    out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    Ok(out)
-}
-
-pub fn delete_backup(instance_id: &str, backup_id: &str) -> anyhow::Result<()> {
-    let path = PathBuf::from("data")
-        .join("backups")
-        .join(instance_id)
-        .join(backup_id);
-    if !path.exists() {
-        anyhow::bail!("backup not found");
-    }
-    if path.is_dir() {
-        fs::remove_dir_all(path)?;
-    } else {
-        fs::remove_file(path)?;
-    }
-    Ok(())
-}
-
-pub fn restore_backup(instance_id: &str, backup_id: &str, workdir: &str) -> anyhow::Result<()> {
-    let src = PathBuf::from("data")
-        .join("backups")
-        .join(instance_id)
-        .join(backup_id);
-    if !src.exists() {
-        anyhow::bail!("backup not found");
-    }
-    clear_dir_contents(workdir)?;
-    if src.is_dir() {
-        copy_dir_recursive(&src, Path::new(workdir))?;
-    } else {
-        unzip_to(&src, Path::new(workdir))?;
-    }
-    Ok(())
-}
-
-pub fn unzip_archive(zip_path: &Path, dest: &Path) -> anyhow::Result<()> {
-    unzip_to(zip_path, dest)
-}
-
-fn clear_dir_contents(workdir: &str) -> anyhow::Result<()> {
-    if Path::new(workdir).exists() {
-        for ent in fs::read_dir(workdir)? {
-            let ent = ent?;
-            let p = ent.path();
-            if p.is_dir() {
-                fs::remove_dir_all(p)?;
-            } else {
-                fs::remove_file(p)?;
-            }
-        }
-    } else {
-        fs::create_dir_all(workdir)?;
-    }
-    Ok(())
-}
-
-fn zip_dir(src: &Path, dest: &Path) -> anyhow::Result<()> {
-    let file = File::create(dest)?;
-    let mut zip = ZipWriter::new(file);
-    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    add_dir_to_zip(&mut zip, src, src, opts)?;
-    zip.finish()?;
-    Ok(())
-}
-
-fn add_dir_to_zip(
-    zip: &mut ZipWriter<File>,
-    root: &Path,
-    current: &Path,
-    opts: SimpleFileOptions,
+/// 建好实例种子目录结构与 server.properties/eula.txt。
+pub async fn ensure_seed_files(
+    workdir: &str,
+    port: u16,
+    eula_accepted: bool,
 ) -> anyhow::Result<()> {
-    for ent in fs::read_dir(current)? {
-        let ent = ent?;
-        let path = ent.path();
-        let name = path
-            .strip_prefix(root)?
-            .to_string_lossy()
-            .replace('\\', "/");
-        if skip_backup_rel(&name) {
-            continue;
-        }
-        if path.is_dir() {
-            if !name.is_empty() {
-                zip.add_directory(format!("{name}/"), opts)?;
-            }
-            add_dir_to_zip(zip, root, &path, opts)?;
-        } else {
-            zip.start_file(name, opts)?;
-            let mut f = File::open(&path)?;
-            let mut buf = Vec::new();
-            f.read_to_end(&mut buf)?;
-            zip.write_all(&buf)?;
-        }
-    }
+    let _ = crate::init_call(
+        "files.ensure_seed_files",
+        serde_json::json!({ "workdir": workdir, "port": port, "eula_accepted": eula_accepted }),
+    )
+    .await?;
     Ok(())
 }
 
-fn unzip_to(zip_path: &Path, dest: &Path) -> anyhow::Result<()> {
-    let file = File::open(zip_path)?;
-    let mut archive = ZipArchive::new(file)?;
-    fs::create_dir_all(dest)?;
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
-        let outpath = match file.enclosed_name() {
-            Some(p) => dest.join(p),
-            None => continue,
-        };
-        if file.name().ends_with('/') {
-            fs::create_dir_all(&outpath)?;
-        } else {
-            if let Some(parent) = outpath.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let mut outfile = File::create(&outpath)?;
-            std::io::copy(&mut file, &mut outfile)?;
-        }
-    }
+/// 把 server-port= 同步进 server.properties。
+pub async fn sync_port(workdir: &str, port: u16) -> anyhow::Result<()> {
+    let _ = crate::init_call(
+        "files.sync_port",
+        serde_json::json!({ "workdir": workdir, "port": port }),
+    )
+    .await?;
     Ok(())
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    fs::create_dir_all(dst)?;
-    for ent in fs::read_dir(src)? {
-        let ent = ent?;
-        let from = ent.path();
-        let to = dst.join(ent.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else {
-            fs::copy(&from, &to)?;
-        }
-    }
+/// 把 workdir 打包成 data/backups/<id>/<stamp>.zip。
+pub async fn create_backup(instance_id: &str, workdir: &str) -> anyhow::Result<BackupInfo> {
+    let v = crate::init_call(
+        "files.create_backup",
+        serde_json::json!({ "instance_id": instance_id, "workdir": workdir }),
+    )
+    .await?;
+    Ok(serde_json::from_value(v)?)
+}
+
+/// 保留最近 keep 个备份，删其余。
+pub async fn prune_backups(instance_id: &str, keep: u32) -> anyhow::Result<usize> {
+    let v = crate::init_call(
+        "files.prune_backups",
+        serde_json::json!({ "instance_id": instance_id, "keep": keep }),
+    )
+    .await?;
+    Ok(v["pruned"].as_u64().unwrap_or(0) as usize)
+}
+
+/// 返回某备份的绝对 PathBuf（带 file_name 防穿越）。
+pub async fn backup_path(instance_id: &str, backup_id: &str) -> anyhow::Result<PathBuf> {
+    let v = crate::init_call(
+        "files.backup_path",
+        serde_json::json!({ "instance_id": instance_id, "backup_id": backup_id }),
+    )
+    .await?;
+    Ok(PathBuf::from(v["path"].as_str().unwrap_or("")))
+}
+
+/// 返回某备份的 BackupInfo（id/created_at/path/size）。
+pub async fn backup_meta(instance_id: &str, backup_id: &str) -> anyhow::Result<BackupInfo> {
+    let v = crate::init_call(
+        "files.backup_meta",
+        serde_json::json!({ "instance_id": instance_id, "backup_id": backup_id }),
+    )
+    .await?;
+    Ok(serde_json::from_value(v)?)
+}
+
+/// 扫描备份内容（zip 或目录），返回 BackupScan。
+pub async fn inspect_backup_zip(path: &Path) -> anyhow::Result<BackupScan> {
+    let v = crate::init_call(
+        "files.inspect_backup_zip",
+        serde_json::json!({ "path": path.to_string_lossy() }),
+    )
+    .await?;
+    Ok(serde_json::from_value(v)?)
+}
+
+/// 列出某实例的所有备份。
+pub async fn list_backups(instance_id: &str) -> anyhow::Result<Vec<BackupInfo>> {
+    let v = crate::init_call(
+        "files.list_backups",
+        serde_json::json!({ "instance_id": instance_id }),
+    )
+    .await?;
+    Ok(serde_json::from_value(v)?)
+}
+
+/// 删除某实例的指定备份。
+pub async fn delete_backup(instance_id: &str, backup_id: &str) -> anyhow::Result<()> {
+    let _ = crate::init_call(
+        "files.delete_backup",
+        serde_json::json!({ "instance_id": instance_id, "backup_id": backup_id }),
+    )
+    .await?;
     Ok(())
 }
 
-fn dir_size(path: &Path) -> anyhow::Result<u64> {
-    let mut total = 0u64;
-    if path.is_file() {
-        return Ok(fs::metadata(path)?.len());
-    }
-    for ent in fs::read_dir(path)? {
-        let ent = ent?;
-        let p = ent.path();
-        total += if p.is_dir() {
-            dir_size(&p)?
-        } else {
-            ent.metadata()?.len()
-        };
-    }
-    Ok(total)
+/// 把备份内容解压/复制回 workdir。
+pub async fn restore_backup(
+    instance_id: &str,
+    backup_id: &str,
+    workdir: &str,
+) -> anyhow::Result<()> {
+    let _ = crate::init_call(
+        "files.restore_backup",
+        serde_json::json!({
+            "instance_id": instance_id,
+            "backup_id": backup_id,
+            "workdir": workdir,
+        }),
+    )
+    .await?;
+    Ok(())
 }
 
-fn file_created_at(path: &Path) -> Option<DateTime<Utc>> {
-    let meta = fs::metadata(path).ok()?;
-    let modified = meta.modified().ok().or_else(|| meta.created().ok())?;
-    let duration = modified.duration_since(SystemTime::UNIX_EPOCH).ok()?;
-    DateTime::from_timestamp(duration.as_secs() as i64, duration.subsec_nanos())
+/// 通用解压 zip 到 dest。
+pub async fn unzip_archive(zip_path: &Path, dest: &Path) -> anyhow::Result<()> {
+    let _ = crate::init_call(
+        "files.unzip_archive",
+        serde_json::json!({
+            "zip_path": zip_path.to_string_lossy(),
+            "dest": dest.to_string_lossy(),
+        }),
+    )
+    .await?;
+    Ok(())
 }
 
-fn rel_path(workdir: &str, path: &Path) -> anyhow::Result<String> {
-    let root = fs::canonicalize(workdir)?;
-    Ok(path
-        .strip_prefix(&root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/"))
-}
-
-fn skip_backup_rel(name: &str) -> bool {
-    let n = name.trim_end_matches('/');
-    matches!(n, "runtime" | ".cocktail/tmp" | ".cocktail/appdata")
-        || n.starts_with("runtime/")
-        || n.starts_with(".cocktail/tmp/")
-        || n.starts_with(".cocktail/appdata/")
-}
-
-pub fn copy_instance_tree(
+/// 复制实例目录树（带 skip_logs/copy_data 选项）。
+pub async fn copy_instance_tree(
     src: &str,
     dst: &str,
     copy_data: bool,
     skip_logs: bool,
 ) -> anyhow::Result<u32> {
-    let src_root = Path::new(src);
-    if !src_root.is_dir() {
-        anyhow::bail!("源目录不存在：{src}");
-    }
-    fs::create_dir_all(dst)?;
-    let mut copied = 0u32;
-    copy_walk(
-        src_root,
-        Path::new(dst),
-        src_root,
-        copy_data,
-        skip_logs,
-        &mut copied,
-        0,
-    )?;
-    Ok(copied)
+    let v = crate::init_call(
+        "files.copy_instance_tree",
+        serde_json::json!({
+            "src": src,
+            "dst": dst,
+            "copy_data": copy_data,
+            "skip_logs": skip_logs,
+        }),
+    )
+    .await?;
+    Ok(v["copied"].as_u64().unwrap_or(0) as u32)
 }
 
-fn copy_skip(name: &str, copy_data: bool, skip_logs: bool) -> bool {
-    let n = name.trim_end_matches('/');
-    if matches!(n, ".cocktail/tmp" | ".cocktail/appdata") {
-        return true;
-    }
-    if n.starts_with(".cocktail/tmp/") || n.starts_with(".cocktail/appdata/") {
-        return true;
-    }
-    if skip_logs && (n == "logs" || n.starts_with("logs/")) {
-        return true;
-    }
-    if skip_logs && (n == "crash-reports" || n.starts_with("crash-reports/")) {
-        return true;
-    }
-    if !copy_data {
-        if n == "world" || n.starts_with("world/") {
-            return true;
-        }
-        if n.starts_with("world_") {
-            return true;
-        }
-    }
-    false
+/// 把 workdir/relative 子目录打包成 dest zip。
+pub async fn pack_subdir_zip(
+    workdir: &str,
+    relative: &str,
+    dest: &Path,
+) -> anyhow::Result<u64> {
+    let v = crate::init_call(
+        "files.pack_subdir_zip",
+        serde_json::json!({
+            "workdir": workdir,
+            "relative": relative,
+            "dest": dest.to_string_lossy(),
+        }),
+    )
+    .await?;
+    Ok(v["size"].as_u64().unwrap_or(0))
 }
 
-fn copy_walk(
-    current: &Path,
-    dst_root: &Path,
-    src_root: &Path,
-    copy_data: bool,
-    skip_logs: bool,
-    copied: &mut u32,
-    depth: u32,
-) -> anyhow::Result<()> {
-    if depth > 32 {
-        return Ok(());
-    }
-    for ent in fs::read_dir(current)? {
-        let ent = ent?;
-        let path = ent.path();
-        if path.is_symlink() {
-            continue;
-        }
-        let rel = path
-            .strip_prefix(src_root)?
-            .to_string_lossy()
-            .replace('\\', "/");
-        if copy_skip(&rel, copy_data, skip_logs) {
-            continue;
-        }
-        let target = dst_root.join(path.strip_prefix(src_root)?);
-        if path.is_dir() {
-            fs::create_dir_all(&target)?;
-            copy_walk(
-                &path,
-                dst_root,
-                src_root,
-                copy_data,
-                skip_logs,
-                copied,
-                depth + 1,
-            )?;
-        } else {
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::copy(&path, &target)?;
-            *copied += 1;
-        }
-    }
+/// 把 zip 字节流解压合并到 workdir/relative 下。
+pub async fn extract_zip_into(
+    workdir: &str,
+    relative: &str,
+    bytes: &[u8],
+) -> anyhow::Result<u32> {
+    let v = crate::init_call(
+        "files.extract_zip_into",
+        serde_json::json!({
+            "workdir": workdir,
+            "relative": relative,
+            "bytes": bytes,
+        }),
+    )
+    .await?;
+    Ok(v["files"].as_u64().unwrap_or(0) as u32)
+}
+
+/// 根据 properties/jars/logs 推断 MC 版本。
+pub async fn guess_mc_version(workdir: &str) -> anyhow::Result<Option<String>> {
+    let v = crate::init_call(
+        "files.guess_mc_version",
+        serde_json::json!({ "workdir": workdir }),
+    )
+    .await?;
+    Ok(serde_json::from_value(v["version"].clone())?)
+}
+
+/// 把 cocktail-mc-version= 写进 server.properties。
+pub async fn write_mc_version_marker(workdir: &str, version: &str) -> anyhow::Result<()> {
+    let _ = crate::init_call(
+        "files.write_mc_version_marker",
+        serde_json::json!({ "workdir": workdir, "version": version }),
+    )
+    .await?;
     Ok(())
 }
 
-pub fn pack_subdir_zip(workdir: &str, relative: &str, dest: &Path) -> anyhow::Result<u64> {
-    let root = resolve_in_workdir(workdir, relative)?;
-    if !root.is_dir() {
-        anyhow::bail!("目录不存在：{relative}");
-    }
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    zip_dir(&root, dest)?;
-    Ok(fs::metadata(dest)?.len())
-}
-
-pub fn extract_zip_into(workdir: &str, relative: &str, bytes: &[u8]) -> anyhow::Result<u32> {
-    let dest = resolve_in_workdir(workdir, relative)?;
-    fs::create_dir_all(&dest)?;
-    let staging = PathBuf::from(workdir)
-        .join(".cocktail")
-        .join("tmp")
-        .join(format!("world-{}", uuid::Uuid::new_v4()));
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging)?;
-    let tmp_zip = PathBuf::from(workdir)
-        .join(".cocktail")
-        .join("tmp")
-        .join(format!("world-{}.zip", uuid::Uuid::new_v4()));
-    fs::write(&tmp_zip, bytes)?;
-    let result = (|| -> anyhow::Result<u32> {
-        unzip_archive(&tmp_zip, &staging)?;
-        let inner = single_child_dir(&staging)?;
-        let files = count_files(&inner)?;
-        merge_into(&inner, &dest)?;
-        Ok(files)
-    })();
-    let _ = fs::remove_file(&tmp_zip);
-    let _ = fs::remove_dir_all(&staging);
-    result
-}
-
-fn single_child_dir(root: &Path) -> anyhow::Result<PathBuf> {
-    let mut dirs = Vec::new();
-    let mut files = Vec::new();
-    for ent in fs::read_dir(root)? {
-        let path = ent?.path();
-        let name = path
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        if name == "__MACOSX" || name.starts_with("._") || name == ".DS_Store" {
-            continue;
-        }
-        if path.is_dir() {
-            dirs.push(path);
-        } else {
-            files.push(path);
-        }
-    }
-    if dirs.len() == 1 && files.is_empty() {
-        let inner = &dirs[0];
-        let has_level = inner.join("level.dat").is_file()
-            || inner.join("region").is_dir()
-            || inner.join("DIM1").is_dir();
-        if has_level {
-            return Ok(inner.clone());
-        }
-    }
-    Ok(root.to_path_buf())
-}
-
-fn count_files(root: &Path) -> anyhow::Result<u32> {
-    let mut n = 0u32;
-    fn walk(dir: &Path, n: &mut u32, depth: u32) {
-        if depth > 32 {
-            return;
-        }
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        for ent in entries.flatten() {
-            let p = ent.path();
-            if p.is_symlink() {
-                continue;
-            }
-            if p.is_dir() {
-                walk(&p, n, depth + 1);
-            } else {
-                *n += 1;
-            }
-        }
-    }
-    walk(root, &mut n, 0);
-    Ok(n)
-}
-
-fn merge_into(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    fs::create_dir_all(dst)?;
-    for ent in fs::read_dir(src)? {
-        let ent = ent?;
-        let from = ent.path();
-        if from.is_symlink() {
-            continue;
-        }
-        let to = dst.join(ent.file_name());
-        if from.is_dir() {
-            merge_into(&from, &to)?;
-        } else {
-            if let Some(parent) = to.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
-}
-
-pub fn guess_mc_version(workdir: &str) -> Option<String> {
-    if let Some(v) = guess_version_from_properties(workdir) {
-        return Some(v);
-    }
-    if let Some(v) = guess_version_from_jars(workdir) {
-        return Some(v);
-    }
-    guess_version_from_logs(workdir)
-}
-
-fn guess_version_from_properties(workdir: &str) -> Option<String> {
-    let path = Path::new(workdir).join("server.properties");
-    let raw = fs::read_to_string(path).ok()?;
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.starts_with("version=") || line.starts_with("level-name=") {
-            continue;
-        }
-        if let Some(v) = line.strip_prefix("cocktail-mc-version=") {
-            let v = v.trim();
-            if !v.is_empty() {
-                return Some(v.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn guess_version_from_jars(workdir: &str) -> Option<String> {
-    let mut names: Vec<String> = Vec::new();
-    let mut roots = vec![PathBuf::from(workdir)];
-    roots.push(Path::new(workdir).join("versions"));
-    for root in roots {
-        let Ok(entries) = fs::read_dir(&root) else {
-            continue;
-        };
-        for ent in entries.flatten() {
-            let name = ent.file_name().to_string_lossy().to_string();
-            if name.to_ascii_lowercase().ends_with(".jar") {
-                names.push(name);
-            }
-        }
-    }
-    for name in names {
-        if let Some(v) = extract_semver(&name) {
-            return Some(v);
-        }
-    }
-    None
-}
-
-fn extract_semver(name: &str) -> Option<String> {
-    let lower = name.to_ascii_lowercase();
-    if !(lower.contains("paper")
-        || lower.contains("purpur")
-        || lower.contains("folia")
-        || lower.contains("leaves")
-        || lower.contains("server")
-        || lower.contains("vanilla")
-        || lower.contains("fabric")
-        || lower.contains("forge")
-        || lower.contains("quilt"))
-    {
-        return None;
-    }
-    let bytes: Vec<char> = name.chars().collect();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i].is_ascii_digit() {
-            let start = i;
-            let mut dots = 0;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == '.') {
-                if bytes[i] == '.' {
-                    dots += 1;
-                }
-                i += 1;
-            }
-            let candidate: String = bytes[start..i].iter().collect();
-            let candidate = candidate.trim_matches('.').to_string();
-            if dots >= 1 && candidate.len() >= 3 && candidate.len() <= 12 {
-                return Some(candidate);
-            }
-        } else {
-            i += 1;
-        }
-    }
-    None
-}
-
-fn guess_version_from_logs(workdir: &str) -> Option<String> {
-    let path = Path::new(workdir).join("logs").join("latest.log");
-    let meta = fs::metadata(&path).ok()?;
-    if meta.len() > 4 * 1024 * 1024 {
-        return None;
-    }
-    let raw = fs::read_to_string(&path).ok()?;
-    for line in raw.lines().take(200) {
-        if let Some(idx) = line.find("Starting minecraft server version") {
-            let tail = &line[idx + "Starting minecraft server version".len()..];
-            let v = tail.trim().trim_end_matches(['.', ',', '!']).trim();
-            if !v.is_empty() && v.len() <= 24 {
-                return Some(v.to_string());
-            }
-        }
-    }
-    None
-}
-
-pub fn write_mc_version_marker(workdir: &str, version: &str) -> anyhow::Result<()> {
-    let path = Path::new(workdir).join("server.properties");
-    let mut lines: Vec<String> = fs::read_to_string(&path)
-        .map(|s| s.lines().map(|l| l.to_string()).collect())
-        .unwrap_or_default();
-    lines.retain(|l| !l.trim_start().starts_with("cocktail-mc-version="));
-    lines.push(format!("cocktail-mc-version={version}"));
-    let mut out = lines.join(
-        "
-",
-    );
-    out.push('\n');
-    fs::write(path, out)?;
-    Ok(())
-}
-
-pub fn total_dir_bytes(path: &str) -> u64 {
-    let mut total = 0u64;
-    fn walk(dir: &Path, total: &mut u64, depth: u32) {
-        if depth > 32 {
-            return;
-        }
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        for ent in entries.flatten() {
-            let p = ent.path();
-            if p.is_symlink() {
-                continue;
-            }
-            if p.is_dir() {
-                walk(&p, total, depth + 1);
-            } else if let Ok(meta) = p.metadata() {
-                *total += meta.len();
-            }
-        }
-    }
-    walk(Path::new(path), &mut total, 0);
-    total
+/// 递归统计某目录占用字节数。
+pub async fn total_dir_bytes(path: &str) -> anyhow::Result<u64> {
+    let v = crate::init_call(
+        "files.total_dir_bytes",
+        serde_json::json!({ "path": path }),
+    )
+    .await?;
+    Ok(v["bytes"].as_u64().unwrap_or(0))
 }
 
 #[cfg(test)]
@@ -1014,14 +395,5 @@ mod tests {
             "data/instances/a/world"
         ));
         assert!(!workdirs_conflict("data/instances/a", "data/instances/ab"));
-    }
-
-    #[test]
-    fn backup_skips_jre_and_tmp() {
-        assert!(skip_backup_rel("runtime"));
-        assert!(skip_backup_rel("runtime/jre/bin/java.exe"));
-        assert!(skip_backup_rel(".cocktail/tmp/x"));
-        assert!(!skip_backup_rel("world/level.dat"));
-        assert!(!skip_backup_rel("plugins/foo.jar"));
     }
 }
