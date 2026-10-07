@@ -19,7 +19,8 @@ use tokio::io::AsyncWriteExt;
 use cocktail_shared::logfmt::{human_bytes, human_duration};
 use cocktail_shared::logging::LiveLine;
 
-use crate::events;
+use crate::progress::Progress;
+use cocktail_shared::progress::TransferContext;
 
 const DEFAULT_UA: &str = "Cocktail-Manager/0.1 (https://github.com/CocktailMC/Cocktail)";
 
@@ -248,50 +249,43 @@ fn progress_kv(written: u64, total: Option<u64>) -> Vec<(String, String)> {
 /// 进度以 `[ **** ][cocktail-http] download.running ...` 实时行输出到 stderr，
 /// 完成/失败分别收尾为 `download.completed` / `download.failed`。
 pub async fn download_to_path(url: &str, dest: &Path) -> anyhow::Result<u64> {
-    let dest_label = dest
+    download_to_path_with_progress(url, dest, None).await
+}
+
+pub async fn download_to_path_with_progress(
+    url: &str,
+    dest: &Path,
+    context: Option<TransferContext>,
+) -> anyhow::Result<u64> {
+    let label = dest
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| dest.display().to_string());
-    let started = Instant::now();
-    // 本地 stderr 实时行（给人看）与跨进程 event（回推 control/UI）并存。
-    events::emit(
-        "download.started",
-        serde_json::json!({ "url": url, "dest": dest_label.clone() }),
+    let progress = Progress::new(
+        "download",
+        context.unwrap_or_else(|| TransferContext::new(label.clone())),
     );
+    let started = Instant::now();
     let live = LiveLine::begin(
         "cocktail-http",
         "download.running",
-        vec![("dest".to_string(), dest_label.clone())],
+        vec![("dest".into(), label)],
     );
-    match download_to_path_inner(url, dest, &live).await {
+    match download_to_path_inner(url, dest, &live, &progress).await {
         Ok(written) => {
-            events::emit(
-                "download.completed",
-                serde_json::json!({
-                    "url": url,
-                    "dest": dest_label,
-                    "bytes": written,
-                    "duration_ms": started.elapsed().as_millis() as u64,
-                }),
-            );
+            progress.update(written, Some(written));
+            progress.finish();
             live.done(
                 "download.completed",
                 vec![
-                    ("bytes".to_string(), human_bytes(written)),
-                    ("duration".to_string(), human_duration(started.elapsed())),
+                    ("bytes".into(), human_bytes(written)),
+                    ("duration".into(), human_duration(started.elapsed())),
                 ],
             );
             Ok(written)
         }
         Err(e) => {
-            events::emit(
-                "download.failed",
-                serde_json::json!({
-                    "url": url,
-                    "dest": dest_label,
-                    "error": format!("{e:#}"),
-                }),
-            );
+            progress.fail(&format!("{e:#}"));
             live.fail("download.failed", &format!("{e:#}"));
             Err(e)
         }
@@ -299,7 +293,12 @@ pub async fn download_to_path(url: &str, dest: &Path) -> anyhow::Result<u64> {
 }
 
 /// `download_to_path` 的实际实现；进度通过 `live` 实时刷新。
-async fn download_to_path_inner(url: &str, dest: &Path, live: &LiveLine) -> anyhow::Result<u64> {
+async fn download_to_path_inner(
+    url: &str,
+    dest: &Path,
+    live: &LiveLine,
+    progress: &Progress,
+) -> anyhow::Result<u64> {
     let resp = client()
         .get(url)
         .send()
@@ -308,6 +307,7 @@ async fn download_to_path_inner(url: &str, dest: &Path, live: &LiveLine) -> anyh
         .error_for_status()
         .map_err(|e| explain(e, url))?;
     let total = resp.content_length();
+    progress.update(0, total);
     if let Some(parent) = dest.parent() {
         if !parent.as_os_str().is_empty() {
             tokio::fs::create_dir_all(parent).await.with_context(|| {
@@ -328,7 +328,6 @@ async fn download_to_path_inner(url: &str, dest: &Path, live: &LiveLine) -> anyh
     let mut last_bytes = 0u64;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| explain(e, url))?;
-        written += chunk.len() as u64;
         file.write_all(&chunk).await.with_context(|| {
             format!(
                 "write to file {} ({} bytes written)",
@@ -336,16 +335,13 @@ async fn download_to_path_inner(url: &str, dest: &Path, live: &LiveLine) -> anyh
                 written
             )
         })?;
-        // 节流：≥200ms 或自上次刷新后新增 ≥256KiB 才更新实时行 + emit 一次
-        // progress，避免小 chunk 下载造成事件风暴。
+        written += chunk.len() as u64;
+        progress.update(written, total);
+        // stderr 实时行单独节流；跨进程进度由 Progress 限频到每 200ms。
         if last.elapsed() >= Duration::from_millis(200)
             || written.saturating_sub(last_bytes) >= 256 * 1024
         {
             live.update(progress_kv(written, total));
-            events::emit(
-                "download.progress",
-                serde_json::json!({ "url": url, "received": written, "total": total }),
-            );
             last = Instant::now();
             last_bytes = written;
         }
@@ -360,14 +356,17 @@ async fn download_to_path_inner(url: &str, dest: &Path, live: &LiveLine) -> anyh
 ///
 /// 进度同上，以 `download.running` 实时行输出到 stderr。
 pub async fn download_vec(url: &str, max_bytes: u64) -> anyhow::Result<Vec<u8>> {
+    let progress = Progress::new("download", TransferContext::new(url));
     let started = Instant::now();
     let live = LiveLine::begin(
         "cocktail-http",
         "download.running",
         vec![("url".to_string(), url.to_string())],
     );
-    match download_vec_inner(url, max_bytes, &live).await {
+    match download_vec_inner(url, max_bytes, &live, &progress).await {
         Ok(buf) => {
+            progress.update(buf.len() as u64, Some(buf.len() as u64));
+            progress.finish();
             live.done(
                 "download.completed",
                 vec![
@@ -378,13 +377,19 @@ pub async fn download_vec(url: &str, max_bytes: u64) -> anyhow::Result<Vec<u8>> 
             Ok(buf)
         }
         Err(e) => {
+            progress.fail(&format!("{e:#}"));
             live.fail("download.failed", &format!("{e:#}"));
             Err(e)
         }
     }
 }
 
-async fn download_vec_inner(url: &str, max_bytes: u64, live: &LiveLine) -> anyhow::Result<Vec<u8>> {
+async fn download_vec_inner(
+    url: &str,
+    max_bytes: u64,
+    live: &LiveLine,
+    progress: &Progress,
+) -> anyhow::Result<Vec<u8>> {
     let resp = client()
         .get(url)
         .send()
@@ -393,6 +398,7 @@ async fn download_vec_inner(url: &str, max_bytes: u64, live: &LiveLine) -> anyho
         .error_for_status()
         .map_err(|e| explain(e, url))?;
     let total = resp.content_length();
+    progress.update(0, total);
     let mut stream = resp.bytes_stream();
     let mut buf = Vec::new();
     if let Some(t) = total.filter(|n| *n > 0 && *n <= max_bytes) {
@@ -405,6 +411,7 @@ async fn download_vec_inner(url: &str, max_bytes: u64, live: &LiveLine) -> anyho
         if buf.len() as u64 > max_bytes {
             anyhow::bail!("下载超过 {} bytes 上限", max_bytes);
         }
+        progress.update(buf.len() as u64, total);
         if last.elapsed() >= Duration::from_millis(200) {
             live.update(progress_kv(buf.len() as u64, total));
             last = Instant::now();

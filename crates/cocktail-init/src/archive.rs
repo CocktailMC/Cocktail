@@ -11,8 +11,7 @@
 //! `import_archive` 主入口（含状态校验、AppState mutation、audit）留 control 端，
 //! 它调本模块完成纯 fs 操作；状态校验 + 持久化属 control 职责。
 //!
-//! TODO 阶段 2：原 control 端 `http::Transfer` 进度推送（"extract" phase）暂砍，
-//! 待 event push 通道就位后用 init→control 单向事件回传 progress。
+//! 解压在 blocking worker 执行，通过 extract.* 事件回传字节计量与处理阶段。
 //! TODO 阶段 3：init 不可达时考虑 fallback 到本地实现（兼容单进程老部署）。
 
 use std::fs::{self, File};
@@ -84,6 +83,44 @@ pub async fn extract_pack(
     workdir: &Path,
     filename: &str,
 ) -> anyhow::Result<ExtractOut> {
+    extract_pack_with_progress(archive, workdir, filename, None).await
+}
+
+pub async fn extract_pack_with_progress(
+    archive: &Path,
+    workdir: &Path,
+    filename: &str,
+    context: Option<cocktail_shared::progress::TransferContext>,
+) -> anyhow::Result<ExtractOut> {
+    let progress = std::sync::Arc::new(crate::progress::Progress::new(
+        "extract",
+        context.unwrap_or_else(|| {
+            cocktail_shared::progress::TransferContext::new(format!("导入 {filename}"))
+        }),
+    ));
+    let worker_progress = progress.clone();
+    let archive = archive.to_owned();
+    let workdir = workdir.to_owned();
+    let filename = filename.to_owned();
+    let outcome = tokio::task::spawn_blocking(move || {
+        extract_pack_inner(&archive, &workdir, &filename, &worker_progress)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|out| out);
+    match &outcome {
+        Ok(_) => progress.finish(),
+        Err(e) => progress.fail(&format!("{e:#}")),
+    }
+    outcome
+}
+
+fn extract_pack_inner(
+    archive: &Path,
+    workdir: &Path,
+    filename: &str,
+    progress: &crate::progress::Progress,
+) -> anyhow::Result<ExtractOut> {
     fs::create_dir_all(workdir)?;
     let staging = workdir
         .join(".cocktail")
@@ -91,42 +128,70 @@ pub async fn extract_pack(
         .join(format!("unpack-{}", uuid::Uuid::new_v4()));
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(&staging)?;
-    let outcome: anyhow::Result<ExtractOut> = async {
-        extract_archive(archive, &staging, filename).await?;
-        unwrap_nested_tarball(&staging).await?;
+    let outcome: anyhow::Result<ExtractOut> = (|| {
+        progress.stage("extract");
+        extract_archive(archive, &staging, filename, progress)?;
+        progress.stage("nested");
+        unwrap_nested_tarball(&staging)?;
+        progress.stage("validate");
         strip_junk(&staging)?;
         let flattened = maybe_flatten(&staging)?;
         reject_escapes(&staging)?;
+        progress.stage("merge");
         let files = merge_tree(&staging, workdir)?;
         Ok(ExtractOut { flattened, files })
-    }
-    .await;
+    })();
     let _ = fs::remove_dir_all(&staging);
     outcome
 }
 
-async fn extract_archive(archive: &Path, dest: &Path, filename: &str) -> anyhow::Result<()> {
+fn extract_archive(
+    archive: &Path,
+    dest: &Path,
+    filename: &str,
+    progress: &crate::progress::Progress,
+) -> anyhow::Result<()> {
     let name = filename.to_ascii_lowercase();
     if name.ends_with(".zip") {
-        crate::files::unzip_archive(archive, dest)
+        crate::files::unzip_archive_with_progress(archive, dest, progress)
     } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        extract_tar_gz(archive, dest)
+        extract_tar_gz(archive, dest, progress)
     } else if name.ends_with(".tar") {
-        extract_tar(archive, dest)
+        extract_tar(archive, dest, progress)
     } else {
         crate::sevenz::extract(archive, dest)
     }
 }
 
-fn extract_tar_gz(path: &Path, dest: &Path) -> anyhow::Result<()> {
+fn extract_tar_gz(
+    path: &Path,
+    dest: &Path,
+    progress: &crate::progress::Progress,
+) -> anyhow::Result<()> {
     let file = File::open(path)?;
     let gz = GzDecoder::new(file);
-    unpack_tar(Archive::new(gz), dest)
+    unpack_tar(
+        Archive::new(crate::progress::ProgressReader {
+            inner: gz,
+            progress,
+        }),
+        dest,
+    )
 }
 
-fn extract_tar(path: &Path, dest: &Path) -> anyhow::Result<()> {
+fn extract_tar(
+    path: &Path,
+    dest: &Path,
+    progress: &crate::progress::Progress,
+) -> anyhow::Result<()> {
     let file = File::open(path)?;
-    unpack_tar(Archive::new(file), dest)
+    unpack_tar(
+        Archive::new(crate::progress::ProgressReader {
+            inner: file,
+            progress,
+        }),
+        dest,
+    )
 }
 
 fn unpack_tar<R: io::Read>(mut archive: Archive<R>, dest: &Path) -> anyhow::Result<()> {
@@ -152,7 +217,7 @@ fn unpack_tar<R: io::Read>(mut archive: Archive<R>, dest: &Path) -> anyhow::Resu
     Ok(())
 }
 
-async fn unwrap_nested_tarball(dest: &Path) -> anyhow::Result<()> {
+fn unwrap_nested_tarball(dest: &Path) -> anyhow::Result<()> {
     let Ok(entries) = fs::read_dir(dest) else {
         return Ok(());
     };
@@ -181,10 +246,9 @@ async fn unwrap_nested_tarball(dest: &Path) -> anyhow::Result<()> {
     crate::sevenz::extract(&inner, dest)?;
     let _ = fs::remove_file(&inner);
     if name.ends_with(".xz") && !name.ends_with(".tar.xz") {
-        // 递归 async fn 必须装箱，否则 future 尺寸无限
-        Box::pin(unwrap_nested_tarball(dest)).await?;
+        unwrap_nested_tarball(dest)?;
     } else if name.ends_with(".tar.xz") || name.ends_with(".xz") {
-        Box::pin(unwrap_nested_tarball(dest)).await?;
+        unwrap_nested_tarball(dest)?;
     }
     Ok(())
 }

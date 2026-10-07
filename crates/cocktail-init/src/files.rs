@@ -585,6 +585,22 @@ fn add_dir_to_zip(
 }
 
 fn unzip_to(zip_path: &Path, dest: &Path) -> anyhow::Result<()> {
+    unzip_to_inner(zip_path, dest, None)
+}
+
+pub fn unzip_archive_with_progress(
+    zip_path: &Path,
+    dest: &Path,
+    progress: &crate::progress::Progress,
+) -> anyhow::Result<()> {
+    unzip_to_inner(zip_path, dest, Some(progress))
+}
+
+fn unzip_to_inner(
+    zip_path: &Path,
+    dest: &Path,
+    progress: Option<&crate::progress::Progress>,
+) -> anyhow::Result<()> {
     let file = File::open(zip_path)?;
     let mut archive = ZipArchive::new(file)?;
     fs::create_dir_all(dest)?;
@@ -601,7 +617,15 @@ fn unzip_to(zip_path: &Path, dest: &Path) -> anyhow::Result<()> {
                 fs::create_dir_all(parent)?;
             }
             let mut outfile = File::create(&outpath)?;
-            std::io::copy(&mut file, &mut outfile)?;
+            if let Some(progress) = progress {
+                let mut reader = crate::progress::ProgressReader {
+                    inner: &mut file,
+                    progress,
+                };
+                std::io::copy(&mut reader, &mut outfile)?;
+            } else {
+                std::io::copy(&mut file, &mut outfile)?;
+            }
         }
     }
     Ok(())

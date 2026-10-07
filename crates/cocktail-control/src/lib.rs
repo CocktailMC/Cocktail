@@ -319,16 +319,53 @@ fn spawn_init_event_consumer(state: SharedState) {
 
 /// 把 init 推送的 Event 映射到实例事件总线上的 `InstanceEvent`。
 ///
-/// 当前只有 `http.download.*` 有对应变体（`DownloadProgress`）；其余事件仅打日志。
+/// 下载与解压共用 DownloadProgress；新事件保留 Transfer ID，兼容旧下载事件。
 fn map_init_event(ev: &cocktail_shared::proto::Event) -> Option<crate::instance::InstanceEvent> {
     use crate::instance::InstanceEvent;
     let phase = match ev.method.as_str() {
         "download.started" | "download.progress" => "download",
-        "download.completed" => "done",
-        "download.failed" => "failed",
+        "extract.started" | "extract.progress" => "extract",
+        "download.completed" | "extract.completed" => "done",
+        "download.failed" | "extract.failed" => "failed",
         _ => return None,
     };
     let p = &ev.params;
+    if let Ok(progress) =
+        serde_json::from_value::<cocktail_shared::progress::ProgressEvent>(p.clone())
+    {
+        let stage = match progress.stage.as_deref() {
+            Some("nested") => Some("展开嵌套压缩包"),
+            Some("validate") => Some("整理并校验目录"),
+            Some("merge") => Some("写入实例目录"),
+            _ => None,
+        };
+        let label = if phase == "extract" {
+            stage
+                .map(|stage| format!("{} · {stage}", progress.transfer.label))
+                .unwrap_or_else(|| progress.transfer.label.clone())
+        } else {
+            progress.transfer.label.clone()
+        };
+        let pct = if phase == "done" {
+            Some(100.0)
+        } else {
+            progress.total.filter(|total| *total > 0).map(|total| {
+                ((progress.received as f64 / total as f64) * 100.0).clamp(0.0, 100.0) as f32
+            })
+        };
+        return Some(InstanceEvent::DownloadProgress {
+            id: progress.transfer.id,
+            label,
+            phase: phase.into(),
+            received: progress.received,
+            total: progress.total,
+            pct,
+        });
+    }
+    // Legacy init builds did not carry an operation ID; retain their download mapping.
+    if ev.method.starts_with("extract.") {
+        return None;
+    }
     let url = p.get("url").and_then(|v| v.as_str()).unwrap_or("");
     let dest = p.get("dest").and_then(|v| v.as_str()).unwrap_or("");
     let received = p
@@ -337,9 +374,13 @@ fn map_init_event(ev: &cocktail_shared::proto::Event) -> Option<crate::instance:
         .or_else(|| p.get("bytes").and_then(|v| v.as_u64()))
         .unwrap_or(0);
     let total = p.get("total").and_then(|v| v.as_u64());
-    let pct = total
-        .filter(|t| *t > 0)
-        .map(|t| ((received as f64 / t as f64) * 100.0).clamp(0.0, 100.0) as f32);
+    let pct = if phase == "done" {
+        Some(100.0)
+    } else {
+        total
+            .filter(|t| *t > 0)
+            .map(|t| ((received as f64 / t as f64) * 100.0).clamp(0.0, 100.0) as f32)
+    };
     Some(InstanceEvent::DownloadProgress {
         id: if url.is_empty() {
             "init".to_string()
@@ -864,4 +905,63 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     out
+}
+
+#[cfg(test)]
+mod progress_event_tests {
+    use super::map_init_event;
+    use cocktail_shared::{model::InstanceEvent, proto::Event};
+    use serde_json::json;
+
+    #[test]
+    fn progress_preserves_identity_unknown_length_and_extract_stage() {
+        for method in ["download.progress", "extract.progress"] {
+            let event = Event::new(
+                method,
+                json!({"id":"job-a", "label":"server.zip", "received":512,
+                "total":null, "stage":"merge"}),
+            );
+            let Some(InstanceEvent::DownloadProgress {
+                id,
+                phase,
+                pct,
+                label,
+                received,
+                ..
+            }) = map_init_event(&event)
+            else {
+                panic!("missing progress")
+            };
+            assert_eq!(id, "job-a");
+            assert_eq!(received, 512);
+            assert_eq!(pct, None);
+            if method.starts_with("extract") {
+                assert_eq!(phase, "extract");
+                assert!(label.contains("写入实例目录"));
+            }
+        }
+    }
+
+    #[test]
+    fn empty_completion_is_complete_and_failures_keep_progress() {
+        let done = Event::new(
+            "download.completed",
+            json!({"id":"empty", "label":"empty", "received":0, "total":0}),
+        );
+        assert!(matches!(
+            map_init_event(&done),
+            Some(InstanceEvent::DownloadProgress {
+                pct: Some(100.0),
+                ..
+            })
+        ));
+        let failed = Event::new(
+            "extract.failed",
+            json!({"id":"bad", "label":"bad.zip", "received":128, "total":null, "error":"invalid archive"}),
+        );
+        assert!(
+            matches!(map_init_event(&failed), Some(InstanceEvent::DownloadProgress { phase, received:128, pct:None, .. }) if phase == "failed")
+        );
+        assert!(map_init_event(&Event::new("extract.progress", json!({}))).is_none());
+    }
 }

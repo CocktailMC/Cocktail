@@ -28,6 +28,8 @@ struct NameParams {
 /// http.download_to_path RPC 参数。
 #[derive(Debug, Deserialize)]
 struct DownloadParams {
+    #[serde(default)]
+    progress: Option<cocktail_shared::progress::TransferContext>,
     url: String,
     dest: String,
 }
@@ -219,6 +221,8 @@ struct VersionsInstallParams {
 /// archive.extract_pack 参数。
 #[derive(Debug, Deserialize)]
 struct ArchiveExtractPackParams {
+    #[serde(default)]
+    progress: Option<cocktail_shared::progress::TransferContext>,
     archive_path: String,
     workdir: String,
     filename: String,
@@ -310,7 +314,13 @@ pub fn build_server() -> Server {
             Ok(v) => v,
             Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
         };
-        match http::download_to_path(&p.url, std::path::Path::new(&p.dest)).await {
+        match http::download_to_path_with_progress(
+            &p.url,
+            std::path::Path::new(&p.dest),
+            p.progress,
+        )
+        .await
+        {
             Ok(n) => Ok(serde_json::json!({ "written": n })),
             Err(e) => Err(proto::Error::internal(format!("{e}"))),
         }
@@ -788,17 +798,17 @@ pub fn build_server() -> Server {
 
     // archive.extract_pack：解压 → 去嵌套 → 去 junk → 扁平化 → 越界防护 → 合并到 workdir。
     // params: { archive_path, workdir, filename } 返回 { flattened, files }。
-    // TODO：原 control 端 `http::Transfer` 进度推送（"extract" phase）暂砍，
-    // 待 event push 通道接好后用 init→control 单向事件回传 progress。
+    // progress 可选：与 control Transfer 复用任务标识。
     server.register("archive.extract_pack", |params| async move {
         let p: ArchiveExtractPackParams = match serde_json::from_value(params) {
             Ok(v) => v,
             Err(e) => return Err(proto::Error::invalid_params(format!("{e}"))),
         };
-        match archive::extract_pack(
+        match archive::extract_pack_with_progress(
             Path::new(&p.archive_path),
             Path::new(&p.workdir),
             &p.filename,
+            p.progress,
         )
         .await
         {

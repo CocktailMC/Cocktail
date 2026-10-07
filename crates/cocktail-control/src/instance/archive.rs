@@ -9,8 +9,7 @@
 //! - `ImportArchiveResult` / `ImportArchiveOpts` / `MAX_ARCHIVE_BYTES`：纯数据，留本地；
 //! - `preview`：纯字符串格式化，留本地（仅本模块用）。
 //!
-//! TODO 阶段 2：原 control 端 `http::Transfer` 进度推送（"extract" phase）暂砍掉，
-//! 待 event push 通道就位后用 init→control 单向事件回传 progress。
+//! 解压进度通过 init→control 的 extract.* 事件回传。
 //! TODO 阶段 3：init 不可达时考虑 fallback 到本地实现（兼容单进程老部署）。
 
 use std::fs;
@@ -83,8 +82,6 @@ pub async fn import_archive(
 
     let workdir = view.spec.workdir.clone();
     let port = view.spec.port;
-    // TODO 阶段 2：原 `crate::http::Transfer::new("导入 <filename>")` + emit("extract", ...)
-    // 进度推送暂砍掉，待 event push 通道就位后用 init→control 单向事件回传 progress。
     let archive = archive_path.to_path_buf();
     let dest = std::path::PathBuf::from(&workdir);
     let filename = opts.filename.clone();
@@ -155,9 +152,11 @@ async fn extract_pack(
         flattened: bool,
         files: u32,
     }
+    let progress = cocktail_shared::progress::TransferContext::new(format!("导入 {filename}"));
     let v = crate::init_call(
         "archive.extract_pack",
         serde_json::json!({
+            "progress": progress,
             "archive_path": archive.to_string_lossy(),
             "workdir": workdir.to_string_lossy(),
             "filename": filename,

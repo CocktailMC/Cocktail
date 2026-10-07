@@ -193,7 +193,10 @@ impl InitClient {
 
         let timeout_secs = match method {
             "process.stop" => 60,
-            "process.launch" | "container.pull" => 1800,
+            "process.launch"
+            | "container.pull"
+            | "http.download_to_path"
+            | "archive.extract_pack" => 1800,
             _ => 30,
         };
         let resp =

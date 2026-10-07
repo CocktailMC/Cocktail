@@ -14,6 +14,7 @@ const PHASE_LABEL: Record<string, string> = {
   install: '安装中',
   upload: '上传中',
   done: '完成',
+  failed: '失败',
 }
 
 
@@ -22,14 +23,14 @@ export default function BusyOverlay({ active, label, statusHint, progress }: Pro
     progress?.pct != null && Number.isFinite(progress.pct)
       ? Math.max(0, Math.min(100, progress.pct))
       : null
-  const determinate = pct != null && progress?.phase === 'download'
+  const determinate = pct != null && ['download', 'done'].includes(progress?.phase ?? '')
   const showBar = active || Boolean(statusHint) || Boolean(progress)
   const title = progress?.label || label || '处理中…'
   const phaseText = progress
     ? PHASE_LABEL[progress.phase] || progress.phase
     : null
   const bytesText =
-    progress && progress.phase === 'download'
+    progress && ['download', 'extract'].includes(progress.phase)
       ? progress.total
         ? `${formatBytes(progress.received)} / ${formatBytes(progress.total)}`
         : formatBytes(progress.received)

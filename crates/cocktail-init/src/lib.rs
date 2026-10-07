@@ -31,3 +31,5 @@ pub mod registry;
 pub mod runtime;
 pub use cocktail_shared::stdin_bridge;
 use cocktail_shared::{runtime_util as util, wincompat, winnet};
+
+pub mod progress;

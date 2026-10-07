@@ -20,3 +20,5 @@ pub mod runtime_util;
 pub mod stdin_bridge;
 pub mod wincompat;
 pub mod winnet;
+
+pub mod progress;

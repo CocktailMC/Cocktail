@@ -286,34 +286,57 @@ pub async fn download_to_path(
     dest: &Path,
     job: &Transfer,
 ) -> anyhow::Result<u64> {
-    // 阶段 2：实际下载搬到 cocktail-init 子进程。control 端只做 RPC 客户端，
-    // 代理检测、TLS、reqwest::Client 构建都在 init 端完成（init 默认继承父进程 env，
-    // COCKTAIL_PROXY / HTTPS_PROXY 自动透传）。
-    //
-    // TODO 阶段 2：用 event push 把 init 端下载进度回推给本 Transfer::emit。
-    // 当前只在完成后发一次 done 事件（UI 会从 0% 直接跳到 100%）。
-    job.emit("download", 0, None);
+    // Init owns the entire progress lifecycle, using this Transfer identity.
     #[derive(serde::Serialize)]
     struct Params<'a> {
+        progress: cocktail_shared::progress::TransferContext,
         url: &'a str,
         dest: &'a str,
     }
     let params = Params {
+        progress: cocktail_shared::progress::TransferContext {
+            id: job.id.clone(),
+            label: job.label.clone(),
+        },
         url,
         dest: &dest.to_string_lossy(),
     };
-    let v = crate::init_call("http.download_to_path", params).await?;
+    let v = match crate::init_call("http.download_to_path", params).await {
+        Ok(value) => value,
+        Err(e) => {
+            // An RPC operation error already has an init failed event. Only transport
+            // failures need a local fallback terminal notification.
+            if e.downcast_ref::<std::io::Error>()
+                .is_none_or(|error| error.kind() != std::io::ErrorKind::Other)
+            {
+                job.emit("failed", 0, None);
+            }
+            return Err(e);
+        }
+    };
     #[derive(serde::Deserialize)]
     struct R {
         written: u64,
     }
     let r: R = serde_json::from_value(v)
         .map_err(|e| anyhow::anyhow!("parse http.download_to_path response: {e}"))?;
-    job.finish(r.written, Some(r.written));
     Ok(r.written)
 }
 
 pub async fn download_vec(
+    client: &reqwest::Client,
+    url: &str,
+    job: &Transfer,
+    max_bytes: u64,
+) -> anyhow::Result<Vec<u8>> {
+    let result = download_vec_inner(client, url, job, max_bytes).await;
+    if result.is_err() {
+        job.emit("failed", 0, None);
+    }
+    result
+}
+
+async fn download_vec_inner(
     client: &reqwest::Client,
     url: &str,
     job: &Transfer,
