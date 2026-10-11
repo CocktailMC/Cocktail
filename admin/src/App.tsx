@@ -60,6 +60,7 @@ import {
 import './App.css'
 import './shell.css'
 import './pages.css'
+import './polish.css'
 import InstanceRail from './InstanceRail'
 import DashPane from './DashPane'
 
