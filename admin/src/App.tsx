@@ -47,6 +47,7 @@ import EventFeed from './EventFeed'
 import UsersPage from './UsersPage'
 import SpecYamlPanel from './SpecYamlPanel'
 import SetupPage from './SetupPage'
+import TutorialsPage from './TutorialsPage'
 import LoginPage from './LoginPage'
 import {
   INSTALLABLE_CORE_GROUPS,
@@ -118,6 +119,7 @@ const PLANE_LINKS: { tab: HomeTab; label: string; perm?: string }[] = [
   { tab: 'nodes', label: '节点 / Agent', perm: 'nodes' },
   { tab: 'extensions', label: '扩展中心', perm: 'settings' },
   { tab: 'audit', label: '审计日志', perm: 'settings' },
+  { tab: 'tutorials', label: '视频教程' },
 ]
 
 function closeDetails(el: HTMLElement) {
@@ -1322,6 +1324,8 @@ export default function App() {
                   onOpenInstance={selectInstance}
                   onError={setError}
                 />
+              ) : homeTab === 'tutorials' ? (
+                <TutorialsPage onBack={() => goHome('overview')} onError={setError} />
               ) : homeTab === 'settings' ? (
                 <HomeSettings
                   health={health}

@@ -7,6 +7,7 @@ export type HomeTab =
   | 'network'
   | 'events'
   | 'users'
+  | 'tutorials'
 
 export type HashLoc =
   | { kind: 'home'; tab: HomeTab }

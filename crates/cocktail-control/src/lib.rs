@@ -22,6 +22,7 @@ mod openapi;
 mod ops;
 mod ops_extra;
 mod platform;
+mod release_check;
 mod plugin_bridge;
 mod plugins;
 mod proto;
@@ -35,6 +36,7 @@ mod stdin_bridge;
 mod storage;
 mod supervisor;
 mod totp;
+mod tutorials;
 mod util;
 mod wincompat;
 mod winnet;
@@ -718,7 +720,13 @@ async fn auth_middleware(
     let path = req.uri().path().to_string();
     if matches!(
         path.as_str(),
-        "/api/v1/health" | "/api/v1/setup" | "/api/v1/auth/login" | "/api/v1/agent/ws"
+        "/api/v1/health"
+            | "/api/v1/setup"
+            | "/api/v1/auth/login"
+            | "/api/v1/agent/ws"
+            | "/api/v1/update/status"
+            | "/api/v1/update/assets"
+            | "/api/v1/tutorials"
     ) {
         return next.run(req).await;
     }

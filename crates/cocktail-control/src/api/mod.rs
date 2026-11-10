@@ -8,6 +8,14 @@ use crate::state::SharedState;
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/api/v1/health", get(handlers::health))
+        .route("/api/v1/update/status", get(handlers::update_status))
+        .route("/api/v1/update/assets", get(handlers::update_assets))
+        .route("/api/v1/tutorials", get(handlers::list_tutorials))
+        .route("/api/v1/tutorials/mine", get(handlers::my_tutorials))
+        .route(
+            "/api/v1/tutorials/{id}/progress",
+            post(handlers::report_progress),
+        )
         .route("/api/v1/setup", post(handlers::setup))
         .route("/api/v1/auth/login", post(handlers::login))
         .route("/api/v1/auth/logout", post(handlers::logout))

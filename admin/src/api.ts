@@ -710,6 +710,66 @@ export type CreatedNode = {
   token: string
 }
 
+export type TutorialProgress = {
+  watched_secs: number
+  completed: boolean
+  updated_at: string
+}
+
+export type TutorialView = {
+  id: string
+  title: string
+  summary: string
+  chapter: string
+  order: number
+  duration_secs: number
+  url?: string | null
+  embedded: boolean
+  local: boolean
+  tags: string[]
+  progress: TutorialProgress
+  percent: number
+  completed: boolean
+}
+
+export type WatchSummary = {
+  total: number
+  completed: number
+  percent: number
+  next?: string | null
+}
+
+export type TutorialListResponse = {
+  tutorials: TutorialView[]
+  summary: WatchSummary
+}
+
+export type UpdateStatus = {
+  current: string
+  latest?: string | null
+  update_available: boolean
+  latest_is_stable: boolean
+  checked_at: string
+  source: string
+  notes_url: string
+  error?: string | null
+}
+
+export type ReleaseRow = {
+  tag: string
+  name: string
+  published_at: string
+  prerelease: boolean
+  html_url: string
+  notes: string
+}
+
+export type UpdateResponse = {
+  status: UpdateStatus
+  channels: Record<string, number>
+  releases: ReleaseRow[]
+}
+
 export type HealthInfo = {
   name: string
   version: string
@@ -789,6 +849,29 @@ export type ExtensionsList = {
 }
 
 export const api = {
+  listTutorials: (q?: string) =>
+    request<TutorialListResponse>(
+      `/api/v1/tutorials${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+    ),
+  myTutorials: () => request<TutorialListResponse>('/api/v1/tutorials/mine'),
+  reportTutorialProgress: (id: string, position_secs: number, duration_secs: number) =>
+    request<{ id: string; percent: number; completed: boolean }>(
+      `/api/v1/tutorials/${encodeURIComponent(id)}/progress`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ position_secs, duration_secs }),
+      },
+    ),
+
+  updateStatus: (opts?: { channel?: string; force?: boolean }) => {
+    const params = new URLSearchParams()
+    if (opts?.channel) params.set('channel', opts.channel)
+    if (opts?.force) params.set('force', 'true')
+    const q = params.toString()
+    return request<UpdateResponse>(`/api/v1/update/status${q ? `?${q}` : ''}`)
+  },
+
   health: () => request<HealthInfo>('/api/v1/health'),
   setup: (body: { username: string; password: string; panel_name?: string }) =>
     request<AuthSession>('/api/v1/setup', {

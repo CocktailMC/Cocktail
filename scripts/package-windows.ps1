@@ -16,7 +16,7 @@ if (-not $Version) {
 Write-Host "==> version=$Version"
 
 Write-Host "==> cargo build --release"
-cargo build -p cocktail-control --release --bins
+cargo build -p cocktail-control -p cocktail-init --release --bins
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "==> admin npm build"
@@ -43,6 +43,12 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Stage "web") | Out-Null
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 Copy-Item "target\release\cocktail-control.exe" (Join-Path $Stage "cocktail-control.exe")
+if (Test-Path "target\release\cocktail-init.exe") {
+  Copy-Item "target\release\cocktail-init.exe" (Join-Path $Stage "cocktail-init.exe")
+} else {
+  Write-Error "cocktail-init.exe missing from release build"
+  exit 1
+}
 if (Test-Path "target\release\cocktail-agent.exe") {
   Copy-Item "target\release\cocktail-agent.exe" (Join-Path $Stage "cocktail-agent.exe")
 }

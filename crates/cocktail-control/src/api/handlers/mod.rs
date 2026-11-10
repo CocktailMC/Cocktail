@@ -11,8 +11,10 @@ mod network;
 mod nodes;
 mod players;
 mod plugin_ops;
+mod release;
 mod schedules;
 mod settings;
+mod tutorial_api;
 mod users;
 mod worlds;
 
@@ -29,8 +31,10 @@ pub use network::*;
 pub use nodes::*;
 pub use players::*;
 pub use plugin_ops::*;
+pub use release::*;
 pub use schedules::*;
 pub use settings::*;
+pub use tutorial_api::*;
 pub use users::*;
 pub use worlds::*;
 
