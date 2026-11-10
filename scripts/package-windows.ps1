@@ -90,6 +90,12 @@ if (-not $candle -or -not $light -or -not $heat) {
   exit 0
 }
 
+$MsiVersion = ($Version -replace '[^0-9.]', '').TrimEnd('.')
+$MsiParts = @($MsiVersion.Split('.') | Where-Object { $_ -ne '' })
+while ($MsiParts.Count -lt 3) { $MsiParts += '0' }
+if ($MsiParts.Count -lt 4) { $MsiParts += '0' }
+$MsiVersion = ($MsiParts[0..3] -join '.')
+Write-Host "==> msi version=$MsiVersion (from $Version)"
 $WixOut = Join-Path $Out "wix"
 New-Item -ItemType Directory -Force -Path $WixOut | Out-Null
 $WebHarvest = Join-Path $WixOut "WebComponents.wxs"
@@ -100,7 +106,7 @@ $MainWixobj = Join-Path $WixOut "Cocktail.wixobj"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & candle.exe -nologo `
-  "-dProductVersion=$Version" `
+  "-dProductVersion=$MsiVersion" `
   "-dStageDir=$Stage" `
   "-dWebDir=$(Join-Path $Stage 'web')" `
   "packaging\windows\Cocktail.wxs" `

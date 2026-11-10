@@ -74,16 +74,7 @@
           KeyPath="yes"
           Checksum="yes" />
       </Component>
-      <Component Id="DataFolder" Guid="F1E2D3C4-B5A6-9780-1234-567890ABCDEF" Directory="CocktailDataRoot">
-        <CreateFolder />
-        <RegistryValue
-          Root="HKLM"
-          Key="Software\Cocktail\Manager"
-          Name="data"
-          Type="string"
-          Value="[CocktailDataRoot]"
-          KeyPath="yes" />
-      </Component>
+
       <Component Id="EnvExample" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
         <File
           Id="CocktailEnv"
@@ -108,6 +99,20 @@
           Name="installed"
           Type="integer"
           Value="1"
+          KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+  <Fragment>
+    <DirectoryRef Id="CocktailDataRoot">
+      <Component Id="DataFolder" Guid="F1E2D3C4-B5A6-9780-1234-567890ABCDEF">
+        <CreateFolder />
+        <RegistryValue
+          Root="HKLM"
+          Key="Software\Cocktail\Manager"
+          Name="data"
+          Type="string"
+          Value="[CocktailDataRoot]"
           KeyPath="yes" />
       </Component>
     </DirectoryRef>

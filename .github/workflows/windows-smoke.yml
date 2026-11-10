@@ -61,6 +61,12 @@ jobs:
         run: |
           ./scripts/package-windows.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Report msi
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem dist/*.msi -ErrorAction SilentlyContinue
+          if ($msi) { Write-Host "msi: $($msi.Name)" }
+          else { Write-Host "msi skipped (WiX not installed on runner)" }
       - name: Assert zip payload
         shell: pwsh
         run: |
