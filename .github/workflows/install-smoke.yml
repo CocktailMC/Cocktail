@@ -1,0 +1,140 @@
+name: Install smoke
+
+on:
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "scripts/package_linux.py"
+      - "crates/cocktail-init/**"
+      - "crates/cocktail-control/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/install-smoke.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: install-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build DEB
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build binaries
+        run: |
+          set -eu
+          cargo build --release \
+            -p cocktail-control -p cocktail-init \
+            --bin cocktail-control --bin cocktail-init
+          ls -lh target/release/cocktail-control target/release/cocktail-init
+      - name: Build web UI
+        working-directory: admin
+        run: |
+          npm ci
+          npm run build
+      - name: Build deb and rpm
+        run: python3 scripts/package_linux.py --skip-build
+      - name: Assert payload contains init
+        run: |
+          set -eu
+          deb=$(ls dist/cocktail_*.deb | head -1)
+          echo "package: $deb"
+          dpkg-deb -c "$deb" | grep -E 'usr/bin/cocktail-(control|init)' || {
+            echo "cocktail-init missing from package payload" >&2
+            exit 1
+          }
+          dpkg-deb -c "$deb" | grep -q 'usr/share/cocktail/web/index.html' || {
+            echo "web UI missing from package payload" >&2
+            exit 1
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-package
+          path: dist/*.deb
+          retention-days: 3
+
+  verify:
+    name: Install and run
+    runs-on: ubuntu-latest
+    needs: [package]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb-package
+          path: pkgs
+      - name: Install package
+        run: |
+          set -eu
+          deb=$(ls pkgs/*.deb | head -1)
+          sudo dpkg -i --force-depends "$deb" || sudo apt-get -f install -y
+          test -x /usr/bin/cocktail-control
+          test -x /usr/bin/cocktail-init
+          echo "both binaries present"
+      - name: Systemd unit present
+        run: |
+          set -eu
+          test -f /lib/systemd/system/cocktail-control.service
+          grep -q 'ExecStart=/usr/bin/cocktail-control' /lib/systemd/system/cocktail-control.service
+          echo "unit looks sane"
+      - name: Start service and probe
+        run: |
+          set -eu
+          sudo mkdir -p /var/lib/cocktail/data
+          sudo chown -R "$(id -u):$(id -g)" /var/lib/cocktail
+          cd /var/lib/cocktail
+          COCKTAIL_DATA_DIR=/var/lib/cocktail nohup /usr/bin/cocktail-control > /tmp/control.log 2>&1 &
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:11011/api/v1/health >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          echo "--- health ---"
+          curl -sf http://127.0.0.1:11011/api/v1/health
+          echo
+          echo "--- security headers ---"
+          curl -sI http://127.0.0.1:11011/api/v1/health | grep -iE 'content-security|x-frame|x-content' || true
+          echo "--- setup is reachable ---"
+          curl -s -o /dev/null -w 'setup=%{http_code}\n' -X POST http://127.0.0.1:11011/api/v1/setup \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"smoke","password":"Sm0ke-Test-Pass"}'
+          echo "--- web ui served ---"
+          curl -s -o /dev/null -w 'index=%{http_code}\n' http://127.0.0.1:11011/
+          pkill -f cocktail-control || true
+      - name: Dump log
+        if: always()
+        run: tail -60 /tmp/control.log || true
+
+  uninstall:
+    name: Uninstall cleanly
+    runs-on: ubuntu-latest
+    needs: [verify]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb-package
+          path: pkgs
+      - name: Purge package
+        run: |
+          set -eu
+          deb=$(ls pkgs/*.deb | head -1)
+          sudo dpkg -i --force-depends "$deb" || true
+          sudo dpkg -P cocktail || true
+          if command -v dpkg -s >/dev/null 2>&1 && dpkg -s cocktail >/dev/null 2>&1; then
+            echo "package still installed after purge" >&2
+            exit 1
+          fi
+          echo "purge ok"
