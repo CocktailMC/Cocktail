@@ -29,12 +29,16 @@ impl CocktailVersion {
     pub fn parse(raw: &str) -> Option<Self> {
         let text = raw.trim();
         let text = text.strip_prefix('v').unwrap_or(text);
-        let (body, build) = match text.split_once('+') {
+        let (with_build, build) = match text.split_once('+') {
             Some((b, n)) => {
                 let clean = n.trim_start_matches('B').trim_start_matches('b');
                 (b, clean.parse::<u32>().unwrap_or(0))
             }
             None => (text, 0),
+        };
+        let (body, suffix) = match with_build.split_once('-') {
+            Some((h, s)) => (h, Some(s)),
+            None => (with_build, None),
         };
         let parts: Vec<&str> = body.split('.').collect();
         if parts.len() < 2 {
@@ -54,7 +58,7 @@ impl CocktailVersion {
         };
         let major = parts.get(major_idx)?.parse::<u32>().ok()?;
         let stage_idx = major_idx + 1;
-        let stage_raw = parts.get(stage_idx).copied().unwrap_or("DT");
+        let stage_raw = parts.get(stage_idx).copied().or(suffix).unwrap_or("DT");
         let stage = stage_raw.to_ascii_uppercase();
         Some(Self {
             year,
