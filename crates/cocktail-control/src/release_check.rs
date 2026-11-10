@@ -41,17 +41,20 @@ impl CocktailVersion {
             return None;
         }
         let head = parts[0];
-        let (year, quarter) = if let Some(qpos) = head.find(['Q', 'q']) {
+        let compact = head.find(['Q', 'q']).is_some();
+        let (year, quarter, major_idx) = if compact {
+            let qpos = head.find(['Q', 'q'])?;
             let year = head[..qpos].parse::<u32>().ok()?;
             let quarter = head[qpos + 1..].parse::<u32>().ok()?;
-            (year, quarter)
+            (year, quarter, 1)
         } else {
-            let major = head.parse::<u32>().ok()?;
+            let year = head.parse::<u32>().ok()?;
             let quarter = parts.get(1)?.parse::<u32>().ok()?;
-            (major, quarter)
+            (year, quarter, 2)
         };
-        let major = parts.get(1)?.parse::<u32>().ok()?;
-        let stage_raw = parts.get(2).copied().unwrap_or("DT");
+        let major = parts.get(major_idx)?.parse::<u32>().ok()?;
+        let stage_idx = major_idx + 1;
+        let stage_raw = parts.get(stage_idx).copied().unwrap_or("DT");
         let stage = stage_raw.to_ascii_uppercase();
         Some(Self {
             year,
