@@ -1,12 +1,11 @@
+use crate::api::handlers::{ErrorBody, bad_request, bearer_from_headers, current_admin, db_conn};
+use crate::state::SharedState;
+use crate::util;
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
-
-use crate::api::handlers::{ErrorBody, bad_request, bearer_from_headers, current_admin};
-use crate::state::SharedState;
-use crate::util;
 
 #[derive(Deserialize)]
 pub struct SetupRequest {
@@ -92,7 +91,10 @@ pub async fn setup(
         Err(e) => return bad_request(e.to_string()).into_response(),
     };
 
-    let conn = state.db.get().expect("db pool");
+    let conn = match db_conn(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp.into_response(),
+    };
     match crate::auth::setup_required(&conn) {
         Ok(true) => {}
         Ok(false) => {
@@ -146,7 +148,10 @@ pub async fn login(
     let peer = connect_info.0.ip().to_string();
     let rate_key = format!("{peer}|{}", username.to_ascii_lowercase());
 
-    let conn = state.db.get().expect("db pool");
+    let conn = match db_conn(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp.into_response(),
+    };
     if crate::auth::setup_required(&conn).unwrap_or(true) {
         return (
             StatusCode::FORBIDDEN,
@@ -247,7 +252,9 @@ pub async fn login(
 
 pub async fn logout(State(state): State<SharedState>, headers: HeaderMap) -> impl IntoResponse {
     if let Some(token) = bearer_from_headers(&headers) {
-        let conn = state.db.get().expect("db pool");
+        let Ok(conn) = db_conn(&state) else {
+            return StatusCode::SERVICE_UNAVAILABLE;
+        };
         let _ = crate::db::delete_session(&conn, &token);
     }
     StatusCode::NO_CONTENT
@@ -258,7 +265,10 @@ pub async fn me(State(state): State<SharedState>, headers: HeaderMap) -> Respons
         Ok(a) => a,
         Err(resp) => return resp.into_response(),
     };
-    let conn = state.db.get().expect("db pool");
+    let conn = match db_conn(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp.into_response(),
+    };
     let panel_name = panel_name_of(&conn);
     Json(MeResponse {
         username: admin.username.clone(),
@@ -285,7 +295,10 @@ pub async fn change_password(
         Ok(a) => a,
         Err(resp) => return resp.into_response(),
     };
-    let conn = state.db.get().expect("db pool");
+    let conn = match db_conn(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp.into_response(),
+    };
     if !crate::auth::verify_password(&body.current_password, &admin.password_hash) {
         return (
             StatusCode::UNAUTHORIZED,
@@ -337,7 +350,7 @@ pub async fn totp_setup(
             }),
         )
     })?;
-    let conn = state.db.get().expect("db pool");
+    let conn = db_conn(&state)?;
     let admin = if state
         .env_api_token
         .as_ref()
@@ -382,7 +395,7 @@ pub async fn totp_verify(
             }),
         )
     })?;
-    let conn = state.db.get().expect("db pool");
+    let conn = db_conn(&state)?;
     let admin = if state
         .env_api_token
         .as_ref()
@@ -431,7 +444,7 @@ pub async fn totp_status(
             }),
         )
     })?;
-    let conn = state.db.get().expect("db pool");
+    let conn = db_conn(&state)?;
     let admin = if state
         .env_api_token
         .as_ref()
@@ -466,7 +479,7 @@ pub async fn totp_disable(
             }),
         )
     })?;
-    let conn = state.db.get().expect("db pool");
+    let conn = db_conn(&state)?;
     let admin = if state
         .env_api_token
         .as_ref()

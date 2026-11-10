@@ -1,13 +1,12 @@
+use super::model::PlayerInfo;
+use crate::db;
+use crate::db::TryConn;
+use crate::state::AppState;
+use chrono::{DateTime, Utc};
+use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
-
-use chrono::{DateTime, Utc};
-use regex::Regex;
-
-use super::model::PlayerInfo;
-use crate::db;
-use crate::state::AppState;
 
 fn sessions() -> &'static Mutex<HashMap<String, DateTime<Utc>>> {
     static M: OnceLock<Mutex<HashMap<String, DateTime<Utc>>>> = OnceLock::new();
@@ -52,7 +51,9 @@ pub async fn ingest_line(state: &AppState, instance_id: &str, line: &str) {
     let ping = PING.get_or_init(|| Regex::new(r"(?i)(\S+)'s ping:\s*([0-9]+)").unwrap());
 
     let now = Utc::now().to_rfc3339();
-    let conn = state.db.get().expect("db pool");
+    let Ok(conn) = state.db.try_conn() else {
+        return;
+    };
 
     if let Some(c) = uuid.captures(line) {
         let _ = db::upsert_player(
@@ -154,8 +155,13 @@ pub async fn list_enriched(
     online_names: &[String],
 ) -> Vec<PlayerInfo> {
     let profiles = {
-        let conn = state.db.get().expect("db pool");
-        db::list_players(&conn, instance_id).unwrap_or_default()
+        match state.db.try_conn() {
+            Ok(conn) => db::list_players(&conn, instance_id).unwrap_or_default(),
+            Err(e) => {
+                tracing::warn!(error = %e, "player list: database pool unavailable");
+                Vec::new()
+            }
+        }
     };
     let mut by_name: HashMap<String, db::PlayerRow> = HashMap::new();
     for p in profiles {
@@ -206,8 +212,13 @@ pub async fn history(state: &AppState, instance_id: &str) -> Vec<PlayerInfo> {
             .unwrap_or_default()
     };
     let rows = {
-        let conn = state.db.get().expect("db pool");
-        db::list_players(&conn, instance_id).unwrap_or_default()
+        match state.db.try_conn() {
+            Ok(conn) => db::list_players(&conn, instance_id).unwrap_or_default(),
+            Err(e) => {
+                tracing::warn!(error = %e, "player history: database pool unavailable");
+                Vec::new()
+            }
+        }
     };
     rows.into_iter()
         .map(|r| {

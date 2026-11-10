@@ -1,11 +1,10 @@
+use crate::api::handlers::{ErrorBody, bad_request, db_conn};
+use crate::state::SharedState;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-
-use crate::api::handlers::{ErrorBody, bad_request};
-use crate::state::SharedState;
 
 #[derive(Deserialize)]
 pub struct AutoListQuery {
@@ -19,10 +18,13 @@ pub async fn list_panel_events(State(state): State<SharedState>) -> impl IntoRes
 pub async fn list_automations(
     State(state): State<SharedState>,
     Query(q): Query<AutoListQuery>,
-) -> impl IntoResponse {
-    let conn = state.db.get().expect("db pool");
+) -> Response {
+    let conn = match db_conn(&state) {
+        Ok(c) => c,
+        Err(resp) => return resp.into_response(),
+    };
     let rows = crate::db::list_automations(&conn, q.instance_id.as_deref()).unwrap_or_default();
-    Json(rows)
+    Json(rows).into_response()
 }
 
 pub async fn create_automation(
@@ -39,7 +41,7 @@ pub async fn delete_automation(
     State(state): State<SharedState>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
-    let conn = state.db.get().expect("db pool");
+    let conn = db_conn(&state)?;
     crate::db::delete_automation(&conn, &id).map_err(|e| bad_request(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -1,13 +1,12 @@
+use crate::api::handlers::{ErrorBody, bad_request, db_conn, map_result, not_found};
+use crate::instance::{self, InstanceStatus, PlayerActionRequest, PlayerInfo};
+use crate::state::SharedState;
+use crate::util;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
-
-use crate::api::handlers::{ErrorBody, bad_request, map_result, not_found};
-use crate::instance::{self, InstanceStatus, PlayerActionRequest, PlayerInfo};
-use crate::state::SharedState;
-use crate::util;
 
 #[derive(Deserialize)]
 pub struct PlayersQuery {
@@ -60,7 +59,7 @@ pub async fn player_detail(
     let workdir = view.spec.workdir.clone();
     let player_name = name.clone();
     let detail = tokio::task::spawn_blocking(move || -> anyhow::Result<PlayerDetailResponse> {
-        let conn = state.db.get().expect("db pool");
+        let conn = db_conn(&state).map_err(|_| anyhow::anyhow!("database pool unavailable"))?;
         let rows = crate::db::list_players(&conn, &id)?;
         drop(conn);
         let info = rows

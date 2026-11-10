@@ -1,13 +1,12 @@
-use std::net::IpAddr;
-use std::process::{Command, Stdio};
-
-use chrono::{Duration, Utc};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
 use crate::db::NetopsRule;
+use crate::db::TryConn;
 use crate::instance::CommandRequest;
 use crate::state::AppState;
+use chrono::{Duration, Utc};
+use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
+use std::process::{Command, Stdio};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NetopsStatus {
@@ -86,8 +85,13 @@ pub async fn status(state: &AppState) -> NetopsStatus {
     .unwrap_or((false, false, false, false, false));
     let game_ports = game_ports(state).await;
     let rules = {
-        let conn = state.db.get().expect("db pool");
-        crate::db::list_netops(&conn).unwrap_or_default()
+        match state.db.try_conn() {
+            Ok(conn) => crate::db::list_netops(&conn).unwrap_or_default(),
+            Err(e) => {
+                tracing::warn!(error = %e, "netops status: database pool unavailable");
+                Vec::new()
+            }
+        }
     };
     let backend = if cfg!(windows) {
         if privileged { "netsh" } else { "none" }
@@ -207,19 +211,19 @@ pub async fn create(state: &AppState, req: CreateNetopsRequest) -> anyhow::Resul
 
     if req.firewall {
         {
-            let conn = state.db.get().expect("db pool");
+            let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
             crate::db::insert_netops(&conn, &rule)?;
         }
         if let Err(e) = apply_all(state).await {
             tracing::warn!(error = %e, "netops firewall apply");
         }
-        let conn = state.db.get().expect("db pool");
+        let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
         rule = crate::db::list_netops(&conn)?
             .into_iter()
             .find(|r| r.id == rule.id)
             .unwrap_or(rule);
     } else if req.game_ban {
-        let conn = state.db.get().expect("db pool");
+        let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
         crate::db::insert_netops(&conn, &rule)?;
     }
 
@@ -240,7 +244,7 @@ pub async fn create(state: &AppState, req: CreateNetopsRequest) -> anyhow::Resul
 
 pub async fn delete(state: &AppState, id: &str) -> anyhow::Result<()> {
     let rule = {
-        let conn = state.db.get().expect("db pool");
+        let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
         crate::db::delete_netops(&conn, id)?
     };
     let Some(rule) = rule else {
@@ -293,7 +297,7 @@ pub async fn try_apply(state: &AppState) -> anyhow::Result<()> {
 
 pub async fn expire_now(state: &AppState) -> anyhow::Result<bool> {
     let n = {
-        let conn = state.db.get().expect("db pool");
+        let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
         crate::db::expire_netops(&conn, &Utc::now().to_rfc3339())?
     };
     if n > 0 {
@@ -305,7 +309,7 @@ pub async fn expire_now(state: &AppState) -> anyhow::Result<bool> {
 
 async fn apply_all(state: &AppState) -> anyhow::Result<()> {
     let rules = {
-        let conn = state.db.get().expect("db pool");
+        let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
         crate::db::list_netops(&conn)?
     };
     let ports_all = game_ports(state).await;
@@ -321,7 +325,7 @@ async fn apply_all(state: &AppState) -> anyhow::Result<()> {
     let result = tokio::task::spawn_blocking(move || apply_firewall(&expanded))
         .await
         .unwrap_or_else(|e| Err(anyhow::anyhow!(e.to_string())));
-    let conn = state.db.get().expect("db pool");
+    let conn = state.db.try_conn().map_err(anyhow::Error::from)?;
     match result {
         Ok(()) => crate::db::mark_netops_applied(&conn, true, None)?,
         Err(e) => {

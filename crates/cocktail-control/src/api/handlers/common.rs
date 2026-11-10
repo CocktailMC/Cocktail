@@ -1,12 +1,32 @@
+use crate::db::TryConn;
+use crate::state::SharedState;
 use axum::Json;
 use axum::http::{HeaderMap, StatusCode, header};
 use serde::Serialize;
 
-use crate::state::SharedState;
+pub type ApiError = (StatusCode, Json<ErrorBody>);
+
+pub type DbConn = r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>;
 
 #[derive(Serialize)]
 pub struct ErrorBody {
     pub error: String,
+}
+
+pub fn db_unavailable(detail: &str) -> ApiError {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorBody {
+            error: format!("数据库暂时不可用: {detail}"),
+        }),
+    )
+}
+
+pub fn db_conn(state: &SharedState) -> Result<DbConn, ApiError> {
+    state.db.try_conn().map_err(|e| {
+        tracing::warn!(error = %e, "database pool unavailable");
+        db_unavailable(&e.detail)
+    })
 }
 
 pub fn bearer_from_headers(headers: &HeaderMap) -> Option<String> {
@@ -29,7 +49,7 @@ pub async fn current_admin(
             }),
         )
     })?;
-    let conn = state.db.get().expect("db pool");
+    let conn = db_conn(&state)?;
     if state
         .env_api_token
         .as_ref()

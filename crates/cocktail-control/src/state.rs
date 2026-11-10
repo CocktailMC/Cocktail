@@ -1,17 +1,16 @@
+use crate::automations::PanelEvent;
+use crate::db;
+use crate::db::TryConn;
+use crate::instance::{self, Instance, InstanceEvent, LogLine, Schedule};
+use crate::ops::OpsRuntime;
+use crate::proto::AgentDown;
+use axum::Router;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
-
-use axum::Router;
-use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc};
-
-use crate::automations::PanelEvent;
-use crate::db;
-use crate::instance::{self, Instance, InstanceEvent, LogLine, Schedule};
-use crate::ops::OpsRuntime;
-use crate::proto::AgentDown;
 
 pub type SharedState = Arc<AppState>;
 
@@ -69,7 +68,9 @@ impl AppState {
         crate::http::attach_events(events.clone());
         let db = db::pool().expect("open sqlite database (data/cocktail.db)");
         let (instances, schedules, setup_pending) = {
-            let conn = db.get().expect("db pool");
+            let conn = db
+                .get()
+                .expect("启动时无法获取数据库连接：检查 data/ 目录权限与磁盘空间");
             if let Err(e) = db::ensure_local_node(&conn) {
                 tracing::warn!(error = %e, "ensure local node");
             }
@@ -125,7 +126,7 @@ impl AppState {
     }
 
     pub async fn effective_webhook(&self) -> Option<String> {
-        let conn = self.db.get().expect("db pool");
+        let conn = self.db.try_conn().ok()?;
         let row = db::panel(&conn).ok();
         drop(conn);
         if let Some(url) = row.and_then(|r| r.webhook_url).filter(|s| !s.is_empty()) {
@@ -146,7 +147,9 @@ impl AppState {
         {
             return true;
         }
-        let conn = self.db.get().expect("db pool");
+        let Ok(conn) = self.db.try_conn() else {
+            return false;
+        };
         db::session_lookup(&conn, token).ok().flatten().is_some()
     }
 
@@ -159,13 +162,17 @@ impl AppState {
         let plugin_match = !self.plugin_token.is_empty()
             && crate::crypto::ct_eq(self.plugin_token.as_bytes(), token.as_bytes());
         if env_match || plugin_match {
-            let conn = self.db.get().expect("db pool");
+            let Ok(conn) = self.db.try_conn() else {
+                return None;
+            };
             return db::superadmin(&conn)
                 .ok()
                 .flatten()
                 .map(|a| (a.role, String::new()));
         }
-        let conn = self.db.get().expect("db pool");
+        let Ok(conn) = self.db.try_conn() else {
+            return None;
+        };
         db::session_lookup(&conn, token)
             .ok()
             .flatten()
@@ -173,7 +180,10 @@ impl AppState {
     }
 
     pub async fn purge_sessions(&self) {
-        let conn = self.db.get().expect("db pool");
+        let Ok(conn) = self.db.try_conn() else {
+            tracing::warn!("session purge skipped: database pool unavailable");
+            return;
+        };
         let _ = db::purge_expired_sessions(&conn);
     }
 
@@ -239,7 +249,7 @@ impl AppState {
         let schedules = self.schedules.read().await.clone();
 
         {
-            let conn = self.db.get().expect("db pool");
+            let conn = self.db.try_conn().map_err(anyhow::Error::from)?;
             db::replace_instances(&conn, &instances)?;
         }
 
