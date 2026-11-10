@@ -102,7 +102,7 @@ $WebHarvest = Join-Path $WixOut "WebComponents.wxs"
 $WebWixobj = Join-Path $WixOut "WebComponents.wixobj"
 $MainWixobj = Join-Path $WixOut "Cocktail.wixobj"
 
-& heat.exe dir (Join-Path $Stage "web") -cg WebComponents -gg -sfrag -srd -dr WebFolder -var var.WebDir -out $WebHarvest
+& heat.exe dir (Join-Path $Stage "web") -cg WebComponents -gg -sfrag -srd -dr WebFolder -var var.WebDir -platform x64 -out $WebHarvest
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & candle.exe -nologo `
@@ -115,7 +115,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $Msi = Join-Path $Out "cocktail-$Version-windows-x64.msi"
-& light.exe -nologo -ext WixUIExtension `
+& light.exe -nologo -ext WixUIExtension -sice:ICE80 `
   (Join-Path $WixOut "Cocktail.wixobj") `
   $WebWixobj `
   -o $Msi
