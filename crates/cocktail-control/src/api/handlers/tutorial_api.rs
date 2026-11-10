@@ -62,9 +62,7 @@ fn user_progress(user: &str) -> BTreeMap<String, Progress> {
         .unwrap_or_default()
 }
 
-pub async fn list_tutorials(
-    Query(q): Query<ListQuery>,
-) -> Json<ListResponse> {
+pub async fn list_tutorials(Query(q): Query<ListQuery>) -> Json<ListResponse> {
     let cat = catalog();
     let views = if let Some(needle) = q.q.as_deref() {
         let hits = cat.search(needle);
@@ -87,9 +85,7 @@ pub async fn list_tutorials(
     })
 }
 
-pub async fn my_tutorials(
-    State(_state): State<SharedState>,
-) -> Json<ListResponse> {
+pub async fn my_tutorials(State(_state): State<SharedState>) -> Json<ListResponse> {
     let cat = catalog();
     let progress = user_progress("local");
     let views = build_views(&cat, &progress);

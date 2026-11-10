@@ -29,9 +29,9 @@ impl VideoSource {
             VideoSource::Local { path } => Some(path.clone()),
             VideoSource::External { url, .. } => Some(url.clone()),
             VideoSource::Youtube { id } => Some(format!("https://www.youtube.com/embed/{id}")),
-            VideoSource::Bilibili { bvid } => {
-                Some(format!("https://player.bilibili.com/player.html?bvid={bvid}"))
-            }
+            VideoSource::Bilibili { bvid } => Some(format!(
+                "https://player.bilibili.com/player.html?bvid={bvid}"
+            )),
         }
     }
 
@@ -61,8 +61,7 @@ impl VideoSource {
                         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
             }
             VideoSource::Bilibili { bvid } => {
-                bvid.starts_with("BV")
-                    && bvid.chars().all(|c| c.is_ascii_alphanumeric())
+                bvid.starts_with("BV") && bvid.chars().all(|c| c.is_ascii_alphanumeric())
             }
         }
     }
@@ -242,10 +241,7 @@ impl Catalog {
     }
 }
 
-pub fn build_views(
-    catalog: &Catalog,
-    progress: &BTreeMap<String, Progress>,
-) -> Vec<TutorialView> {
+pub fn build_views(catalog: &Catalog, progress: &BTreeMap<String, Progress>) -> Vec<TutorialView> {
     let mut out: Vec<TutorialView> = catalog
         .tutorials
         .iter()
@@ -285,10 +281,7 @@ pub fn summarize(views: &[TutorialView]) -> WatchSummary {
         return WatchSummary::default();
     }
     let completed = views.iter().filter(|v| v.completed).count();
-    let next = views
-        .iter()
-        .find(|v| !v.completed)
-        .map(|v| v.id.clone());
+    let next = views.iter().find(|v| !v.completed).map(|v| v.id.clone());
     WatchSummary {
         total: views.len(),
         completed,
@@ -341,34 +334,56 @@ mod tests {
 
     #[test]
     fn video_source_safety_checks() {
-        assert!(VideoSource::Local {
-            path: "/tutorials/a.mp4".into()
-        }
-        .is_safe());
-        assert!(!VideoSource::Local {
-            path: "/tutorials/../../etc/passwd".into()
-        }
-        .is_safe());
-        assert!(VideoSource::External {
-            url: "https://cdn.example/a.mp4".into(),
-            poster: None
-        }
-        .is_safe());
-        assert!(!VideoSource::External {
-            url: "http://insecure/a.mp4".into(),
-            poster: None
-        }
-        .is_safe());
-        assert!(VideoSource::Youtube { id: "dQw4w9WgXcQ".into() }.is_safe());
-        assert!(!VideoSource::Youtube { id: "../bad".into() }.is_safe());
-        assert!(VideoSource::Bilibili {
-            bvid: "BV1xx411c7mD".into()
-        }
-        .is_safe());
-        assert!(!VideoSource::Bilibili {
-            bvid: "notbvid".into()
-        }
-        .is_safe());
+        assert!(
+            VideoSource::Local {
+                path: "/tutorials/a.mp4".into()
+            }
+            .is_safe()
+        );
+        assert!(
+            !VideoSource::Local {
+                path: "/tutorials/../../etc/passwd".into()
+            }
+            .is_safe()
+        );
+        assert!(
+            VideoSource::External {
+                url: "https://cdn.example/a.mp4".into(),
+                poster: None
+            }
+            .is_safe()
+        );
+        assert!(
+            !VideoSource::External {
+                url: "http://insecure/a.mp4".into(),
+                poster: None
+            }
+            .is_safe()
+        );
+        assert!(
+            VideoSource::Youtube {
+                id: "dQw4w9WgXcQ".into()
+            }
+            .is_safe()
+        );
+        assert!(
+            !VideoSource::Youtube {
+                id: "../bad".into()
+            }
+            .is_safe()
+        );
+        assert!(
+            VideoSource::Bilibili {
+                bvid: "BV1xx411c7mD".into()
+            }
+            .is_safe()
+        );
+        assert!(
+            !VideoSource::Bilibili {
+                bvid: "notbvid".into()
+            }
+            .is_safe()
+        );
     }
 
     #[test]

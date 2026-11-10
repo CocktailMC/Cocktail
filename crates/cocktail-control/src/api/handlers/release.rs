@@ -71,8 +71,8 @@ async fn fetch_releases(force: bool) -> anyhow::Result<Vec<ReleaseInfo>> {
         anyhow::bail!("发布接口返回 {}", resp.status());
     }
     let text = resp.text().await?;
-    let list = release_check::parse_releases(&text)
-        .ok_or_else(|| anyhow::anyhow!("发布清单解析失败"))?;
+    let list =
+        release_check::parse_releases(&text).ok_or_else(|| anyhow::anyhow!("发布清单解析失败"))?;
     cache().store(list.clone());
     Ok(list)
 }
@@ -138,7 +138,8 @@ pub async fn update_assets() -> (StatusCode, Json<AssetsResponse>) {
     ];
     match fetch_releases(false).await {
         Ok(list) => {
-            let picked = release_check::newest(&list, false).or_else(|| release_check::newest(&list, true));
+            let picked =
+                release_check::newest(&list, false).or_else(|| release_check::newest(&list, true));
             match picked {
                 Some((rel, _)) => {
                     let picks = platforms

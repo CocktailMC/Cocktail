@@ -64,8 +64,19 @@ impl CocktailVersion {
     }
 
     pub fn is_newer_than(&self, other: &Self) -> bool {
-        (self.year, self.quarter, self.major, self.stage_rank, self.build)
-            > (other.year, other.quarter, other.major, other.stage_rank, other.build)
+        (
+            self.year,
+            self.quarter,
+            self.major,
+            self.stage_rank,
+            self.build,
+        ) > (
+            other.year,
+            other.quarter,
+            other.major,
+            other.stage_rank,
+            other.build,
+        )
     }
 
     pub fn is_stable(&self) -> bool {
@@ -73,7 +84,10 @@ impl CocktailVersion {
     }
 
     pub fn display(&self) -> String {
-        let base = format!("{}Q{}.{}.{}", self.year, self.quarter, self.major, self.stage);
+        let base = format!(
+            "{}Q{}.{}.{}",
+            self.year, self.quarter, self.major, self.stage
+        );
         if self.build > 0 {
             format!("{base}+B{}", self.build)
         } else {
@@ -273,7 +287,10 @@ pub fn parse_releases(json: &str) -> Option<Vec<ReleaseInfo>> {
     Some(out)
 }
 
-pub fn newest(releases: &[ReleaseInfo], include_prerelease: bool) -> Option<(&ReleaseInfo, CocktailVersion)> {
+pub fn newest(
+    releases: &[ReleaseInfo],
+    include_prerelease: bool,
+) -> Option<(&ReleaseInfo, CocktailVersion)> {
     let mut best: Option<(&ReleaseInfo, CocktailVersion)> = None;
     for rel in releases {
         if rel.prerelease && !include_prerelease {
@@ -474,12 +491,27 @@ mod tests {
             prerelease: false,
             html_url: String::new(),
             assets: vec![
-                ReleaseAsset { name: "cocktail_26Q4.11_amd64.deb".into(), size: 10, download_url: "https://x/deb".into() },
-                ReleaseAsset { name: "cocktail-26Q4.11-windows-x64.zip".into(), size: 20, download_url: "https://x/zip".into() },
-                ReleaseAsset { name: "cocktail-26Q4.11-windows-x64.msi".into(), size: 30, download_url: "https://x/msi".into() },
+                ReleaseAsset {
+                    name: "cocktail_26Q4.11_amd64.deb".into(),
+                    size: 10,
+                    download_url: "https://x/deb".into(),
+                },
+                ReleaseAsset {
+                    name: "cocktail-26Q4.11-windows-x64.zip".into(),
+                    size: 20,
+                    download_url: "https://x/zip".into(),
+                },
+                ReleaseAsset {
+                    name: "cocktail-26Q4.11-windows-x64.msi".into(),
+                    size: 30,
+                    download_url: "https://x/msi".into(),
+                },
             ],
         };
-        assert_eq!(pick_asset(&rel, "linux-x64-deb").download_url.as_deref(), Some("https://x/deb"));
+        assert_eq!(
+            pick_asset(&rel, "linux-x64-deb").download_url.as_deref(),
+            Some("https://x/deb")
+        );
         assert_eq!(pick_asset(&rel, "windows-x64-msi").size, 30);
         assert!(pick_asset(&rel, "linux-arm64-deb").asset_name.is_none());
     }
