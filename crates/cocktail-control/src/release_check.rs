@@ -316,7 +316,7 @@ pub fn evaluate(
     let now = chrono::Utc::now().to_rfc3339();
     let current = CocktailVersion::parse(current_raw);
     let latest = newest(releases, include_prerelease);
-    match (current, latest) {
+    match (current, latest.clone()) {
         (Some(cur), Some((rel, ver))) => UpdateStatus {
             current: cur.display(),
             latest: Some(ver.display()),
@@ -329,7 +329,7 @@ pub fn evaluate(
         },
         (None, _) => UpdateStatus {
             current: current_raw.to_string(),
-            latest: latest.clone().map(|(_, v)| v.display()),
+            latest: latest.map(|(_, v)| v.display()),
             update_available: false,
             latest_is_stable: false,
             checked_at: now,
