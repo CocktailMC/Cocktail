@@ -329,7 +329,7 @@ pub fn evaluate(
         },
         (None, _) => UpdateStatus {
             current: current_raw.to_string(),
-            latest: latest.map(|(_, v)| v.display()),
+            latest: latest.clone().map(|(_, v)| v.display()),
             update_available: false,
             latest_is_stable: false,
             checked_at: now,
@@ -362,7 +362,7 @@ pub fn channel_filter(releases: &[ReleaseInfo], channel: &str) -> Vec<ReleaseInf
             .cloned()
             .collect(),
         "beta" => releases.to_vec(),
-        _ => releases.clone(),
+        _ => releases.to_vec(),
     }
 }
 
