@@ -37,6 +37,9 @@ jobs:
       - name: Run e2e
         run: bash scripts/e2e_verify.sh
 
+      - name: Run rbac matrix
+        run: bash scripts/rbac_matrix.sh
+
       - name: Collect logs
         if: always()
         run: |
