@@ -13,6 +13,8 @@ pub struct BanQuery {
     pub instance: Option<String>,
     #[serde(default)]
     pub all: Option<bool>,
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -78,7 +80,7 @@ pub async fn list_bans(
                 }),
             )
         })?,
-        _ => db::list_bans(&conn, include_all).map_err(|e| {
+        _ => db::list_bans_limited(&conn, include_all, q.limit.unwrap_or(2000)).map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorBody {
@@ -216,6 +218,8 @@ pub struct TicketQuery {
     pub open: Option<bool>,
     #[serde(default)]
     pub player: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -230,15 +234,20 @@ pub async fn list_tickets(
     Query(q): Query<TicketQuery>,
 ) -> Result<Json<TicketList>, (StatusCode, Json<ErrorBody>)> {
     let conn = db_conn(&state)?;
-    let tickets =
-        db::list_tickets(&conn, q.open.unwrap_or(false), q.player.as_deref()).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorBody {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
+    let tickets = db::list_tickets_limited(
+        &conn,
+        q.open.unwrap_or(false),
+        q.player.as_deref(),
+        q.limit.unwrap_or(500),
+    )
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorBody {
+                error: e.to_string(),
+            }),
+        )
+    })?;
     let open = tickets
         .iter()
         .filter(|t| matches!(t.state.as_str(), "open" | "claimed"))

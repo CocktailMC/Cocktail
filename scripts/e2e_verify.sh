@@ -774,6 +774,54 @@ else
 fi
 
 echo
+echo '===== 21c. 列表分页与性能保护 ====='
+
+SC=$(code_with "$LOG/p1.json" -H "$AUTH" "$BASE/api/v1/tickets?limit=10")
+check_eq '工单 limit=10 可用' '200' "$SC"
+T1=$(python3 -c "import json;print(len(json.load(open('$LOG/p1.json')).get('tickets',[])))" 2>/dev/null)
+if [ "${T1:-999}" -le 10 ]; then
+  ok "工单 limit 生效（返回 $T1 项）"
+else
+  bad '工单 limit 生效' "got=$T1"
+fi
+
+SC=$(code -H "$AUTH" "$BASE/api/v1/tickets?limit=99999")
+if [ "$SC" = '200' ] || [ "$SC" = '400' ]; then
+  ok '工单超大 limit 被限制或拒绝'
+else
+  bad '工单超大 limit 被限制或拒绝' "got=$SC"
+fi
+
+SC=$(code -H "$AUTH" "$BASE/api/v1/tickets?limit=0")
+if [ "$SC" = '200' ] || [ "$SC" = '400' ]; then
+  ok '工单 limit=0 有处理'
+else
+  bad '工单 limit=0 有处理' "got=$SC"
+fi
+
+SC=$(code_with "$LOG/p2.json" -H "$AUTH" "$BASE/api/v1/bans?all=true&limit=5")
+check_eq '封禁 limit=5 可用' '200' "$SC"
+B1=$(python3 -c "import json;print(len(json.load(open('$LOG/p2.json')).get('bans',[])))" 2>/dev/null)
+if [ "${B1:-999}" -le 5 ]; then
+  ok "封禁 limit 生效（返回 $B1 项）"
+else
+  bad '封禁 limit 生效' "got=$B1"
+fi
+
+SC=$(code -H "$AUTH" "$BASE/api/v1/bans?all=true&limit=99999")
+if [ "$SC" = '200' ] || [ "$SC" = '400' ]; then
+  ok '封禁超大 limit 被限制或拒绝'
+else
+  bad '封禁超大 limit 被限制或拒绝' "got=$SC"
+fi
+
+SC=$(code -H "$AUTH" "$BASE/api/v1/player-actions?limit=1")
+check_eq '行为记录 limit=1 可用' '200' "$SC"
+
+SC=$(code -H "$AUTH" "$BASE/api/v1/leaderboard?limit=1")
+check_eq '排行榜 limit=1 可用' '200' "$SC"
+
+echo
 echo '===== 18. 数据库不可用降级 ====='
 
 DB_FILE="$WORK/data/control.db"

@@ -1424,10 +1424,21 @@ const BAN_COLS: &str =
     "id, target, target_kind, reason, banned_by, banned_at, expires_at, instances, active, source";
 
 pub fn list_bans(conn: &Connection, include_inactive: bool) -> anyhow::Result<Vec<BanRow>> {
+    list_bans_limited(conn, include_inactive, 2000)
+}
+
+pub fn list_bans_limited(
+    conn: &Connection,
+    include_inactive: bool,
+    limit: usize,
+) -> anyhow::Result<Vec<BanRow>> {
+    let cap = limit.clamp(1, 5000);
     let sql = if include_inactive {
-        format!("SELECT {BAN_COLS} FROM global_bans ORDER BY banned_at DESC")
+        format!("SELECT {BAN_COLS} FROM global_bans ORDER BY banned_at DESC LIMIT {cap}")
     } else {
-        format!("SELECT {BAN_COLS} FROM global_bans WHERE active = 1 ORDER BY banned_at DESC")
+        format!(
+            "SELECT {BAN_COLS} FROM global_bans WHERE active = 1 ORDER BY banned_at DESC LIMIT {cap}"
+        )
     };
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], map_ban)?;
@@ -1534,6 +1545,16 @@ pub fn list_tickets(
     open_only: bool,
     player: Option<&str>,
 ) -> anyhow::Result<Vec<TicketRow>> {
+    list_tickets_limited(conn, open_only, player, 500)
+}
+
+pub fn list_tickets_limited(
+    conn: &Connection,
+    open_only: bool,
+    player: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Vec<TicketRow>> {
+    let cap = limit.clamp(1, 2000);
     let mut sql = format!("SELECT {TICKET_COLS} FROM tickets WHERE 1 = 1");
     if open_only {
         sql.push_str(" AND state IN ('open', 'claimed')");
@@ -1541,7 +1562,7 @@ pub fn list_tickets(
     if player.is_some() {
         sql.push_str(" AND player = ?1");
     }
-    sql.push_str(" ORDER BY created_at DESC");
+    sql.push_str(&format!(" ORDER BY created_at DESC LIMIT {cap}"));
     let mut stmt = conn.prepare(&sql)?;
     let rows = match player {
         Some(p) => stmt.query_map(params![p], map_ticket)?.collect::<Vec<_>>(),

@@ -936,10 +936,11 @@ export const api = {
   playerProfile: (name: string) =>
     request<ProfileView>(`/api/v1/profiles/${encodeURIComponent(name)}`),
 
-  listBans: (opts?: { instance?: string; all?: boolean }) => {
+  listBans: (opts?: { instance?: string; all?: boolean; limit?: number }) => {
     const params = new URLSearchParams()
     if (opts?.instance) params.set('instance', opts.instance)
     if (opts?.all) params.set('all', 'true')
+    if (opts?.limit) params.set('limit', String(opts.limit))
     const q = params.toString()
     return request<{ bans: BanRow[]; active: number }>(
       `/api/v1/bans${q ? `?${q}` : ''}`,
@@ -959,10 +960,11 @@ export const api = {
     }),
   liftBan: (id: string) =>
     request<void>(`/api/v1/bans/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  listTickets: (opts?: { open?: boolean; player?: string }) => {
+  listTickets: (opts?: { open?: boolean; player?: string; limit?: number }) => {
     const params = new URLSearchParams()
     if (opts?.open) params.set('open', 'true')
     if (opts?.player) params.set('player', opts.player)
+    if (opts?.limit) params.set('limit', String(opts.limit))
     const q = params.toString()
     return request<{ tickets: TicketRow[]; open: number; total: number }>(
       `/api/v1/tickets${q ? `?${q}` : ''}`,
