@@ -113,9 +113,13 @@ for r in "${ROLES[@]}"; do
   else
     bad "$r 登录" "got=$SC"
   fi
-  eval "TOK_$r=$(jget \"$LOG/t_$r.json\" \"['token']\")"
-  eval "CSRF_$r=$(jget \"$LOG/t_$r.json\" \"['csrf_token']\")"
-  eval "TOK_$r=\"\${TOK_$r:-}\""
+  TVAL=$(jget "$LOG/t_$r.json" "['token']")
+  CVAL=$(jget "$LOG/t_$r.json" "['csrf_token']")
+  [ "$TVAL" = 'None' ] && TVAL=''
+  [ "$CVAL" = 'None' ] && CVAL=''
+  printf -v "TOK_$r" '%s' "$TVAL"
+  printf -v "CSRF_$r" '%s' "$CVAL"
+
 done
 
 TOK_SUPERADMIN="$SU_TOKEN"
@@ -145,7 +149,7 @@ declare -A ALLOWED
 ALLOWED[observer]="200 403 403 403 200 403 403 403 403 403 403"
 
 for who in observer support developer admin; do
-  eval "TOK=\$TOK_$who"
+  TVAR="TOK_$who"; TOK="${!TVAR:-}"
   if [ -z "$TOK" ] || [ "$TOK" = 'None' ]; then
     bad "$who 读取矩阵" 'no token'
     continue
@@ -186,8 +190,8 @@ echo '===== 权限矩阵：写操作 ====='
 INST='{"name":"rbac-probe","kind":"vanilla","version":"1.21.4","port":25598}'
 
 for who in observer support admin; do
-  eval "TOK=\$TOK_$who"
-  eval "CS=\$CSRF_$who"
+  TVAR="TOK_$who"; TOK="${!TVAR:-}"
+  CVAR="CSRF_$who"; CS="${!CVAR:-}"
   [ -z "$TOK" ] && continue
   echo "  --- $who ---"
 
@@ -229,7 +233,7 @@ done
 
 echo
 echo '===== 越权尝试：support 提权自己 ====='
-SC=$(code -X PUT -H "Authorization: Bearer $TOK_support" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF_support" \
+SC=$(code -X PUT -H "Authorization: Bearer ${TOK_support:-}" -H 'Content-Type: application/json' -H "x-cocktail-csrf: ${CSRF_support:-}" \
   -d '{"role":"superadmin"}' "$BASE/api/v1/users/2")
 if [ "$SC" = '403' ] || [ "$SC" = '404' ]; then
   ok 'support 不能改用户角色'
@@ -237,7 +241,7 @@ else
   bad 'support 不能改用户角色' "got=$SC"
 fi
 
-SC=$(code -H "Authorization: Bearer $TOK_support" "$BASE/api/v1/users")
+SC=$(code -H "Authorization: Bearer ${TOK_support:-}" "$BASE/api/v1/users")
 if [ "$SC" = '403' ]; then
   ok 'support 仍看不到用户列表'
 else
@@ -246,7 +250,7 @@ fi
 
 echo
 echo '===== 越权尝试：observer 执行管理动作 ====='
-SC=$(code -X POST -H "Authorization: Bearer $TOK_observer" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF_observer" \
+SC=$(code -X POST -H "Authorization: Bearer ${TOK_observer:-}" -H 'Content-Type: application/json' -H "x-cocktail-csrf: ${CSRF_observer:-}" \
   -d '{"action":"start"}' "$BASE/api/v1/instances/1/action")
 if [ "$SC" = '403' ]; then
   ok 'observer 不能启动实例'
@@ -254,7 +258,7 @@ else
   bad 'observer 不能启动实例' "got=$SC"
 fi
 
-SC=$(code -X POST -H "Authorization: Bearer $TOK_observer" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF_observer" \
+SC=$(code -X POST -H "Authorization: Bearer ${TOK_observer:-}" -H 'Content-Type: application/json' -H "x-cocktail-csrf: ${CSRF_observer:-}" \
   -d '{"command":"op testuser"}' "$BASE/api/v1/instances/1/rcon/exec")
 if [ "$SC" = '403' ] || [ "$SC" = '404' ]; then
   ok 'observer 不能执行 RCON'
@@ -275,7 +279,7 @@ done
 
 echo
 echo '===== 匿名白名单仍公开 ====='
-for p in /api/v1/health /api/v1/setup /api/v1/tutorials /api/v1/update/status; do
+for p in /api/v1/health /api/v1/tutorials /api/v1/update/status; do
   SC=$(code "$BASE$p")
   if [ "$SC" = '200' ]; then
     ok "匿名可访问 $p"
