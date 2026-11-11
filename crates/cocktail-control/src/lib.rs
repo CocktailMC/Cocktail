@@ -669,7 +669,7 @@ fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
             return if read { "files.read" } else { "files.write" };
         }
         if path.contains("/plugins") {
-            return if read { "view" } else { "plugins" };
+            return if read { "plugins.read" } else { "plugins" };
         }
         if path.contains("/modrinth")
             || path.contains("/hangar")
@@ -717,7 +717,7 @@ fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
             return "rcon";
         }
         if path.contains("/backups") || path.contains("/worlds") {
-            return if read { "view" } else { "backups" };
+            return if read { "backups.read" } else { "backups" };
         }
         if path.contains("/command") || path.contains("/logs") {
             return if read { "view" } else { "console" };

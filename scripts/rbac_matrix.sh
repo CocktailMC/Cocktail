@@ -280,11 +280,13 @@ read_expect() {
     observer)
       case "$path" in
         "$INST_LOGS"|"$INST_METRICS"|"$INST_PLAYERS") echo 200 ;;
+        "$INST_PLUGINS"|"$INST_BACKUPS"|"$INST_FILES") echo 403 ;;
         *) echo 403 ;;
       esac ;;
     support)
       case "$path" in
         "$INST_LOGS"|"$INST_METRICS"|"$INST_PLAYERS"|"$INST_BACKUPS") echo 200 ;;
+        "$INST_PLUGINS"|"$INST_FILES") echo 403 ;;
         *) echo 403 ;;
       esac ;;
     developer)
