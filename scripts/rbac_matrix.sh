@@ -159,12 +159,12 @@ for who in observer support developer admin; do
     case "$who" in
       observer)
         case "$p" in
-          "/api/v1/instances"|"/api/v1/settings") exp=200 ;;
+          "/api/v1/instances"|"/api/v1/settings"|"/api/v1/audit") exp=200 ;;
           *) exp=403 ;;
         esac ;;
       support)
         case "$p" in
-          "/api/v1/instances"|"/api/v1/settings"|"/api/v1/bans?all=true"|"/api/v1/tickets"|"/api/v1/player-actions"|"/api/v1/leaderboard") exp=200 ;;
+          "/api/v1/instances"|"/api/v1/settings"|"/api/v1/audit"|"/api/v1/bans?all=true"|"/api/v1/tickets"|"/api/v1/player-actions"|"/api/v1/leaderboard") exp=200 ;;
           *) exp=403 ;;
         esac ;;
       developer)
@@ -197,7 +197,7 @@ for who in observer support admin; do
   echo "  --- $who ---"
 
   SC=$(code -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CS" -d "$INST" "$BASE/api/v1/instances")
-  if [ "$who" = 'observer' ]; then
+  if [ "$who" = 'observer' ] || [ "$who" = 'support' ]; then
     expect "$who" 'POST /instances' 403 "$SC"
   else
     if [ "$SC" = '200' ] || [ "$SC" = '201' ]; then
@@ -246,7 +246,7 @@ fi
 echo
 echo '===== 越权尝试：observer 执行管理动作 ====='
 SC=$(code -X POST -H "Authorization: Bearer ${TOK_observer:-}" -H 'Content-Type: application/json' -H "x-cocktail-csrf: ${CSRF_observer:-}" \
-  -d '{"action":"start"}' "$BASE/api/v1/instances/1/action")
+  -d '{}' "$BASE/api/v1/instances/1/start")
 if [ "$SC" = '403' ] || [ "$SC" = '404' ]; then
   ok 'observer 不能启动实例'
 else
