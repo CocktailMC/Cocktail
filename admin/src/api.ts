@@ -710,6 +710,45 @@ export type CreatedNode = {
   token: string
 }
 
+export type BanRow = {
+  id: string
+  target: string
+  target_kind: string
+  reason: string
+  banned_by: string
+  banned_at: string
+  expires_at?: string | null
+  instances: string[]
+  active: boolean
+  source: string
+}
+
+export type TicketRow = {
+  id: string
+  kind: string
+  state: string
+  player: string
+  instance_id: string
+  subject: string
+  body: string
+  created_at: string
+  updated_at: string
+  handler?: string | null
+  resolution: string
+  notes: { at: string; by: string; text: string }[]
+}
+
+export type ActionRow = {
+  id: string
+  at: string
+  actor: string
+  instance_id: string
+  action: string
+  target: string
+  detail: string
+  result: string
+}
+
 export type TutorialProgress = {
   watched_secs: number
   completed: boolean
@@ -849,6 +888,75 @@ export type ExtensionsList = {
 }
 
 export const api = {
+  listBans: (opts?: { instance?: string; all?: boolean }) => {
+    const params = new URLSearchParams()
+    if (opts?.instance) params.set('instance', opts.instance)
+    if (opts?.all) params.set('all', 'true')
+    const q = params.toString()
+    return request<{ bans: BanRow[]; active: number }>(
+      `/api/v1/bans${q ? `?${q}` : ''}`,
+    )
+  },
+  createBan: (body: {
+    target: string
+    reason: string
+    kind?: string
+    hours?: number
+    instances?: string[]
+  }) =>
+    request<BanRow>('/api/v1/bans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  liftBan: (id: string) =>
+    request<void>(`/api/v1/bans/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  listTickets: (opts?: { open?: boolean; player?: string }) => {
+    const params = new URLSearchParams()
+    if (opts?.open) params.set('open', 'true')
+    if (opts?.player) params.set('player', opts.player)
+    const q = params.toString()
+    return request<{ tickets: TicketRow[]; open: number; total: number }>(
+      `/api/v1/tickets${q ? `?${q}` : ''}`,
+    )
+  },
+  createTicket: (body: {
+    kind: string
+    player: string
+    instance_id?: string
+    subject: string
+    body: string
+  }) =>
+    request<TicketRow>('/api/v1/tickets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  claimTicket: (id: string) =>
+    request<void>(`/api/v1/tickets/${encodeURIComponent(id)}/claim`, {
+      method: 'POST',
+    }),
+  approveTicket: (id: string, note?: string) =>
+    request<void>(`/api/v1/tickets/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note }),
+    }),
+  rejectTicket: (id: string, note?: string) =>
+    request<void>(`/api/v1/tickets/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note }),
+    }),
+  listPlayerActions: (opts?: { target?: string; actor?: string; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (opts?.target) params.set('target', opts.target)
+    if (opts?.actor) params.set('actor', opts.actor)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    const q = params.toString()
+    return request<ActionRow[]>(`/api/v1/player-actions${q ? `?${q}` : ''}`)
+  },
+
   listTutorials: (q?: string) =>
     request<TutorialListResponse>(
       `/api/v1/tutorials${q ? `?q=${encodeURIComponent(q)}` : ''}`,
