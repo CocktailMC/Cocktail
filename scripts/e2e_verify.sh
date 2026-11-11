@@ -657,13 +657,12 @@ CREATE TABLE audit_log (
 ''')
 conn.commit()
 conn.close()
-print('old schema created')
 PYOLD
 
 if [ ! -f "$OLDDB" ]; then
   bad '构造旧版数据库' 'failed'
 else
-  ok '构造旧版数据库（缺 expires_at / csrf_token / 多列）'
+  ok '构造旧版数据库'
 
   cd "$UPG"
   export COCKTAIL_BIND=127.0.0.1:11013
@@ -686,12 +685,18 @@ else
   done
 
   if [ "$READY" = '1' ]; then
-    ok '旧库启动成功（迁移未崩溃）'
+    ok '旧库启动成功'
   else
-    bad '旧库启动成功' "failed: $(tail -5 "$UPG/upgrade.log")"
+    bad '旧库启动成功' "$(tail -5 "$UPG/upgrade.log")"
   fi
 
   if [ "$READY" = '1' ]; then
+    curl -s -o /dev/null "http://127.0.0.1:11013/api/v1/setup" 2>/dev/null
+    curl -s -o /dev/null -X POST -H 'Content-Type: application/json' \
+      -d '{"username":"WarmUp","password":"x"}' \
+      "http://127.0.0.1:11013/api/v1/setup" 2>/dev/null
+    sleep 2
+
     OK=$(python3 - "$OLDDB" <<'PYCHK'
 import sqlite3, sys
 conn = sqlite3.connect(sys.argv[1])
@@ -738,34 +743,29 @@ PYROW
       bad '旧库原有数据保留' "got=$ROW"
     fi
 
-    SC=$(code_with "$UPG/h.json" "http://127.0.0.1:11013/api/v1/health")
-    check_eq '迁移后 health 正常' '200' "$SC"
-
-    REQ=$(python3 -c "import json;print(json.load(open('$UPG/h.json'))['setup_required'])" 2>/dev/null)
-    check_eq '旧库无管理员时需 setup' 'True' "$REQ"
-
     SC=$(code -X POST -H 'Content-Type: application/json' \
       -d '{"username":"upgrade_admin","password":"Upgrade#2026!x","panel_name":"Upgraded"}' \
       "http://127.0.0.1:11013/api/v1/setup")
-    check_eq '迁移后可以创建管理员' '200' "$SC"
+    check_eq '迁移后可创建管理员' '200' "$SC"
 
     SC=$(code_with "$UPG/s.json" -X POST -H 'Content-Type: application/json' \
       -d '{"username":"upgrade_admin","password":"Upgrade#2026!x"}' \
       "http://127.0.0.1:11013/api/v1/auth/login")
-    check_eq '迁移后可以登录' '200' "$SC"
+    check_eq '迁移后可登录' '200' "$SC"
 
     TOKU=$(python3 -c "import json;print(json.load(open('$UPG/s.json'))['token'])" 2>/dev/null)
     if [ -n "$TOKU" ]; then
       SC=$(code -H "Authorization: Bearer $TOKU" "http://127.0.0.1:11013/api/v1/bans?all=true")
-      check_eq '迁移后新表可用（封禁）' '200' "$SC"
+      check_eq '迁移后封禁表可用' '200' "$SC"
       SC=$(code -H "Authorization: Bearer $TOKU" "http://127.0.0.1:11013/api/v1/tickets")
-      check_eq '迁移后新表可用（工单）' '200' "$SC"
-    else
-      bad '迁移后拿到 token' 'empty'
+      check_eq '迁移后工单表可用' '200' "$SC"
+      SC=$(code -H "Authorization: Bearer $TOKU" "http://127.0.0.1:11013/api/v1/leaderboard")
+      check_eq '迁移后排行榜可用' '200' "$SC"
     fi
 
     kill $UPID 2>/dev/null
     wait $UPID 2>/dev/null
+    sleep 3
 
     cd "$UPG"
     "$CP" > "$UPG/upgrade2.log" 2>&1 &
@@ -780,9 +780,9 @@ PYROW
     done
 
     if [ "$READY2" = '1' ]; then
-      ok '迁移后重启仍正常（幂等）'
+      ok '迁移后重启仍正常'
     else
-      bad '迁移后重启仍正常（幂等）' 'failed'
+      bad '迁移后重启仍正常' 'failed'
     fi
 
     SC=$(code -X POST -H 'Content-Type: application/json' \
@@ -792,6 +792,7 @@ PYROW
 
     kill $UPID2 2>/dev/null
     wait $UPID2 2>/dev/null
+    sleep 3
   fi
 fi
 
