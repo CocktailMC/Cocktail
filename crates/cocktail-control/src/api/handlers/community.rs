@@ -3,7 +3,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use crate::api::handlers::common::{ErrorBody, current_admin};
+use crate::api::handlers::common::{ErrorBody, current_admin, db_conn};
 use crate::db;
 use crate::state::SharedState;
 
@@ -37,14 +37,7 @@ pub async fn list_bans(
     State(state): State<SharedState>,
     Query(q): Query<BanQuery>,
 ) -> Result<Json<BanList>, (StatusCode, Json<ErrorBody>)> {
-    let conn = state.db.try_conn().map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorBody {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let conn = db_conn(&state)?;
     let include_all = q.all.unwrap_or(false);
     let bans = match q.instance.as_deref() {
         Some(inst) if !include_all => db::active_bans_for(&conn, inst).map_err(|e| {
@@ -98,14 +91,7 @@ pub async fn create_ban(
         .map(|h| (chrono::Utc::now() + chrono::Duration::hours(h)).to_rfc3339());
     let instances = body.instances.unwrap_or_default();
     let id = crate::crypto::random_token(16);
-    let conn = state.db.try_conn().map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorBody {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let conn = db_conn(&state)?;
     db::insert_ban(
         &conn,
         &id,
@@ -166,14 +152,7 @@ pub async fn lift_ban(
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorBody>)> {
     let admin = current_admin(&state, &headers).await?;
-    let conn = state.db.try_conn().map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorBody {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let conn = db_conn(&state)?;
     let ok = db::deactivate_ban(&conn, &id).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -218,14 +197,7 @@ pub async fn list_tickets(
     State(state): State<SharedState>,
     Query(q): Query<TicketQuery>,
 ) -> Result<Json<TicketList>, (StatusCode, Json<ErrorBody>)> {
-    let conn = state.db.try_conn().map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorBody {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let conn = db_conn(&state)?;
     let tickets =
         db::list_tickets(&conn, q.open.unwrap_or(false), q.player.as_deref()).map_err(|e| {
             (
@@ -296,14 +268,7 @@ pub async fn create_ticket(
         ));
     }
     let id = crate::crypto::random_token(12);
-    let conn = state.db.try_conn().map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorBody {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let conn = db_conn(&state)?;
     db::insert_ticket(
         &conn,
         &id,
@@ -356,14 +321,7 @@ async fn transition(
     note: Option<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorBody>)> {
     let admin = current_admin(state, headers).await?;
-    let conn = state.db.try_conn().map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorBody {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let conn = db_conn(&state)?;
     let Some(existing) = db::get_ticket(&conn, id).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -452,14 +410,7 @@ pub async fn list_actions(
     State(state): State<SharedState>,
     Query(q): Query<ActionQuery>,
 ) -> Result<Json<Vec<db::ActionRow>>, (StatusCode, Json<ErrorBody>)> {
-    let conn = state.db.try_conn().map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorBody {
-                error: e.to_string(),
-            }),
-        )
-    })?;
+    let conn = db_conn(&state)?;
     let rows = db::list_actions(
         &conn,
         q.target.as_deref(),
