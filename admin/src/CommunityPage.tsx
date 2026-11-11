@@ -35,9 +35,13 @@ export default function CommunityPage({ onBack, onError }: Props) {
   const [actions, setActions] = useState<ActionRow[]>([])
   const [busy, setBusy] = useState(false)
   const [openOnly, setOpenOnly] = useState(true)
+  const [stateFilter, setStateFilter] = useState<string>('all')
+  const visibleTickets =
+    stateFilter === 'all' ? tickets : tickets.filter((t) => t.state === stateFilter)
   const [target, setTarget] = useState('')
   const [reason, setReason] = useState('')
   const [hours, setHours] = useState('')
+  const [expiresAt, setExpiresAt] = useState('')
   const [banKind, setBanKind] = useState('player')
   const [searchTarget, setSearchTarget] = useState('')
 
@@ -87,6 +91,7 @@ export default function CommunityPage({ onBack, onError }: Props) {
         reason: reason.trim(),
         kind: banKind,
         hours: hours.trim() ? Number(hours.trim()) : undefined,
+        expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
       })
       setTarget('')
       setReason('')
@@ -194,6 +199,15 @@ export default function CommunityPage({ onBack, onError }: Props) {
                 />
               </label>
               <label>
+                到期时间（可选，优先于时长）
+                <input
+                  type="datetime-local"
+                  value={expiresAt}
+                  onChange={(e) => setExpiresAt(e.target.value)}
+                  disabled={busy}
+                />
+              </label>
+              <label>
                 原因
                 <input
                   value={reason}
@@ -275,13 +289,34 @@ export default function CommunityPage({ onBack, onError }: Props) {
                 checked={openOnly}
                 onChange={(e) => {
                   setOpenOnly(e.target.checked)
+                  setStateFilter('all')
                   void loadTickets()
                 }}
               />{' '}
               只看未结束
             </label>
           </div>
-          {tickets.length === 0 ? (
+          <div
+            className="row-actions"
+            style={{ flexWrap: 'wrap', gap: '0.35rem', marginBottom: '0.5rem' }}
+          >
+            {(['all', 'open', 'claimed', 'approved', 'rejected'] as const).map((k) => {
+              const label = k === 'all' ? '全部' : STATE_LABEL[k] ?? k
+              const count =
+                k === 'all' ? tickets.length : tickets.filter((t) => t.state === k).length
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  className={stateFilter === k ? 'btn btn-primary' : 'btn btn-ghost'}
+                  onClick={() => setStateFilter(k)}
+                >
+                  {label} ({count})
+                </button>
+              )
+            })}
+          </div>
+          {visibleTickets.length === 0 ? (
             <p className="meta">没有工单</p>
           ) : (
             <div className="table-wrap">
@@ -297,7 +332,7 @@ export default function CommunityPage({ onBack, onError }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {tickets.map((t) => (
+                  {visibleTickets.map((t) => (
                     <tr key={t.id}>
                       <td>{KIND_LABEL[t.kind] ?? t.kind}</td>
                       <td>

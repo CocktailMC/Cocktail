@@ -119,10 +119,32 @@ pub async fn create_ban(
             }),
         ));
     }
-    let expires = body
-        .hours
-        .filter(|h| *h > 0)
-        .map(|h| (chrono::Utc::now() + chrono::Duration::hours(h)).to_rfc3339());
+    let expires = match body.expires_at.as_deref().map(str::trim) {
+        Some(raw) if !raw.is_empty() => {
+            let parsed = chrono::DateTime::parse_from_rfc3339(raw).map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorBody {
+                        error: "到期时间格式非法，需 RFC3339".into(),
+                    }),
+                )
+            })?;
+            let utc = parsed.with_timezone(&chrono::Utc);
+            if utc <= chrono::Utc::now() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorBody {
+                        error: "到期时间必须晚于当前时间".into(),
+                    }),
+                ));
+            }
+            Some(utc.to_rfc3339())
+        }
+        _ => body
+            .hours
+            .filter(|h| *h > 0)
+            .map(|h| (chrono::Utc::now() + chrono::Duration::hours(h)).to_rfc3339()),
+    };
     let instances = body.instances.unwrap_or_default();
     let id = crate::crypto::random_token(16);
     let conn = db_conn(&state)?;

@@ -822,6 +822,70 @@ SC=$(code -H "$AUTH" "$BASE/api/v1/leaderboard?limit=1")
 check_eq '排行榜 limit=1 可用' '200' "$SC"
 
 echo
+echo '===== 21d. 封禁到期时间 ====='
+
+FUTURE=$(python3 -c "
+import datetime
+u = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)
+print(u.strftime('%Y-%m-%dT%H:%M:%SZ'))
+")
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
+  -d "{\"target\":\"expiry-probe\",\"reason\":\"test\",\"expires_at\":\"$FUTURE\"}" \
+  "$BASE/api/v1/bans")
+if [ "$SC" = '200' ] || [ "$SC" = '201' ]; then
+  ok '精确到期时间被接受'
+else
+  bad '精确到期时间被接受' "got=$SC"
+fi
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
+  -d '{"target":"bad-expiry","reason":"test","expires_at":"not-a-date"}' \
+  "$BASE/api/v1/bans")
+if [ "$SC" = '400' ]; then
+  ok '非法到期时间格式被拒绝'
+else
+  bad '非法到期时间格式被拒绝' "got=$SC"
+fi
+
+PAST=$(python3 -c "
+import datetime
+u = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
+print(u.strftime('%Y-%m-%dT%H:%M:%SZ'))
+")
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
+  -d "{\"target\":\"past-expiry\",\"reason\":\"test\",\"expires_at\":\"$PAST\"}" \
+  "$BASE/api/v1/bans")
+if [ "$SC" = '400' ]; then
+  ok '过去时间被拒绝'
+else
+  bad '过去时间被拒绝' "got=$SC"
+fi
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
+  -d '{"target":"hours-still-works","reason":"test","hours":24}' \
+  "$BASE/api/v1/bans")
+if [ "$SC" = '200' ] || [ "$SC" = '201' ]; then
+  ok '旧的时长参数仍然可用'
+else
+  bad '旧的时长参数仍然可用' "got=$SC"
+fi
+
+SC=$(code_with "$LOG/exp.json" -H "$AUTH" "$BASE/api/v1/bans?all=true&limit=2000")
+HAS_EXP=$(python3 -c "
+import json
+d=json.load(open('$LOG/exp.json'))
+items=d.get('bans',[])
+for b in items:
+    if b.get('target')=='expiry-probe':
+        print('yes' if b.get('expires_at') else 'no')
+        break
+else:
+    print('missing')
+" 2>/dev/null)
+check_eq '到期时间已持久化' 'yes' "$HAS_EXP"
+
+echo
 echo '===== 18. 数据库不可用降级 ====='
 
 DB_FILE="$WORK/data/control.db"

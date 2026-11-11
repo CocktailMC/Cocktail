@@ -951,6 +951,7 @@ export const api = {
     reason: string
     kind?: string
     hours?: number
+    expires_at?: string
     instances?: string[]
   }) =>
     request<BanRow>('/api/v1/bans', {
