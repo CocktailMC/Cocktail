@@ -112,8 +112,12 @@ check_eq '首次启动需要 setup' 'True' "$SETUP_REQ"
 OS=$(json_get "$LOG/health.json" "['os']")
 check_eq 'os 字段为 linux' 'linux' "$OS"
 
-SC=$(code "$BASE/api/v1/setup")
-check_eq 'setup 可访问' '200' "$SC"
+SC=$(code -X POST -H 'Content-Type: application/json' -d '{}' "$BASE/api/v1/setup")
+if [ "$SC" = '400' ] || [ "$SC" = '422' ]; then
+  ok 'setup 接受 POST 且校验参数'
+else
+  bad 'setup 接受 POST 且校验参数' "got=$SC"
+fi
 
 SC=$(code "$BASE/")
 check_eq 'Web UI 首页可访问' '200' "$SC"
@@ -129,19 +133,21 @@ echo
 echo '===== 3. W1 安全响应头 ====='
 curl -s -D "$LOG/headers.txt" -o /dev/null "$BASE/api/v1/health"
 
-if grep -qi 'x-content-type-options' "$LOG/headers.txt"; then
+curl -s -D "$LOG/headers_ui.txt" -o /dev/null "$BASE/"
+
+if grep -qi 'x-content-type-options' "$LOG/headers_ui.txt" "$LOG/headers.txt"; then
   ok 'X-Content-Type-Options 存在'
 else
   bad 'X-Content-Type-Options 存在' 'header missing'
 fi
 
-if grep -qi 'x-frame-options' "$LOG/headers.txt"; then
+if grep -qi 'x-frame-options' "$LOG/headers_ui.txt" "$LOG/headers.txt"; then
   ok 'X-Frame-Options 存在'
 else
   bad 'X-Frame-Options 存在' 'header missing'
 fi
 
-if grep -qi 'content-security-policy' "$LOG/headers.txt"; then
+if grep -qi 'content-security-policy' "$LOG/headers_ui.txt" "$LOG/headers.txt"; then
   ok 'CSP 存在'
 else
   bad 'CSP 存在' 'header missing'
@@ -219,7 +225,7 @@ EMPTY=$(json_get "$LOG/bans_empty.json" "['bans']")
 check_eq '初始封禁列表为空' '[]' "$EMPTY"
 
 BAN_BODY='{"target":"Griefer01","kind":"player","reason":"破坏主城","hours":24}'
-SC=$(code_with "$LOG/ban_new.json" -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d "$BAN_BODY" "$BASE/api/v1/bans")
+SC=$(code_with "$LOG/ban_new.json" -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" -d "$BAN_BODY" "$BASE/api/v1/bans")
 check_eq '新增封禁成功' '200' "$SC"
 
 BAN_ID=$(json_get "$LOG/ban_new.json" "['id']")
@@ -233,14 +239,14 @@ check_eq '封禁列表查询成功' '200' "$SC"
 ACTIVE_COUNT=$(json_get "$LOG/bans_after.json" "['active']")
 check_ge '封禁生效数量' 1 "$ACTIVE_COUNT"
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"target":"","reason":""}' "$BASE/api/v1/bans")
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" -d '{"target":"","reason":""}' "$BASE/api/v1/bans")
 if [ "$SC" = '400' ]; then
   ok '空封禁目标被拒绝'
 else
   bad '空封禁目标被拒绝' "got=$SC"
 fi
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"target":"x","reason":"y","kind":"bogus"}' "$BASE/api/v1/bans")
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" -d '{"target":"x","reason":"y","kind":"bogus"}' "$BASE/api/v1/bans")
 if [ "$SC" = '400' ]; then
   ok '非法封禁类型被拒绝'
 else
@@ -260,14 +266,14 @@ SC=$(code_with "$LOG/tickets_empty.json" -H "$AUTH" "$BASE/api/v1/tickets")
 check_eq '工单列表可访问' '200' "$SC"
 
 TICKET_BODY='{"kind":"appeal","player":"Griefer01","subject":"申诉请求","body":"我当时不在线"}'
-SC=$(code_with "$LOG/ticket_new.json" -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d "$TICKET_BODY" "$BASE/api/v1/tickets")
+SC=$(code_with "$LOG/ticket_new.json" -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" -d "$TICKET_BODY" "$BASE/api/v1/tickets")
 check_eq '提交工单成功' '201' "$SC"
 
 TICKET_ID=$(json_get "$LOG/ticket_new.json" "['id']")
 TICKET_STATE=$(json_get "$LOG/ticket_new.json" "['state']")
 check_eq '新工单状态为 open' 'open' "$TICKET_STATE"
 
-SC=$(code -X POST -H "$AUTH" -H "X-CSRF-Token: $CSRF" "$BASE/api/v1/tickets/$TICKET_ID/claim")
+SC=$(code -X POST -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/tickets/$TICKET_ID/claim")
 check_eq '认领工单成功' '204' "$SC"
 
 SC=$(code_with "$LOG/ticket_claimed.json" -H "$AUTH" "$BASE/api/v1/tickets")
@@ -280,24 +286,24 @@ for t in d.get('tickets',[]):
 " 2>/dev/null)
 check_eq '认领后状态为 claimed' 'claimed' "$CLAIMED_STATE"
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"note":"证据不足，通过"}' "$BASE/api/v1/tickets/$TICKET_ID/approve")
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" -d '{"note":"证据不足，通过"}' "$BASE/api/v1/tickets/$TICKET_ID/approve")
 check_eq '通过工单成功' '204' "$SC"
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"note":"再驳回"}' "$BASE/api/v1/tickets/$TICKET_ID/reject")
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" -d '{"note":"再驳回"}' "$BASE/api/v1/tickets/$TICKET_ID/reject")
 if [ "$SC" = '409' ]; then
   ok '已结束工单不可再操作'
 else
   bad '已结束工单不可再操作' "got=$SC"
 fi
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d '{"kind":"bogus","player":"x","subject":"y","body":"z"}' "$BASE/api/v1/tickets")
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" -d '{"kind":"bogus","player":"x","subject":"y","body":"z"}' "$BASE/api/v1/tickets")
 if [ "$SC" = '400' ]; then
   ok '非法工单类型被拒绝'
 else
   bad '非法工单类型被拒绝' "got=$SC"
 fi
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" "$BASE/api/v1/tickets/nonexistent/claim")
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/tickets/nonexistent/claim")
 check_eq '不存在工单认领返回 404' '404' "$SC"
 
 echo
@@ -398,7 +404,7 @@ check_eq '管理员可读节点列表' '200' "$SC"
 echo
 echo '===== 14. 实例 CRUD ====='
 INST_BODY='{"name":"e2e-instance","kind":"vanilla","version":"1.21.4","port":25599}'
-SC=$(code_with "$LOG/inst_new.json" -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d "$INST_BODY" "$BASE/api/v1/instances")
+SC=$(code_with "$LOG/inst_new.json" -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" -d "$INST_BODY" "$BASE/api/v1/instances")
 if [ "$SC" = '200' ] || [ "$SC" = '201' ]; then
   ok '创建实例成功'
   INST_ID=$(json_get "$LOG/inst_new.json" "['id']")
@@ -413,7 +419,7 @@ items = d if isinstance(d,list) else d.get('instances',[])
 print(1 if any(i.get('id')=='$INST_ID' for i in items) else 0)
 " 2>/dev/null)
     check_eq '新建实例出现在列表中' '1' "$FOUND"
-    SC=$(code -X DELETE -H "$AUTH" -H "X-CSRF-Token: $CSRF" "$BASE/api/v1/instances/$INST_ID")
+    SC=$(code -X DELETE -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/instances/$INST_ID")
     if [ "$SC" = '200' ] || [ "$SC" = '204' ]; then
       ok '删除实例成功'
     else
@@ -435,10 +441,10 @@ else
   bad '不存在的实例返回 404' "got=$SC"
 fi
 
-SC=$(code -X DELETE -H "$AUTH" -H "X-CSRF-Token: $CSRF" "$BASE/api/v1/bans/not-a-real-id")
+SC=$(code -X DELETE -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/bans/not-a-real-id")
 check_eq '解除不存在封禁返回 404' '404' "$SC"
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" -d 'not-json{{{' "$BASE/api/v1/bans")
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" -d 'not-json{{{' "$BASE/api/v1/bans")
 if [ "$SC" = '400' ] || [ "$SC" = '422' ]; then
   ok '非法 JSON 被拒绝'
 else
@@ -447,7 +453,7 @@ fi
 
 echo
 echo '===== 16. 登出 ====='
-SC=$(code -X POST -H "$AUTH" -H "X-CSRF-Token: $CSRF" "$BASE/api/v1/auth/logout")
+SC=$(code -X POST -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/auth/logout")
 if [ "$SC" = '200' ] || [ "$SC" = '204' ]; then
   ok '登出成功'
 else

@@ -538,6 +538,7 @@ pub async fn run_plane() -> anyhow::Result<()> {
                 ])
                 .allow_credentials(true),
         )
+        .layer(axum::middleware::from_fn(apply_security_headers))
         .layer(TraceLayer::new_for_http());
 
     if let Some(web_root) = resolve_web_root() {
@@ -883,6 +884,23 @@ async fn auth_middleware(
     }
 
     crate::util::with_actor(actor, next.run(req)).await
+}
+
+async fn apply_security_headers(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut res = next.run(req).await;
+    let headers = res.headers_mut();
+    for (name, value) in crate::hardening::security_headers() {
+        if let (Ok(n), Ok(v)) = (
+            axum::http::HeaderName::from_bytes(name.as_bytes()),
+            axum::http::HeaderValue::from_str(&value),
+        ) {
+            headers.insert(n, v);
+        }
+    }
+    res
 }
 
 fn cors_origins() -> tower_http::cors::AllowOrigin {
