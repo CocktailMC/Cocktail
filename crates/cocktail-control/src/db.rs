@@ -80,8 +80,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             panel_name TEXT NOT NULL,
             webhook_url TEXT
         );
-        INSERT OR IGNORE INTO panel_settings (id, panel_name, webhook_url)
-            VALUES (1, 'Cocktail Manager', NULL);
+        INSERT OR IGNORE INTO panel_settings (id, panel_name)
+            VALUES (1, 'Cocktail Manager');
 
         CREATE TABLE IF NOT EXISTS admins (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -242,6 +242,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     ] {
         ensure_column(conn, "panel_settings", name, decl)?;
     }
+    ensure_column(conn, "panel_settings", "webhook_url", "TEXT")?;
     for (name, decl) in [("expires_at", "TEXT"), ("csrf_token", "TEXT")] {
         ensure_column(conn, "sessions", name, decl)?;
     }
