@@ -604,7 +604,7 @@ UPG="$ROOT/target/upgrade-run"
 rm -rf "$UPG"
 mkdir -p "$UPG/data"
 
-OLDDB="$UPG/data/control.db"
+OLDDB="$UPG/data/cocktail.db"
 python3 - "$OLDDB" <<'PYOLD'
 import sqlite3, sys
 conn = sqlite3.connect(sys.argv[1])
@@ -796,11 +796,19 @@ PYROW
   fi
 fi
 
+kill $SERVER_PID 2>/dev/null
+wait $SERVER_PID 2>/dev/null
+sleep 2
+SERVER_PID=""
+
 echo
 echo '===== 17. 持久化验证 ====='
 kill $SERVER_PID 2>/dev/null
 wait $SERVER_PID 2>/dev/null
 sleep 2
+
+cd "$WORK"
+export COCKTAIL_BIND=127.0.0.1:11011
 
 "$CP" > "$LOG/server2.log" 2>&1 &
 SERVER_PID=$!
