@@ -459,7 +459,7 @@ LONG65=$(printf 'A%.0s' $(seq 1 65))
 LONG600=$(printf 'B%.0s' $(seq 1 600))
 LONG9000=$(printf 'C%.0s' $(seq 1 9000))
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
   -d "{\"target\":\"$LONG64\",\"reason\":\"ok\"}" "$BASE/api/v1/bans")
 if [ "$SC" = '200' ]; then
   ok '64 字符封禁目标被接受'
@@ -467,7 +467,7 @@ else
   bad '64 字符封禁目标被接受' "got=$SC"
 fi
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
   -d "{\"target\":\"$LONG65\",\"reason\":\"ok\"}" "$BASE/api/v1/bans")
 if [ "$SC" = '400' ]; then
   ok '65 字符封禁目标被拒绝'
@@ -475,7 +475,7 @@ else
   bad '65 字符封禁目标被拒绝' "got=$SC"
 fi
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
   -d "{\"target\":\"p1\",\"reason\":\"$LONG600\"}" "$BASE/api/v1/bans")
 if [ "$SC" = '400' ]; then
   ok '600 字符封禁原因被拒绝'
@@ -483,7 +483,7 @@ else
   bad '600 字符封禁原因被拒绝' "got=$SC"
 fi
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
   -d "{\"kind\":\"support\",\"player\":\"p1\",\"subject\":\"ok\",\"body\":\"$LONG9000\"}" "$BASE/api/v1/tickets")
 if [ "$SC" = '400' ]; then
   ok '9000 字符工单内容被拒绝'
@@ -491,7 +491,7 @@ else
   bad '9000 字符工单内容被拒绝' "got=$SC"
 fi
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
   -d '{"target":"<script>alert(1)</script>","reason":"xss"}' "$BASE/api/v1/bans")
 if [ "$SC" = '200' ]; then
   ok 'HTML 特殊字符可存储'
@@ -499,7 +499,7 @@ else
   bad 'HTML 特殊字符可存储' "got=$SC"
 fi
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
   -d '{"target":"x; DROP TABLE admins; --","reason":"sqli"}' "$BASE/api/v1/bans")
 if [ "$SC" = '200' ]; then
   ok 'SQL 注入串被当作普通字符串'
@@ -514,7 +514,7 @@ else
   bad 'SQL 注入后 admins 表仍存在' "got=$SC"
 fi
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
   -d '{"target":"ctrlXchar","reason":"x"}' "$BASE/api/v1/bans")
 if [ "$SC" = '200' ] || [ "$SC" = '400' ]; then
   ok '控制字符路径有响应'
@@ -522,7 +522,7 @@ else
   bad '控制字符路径有响应' "got=$SC"
 fi
 
-SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
   -d '{"target":"   ","reason":"   "}' "$BASE/api/v1/bans")
 if [ "$SC" = '400' ]; then
   ok '纯空白被拒绝'
