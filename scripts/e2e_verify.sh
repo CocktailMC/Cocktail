@@ -542,6 +542,125 @@ else
 fi
 
 echo
+echo '===== 20. 多节点组网 ====='
+
+SC=$(code_with "$LOG/nodes0.json" -H "$AUTH" "$BASE/api/v1/nodes")
+check_eq '节点列表可访问' '200' "$SC"
+
+LOCAL=$(python3 -c "
+import json
+d=json.load(open('$LOG/nodes0.json'))
+items = d if isinstance(d, list) else d.get('nodes', [])
+for n in items:
+    if n.get('kind') == 'local':
+        print(n.get('id'))
+        break
+" 2>/dev/null)
+
+if [ "$LOCAL" = 'local' ]; then
+  ok '本机节点存在且 id 为 local'
+else
+  bad '本机节点存在' "got=$LOCAL"
+fi
+
+LOCAL_ONLINE=$(python3 -c "
+import json
+d=json.load(open('$LOG/nodes0.json'))
+items = d if isinstance(d, list) else d.get('nodes', [])
+for n in items:
+    if n.get('kind') == 'local':
+        print(n.get('online'))
+        break
+" 2>/dev/null)
+check_eq '本机节点始终在线' 'True' "$LOCAL_ONLINE"
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
+  -d '{"name":"edge-01"}' "$BASE/api/v1/nodes")
+if [ "$SC" = '201' ] || [ "$SC" = '200' ]; then
+  ok "创建 agent 节点 $SC"
+else
+  bad '创建 agent 节点' "got=$SC"
+fi
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \
+  -d '{"name":"   "}' "$BASE/api/v1/nodes")
+if [ "$SC" = '400' ]; then
+  ok '空白节点名被拒绝'
+else
+  bad '空白节点名被拒绝' "got=$SC"
+fi
+
+SC=$(code_with "$LOG/nodes1.json" -H "$AUTH" "$BASE/api/v1/nodes")
+NODE_ID=$(python3 -c "
+import json
+d=json.load(open('$LOG/nodes1.json'))
+items = d if isinstance(d, list) else d.get('nodes', [])
+for n in items:
+    if n.get('name') == 'edge-01':
+        print(n.get('id'))
+        break
+" 2>/dev/null)
+
+if [ -n "$NODE_ID" ]; then
+  ok "新节点出现在列表中"
+else
+  bad '新节点出现在列表' 'not found'
+fi
+
+if [ -n "$NODE_ID" ]; then
+  OFFLINE=$(python3 -c "
+import json
+d=json.load(open('$LOG/nodes1.json'))
+items = d if isinstance(d, list) else d.get('nodes', [])
+for n in items:
+    if n.get('id') == '$NODE_ID':
+        print(n.get('online'))
+        break
+" 2>/dev/null)
+  check_eq '未连接的节点显示离线' 'False' "$OFFLINE"
+
+  SC=$(code -X DELETE -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/nodes/$NODE_ID")
+  if [ "$SC" = '204' ] || [ "$SC" = '200' ]; then
+    ok '删除节点成功'
+  else
+    bad '删除节点成功' "got=$SC"
+  fi
+
+  SC=$(code_with "$LOG/nodes2.json" -H "$AUTH" "$BASE/api/v1/nodes")
+  GONE=$(python3 -c "
+import json
+d=json.load(open('$LOG/nodes2.json'))
+items = d if isinstance(d, list) else d.get('nodes', [])
+print(1 if any(n.get('id') == '$NODE_ID' for n in items) else 0)
+" 2>/dev/null)
+  check_eq '删除后节点不在列表' '0' "$GONE"
+fi
+
+SC=$(code -X DELETE -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/nodes/local")
+if [ "$SC" = '400' ] || [ "$SC" = '403' ] || [ "$SC" = '409' ]; then
+  ok '不能删除本机节点'
+else
+  bad '不能删除本机节点' "got=$SC"
+fi
+
+SC=$(code -X DELETE -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/nodes/no-such-node")
+if [ "$SC" = '404' ] || [ "$SC" = '400' ] || [ "$SC" = '204' ]; then
+  ok '删除不存在节点有响应'
+else
+  bad '删除不存在节点有响应' "got=$SC"
+fi
+
+SC=$(code "$BASE/api/v1/nodes")
+if [ "$SC" = '401' ]; then
+  ok '节点列表需要登录'
+else
+  bad '节点列表需要登录' "got=$SC"
+fi
+
+SC=$(code -H "${SUPER:-$AUTH}" "$BASE/api/v1/nodes")
+check_eq '有 nodes 权限的角色可读' '200' "$SC"
+
+echo
 echo '===== 18. 数据库不可用降级 ====='
 
 DB_FILE="$WORK/data/control.db"
