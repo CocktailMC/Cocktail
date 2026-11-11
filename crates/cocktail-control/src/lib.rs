@@ -623,6 +623,9 @@ fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
     if path.starts_with("/api/v1/player-actions") {
         return "players";
     }
+    if path.starts_with("/api/v1/leaderboard") || path.starts_with("/api/v1/profiles") {
+        return "players";
+    }
     if path.starts_with("/api/v1/users") {
         return "users";
     }

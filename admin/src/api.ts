@@ -710,6 +710,42 @@ export type CreatedNode = {
   token: string
 }
 
+export type BoardEntry = {
+  rank: number
+  name: string
+  uuid?: string | null
+  total_secs: number
+  hours: number
+  first_seen: string
+  last_seen: string
+  instances: number
+  avatar: string
+}
+
+export type GeoHint = {
+  ip: string
+  country: string
+  city: string
+  asn: string
+}
+
+export type ProfileView = {
+  name: string
+  uuid?: string | null
+  avatar: string
+  total_secs: number
+  hours: number
+  sessions: number
+  instances: string[]
+  first_seen?: string | null
+  last_seen?: string | null
+  ips: string[]
+  risk_score: number
+  ban_count: number
+  action_count: number
+  geo: GeoHint[]
+}
+
 export type BanRow = {
   id: string
   target: string
@@ -888,6 +924,18 @@ export type ExtensionsList = {
 }
 
 export const api = {
+  leaderboard: (opts?: { instance?: string; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (opts?.instance) params.set('instance', opts.instance)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    const q = params.toString()
+    return request<{ entries: BoardEntry[]; total: number }>(
+      `/api/v1/leaderboard${q ? `?${q}` : ''}`,
+    )
+  },
+  playerProfile: (name: string) =>
+    request<ProfileView>(`/api/v1/profiles/${encodeURIComponent(name)}`),
+
   listBans: (opts?: { instance?: string; all?: boolean }) => {
     const params = new URLSearchParams()
     if (opts?.instance) params.set('instance', opts.instance)

@@ -27,6 +27,8 @@ pub fn router() -> Router<SharedState> {
         )
         .route("/api/v1/tickets/{id}/reject", post(handlers::reject_ticket))
         .route("/api/v1/player-actions", get(handlers::list_actions))
+        .route("/api/v1/leaderboard", get(handlers::leaderboard))
+        .route("/api/v1/profiles/{name}", get(handlers::profile))
         .route("/api/v1/tutorials/mine", get(handlers::my_tutorials))
         .route(
             "/api/v1/tutorials/{id}/progress",

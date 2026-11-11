@@ -1697,3 +1697,101 @@ pub fn list_actions(
     }
     Ok(out)
 }
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ProfileRow {
+    pub instance_id: String,
+    pub name: String,
+    pub uuid: Option<String>,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub last_left: Option<String>,
+    pub total_secs: i64,
+    pub last_world: Option<String>,
+    pub last_ping_ms: Option<f64>,
+    pub last_ip: Option<String>,
+}
+
+fn map_profile(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProfileRow> {
+    Ok(ProfileRow {
+        instance_id: r.get(0)?,
+        name: r.get(1)?,
+        uuid: r.get(2)?,
+        first_seen: r.get(3)?,
+        last_seen: r.get(4)?,
+        last_left: r.get(5)?,
+        total_secs: r.get(6)?,
+        last_world: r.get(7)?,
+        last_ping_ms: r.get(8)?,
+        last_ip: r.get(9)?,
+    })
+}
+
+const PROFILE_COLS: &str = "instance_id, name, uuid, first_seen, last_seen, last_left, total_secs, last_world, last_ping_ms, last_ip";
+
+pub fn list_profiles(
+    conn: &Connection,
+    instance_id: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Vec<ProfileRow>> {
+    let mut sql = format!("SELECT {PROFILE_COLS} FROM player_profiles");
+    if instance_id.is_some() {
+        sql.push_str(" WHERE instance_id = ?1");
+    }
+    sql.push_str(&format!(
+        " ORDER BY total_secs DESC LIMIT {}",
+        limit.clamp(1, 5000)
+    ));
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = match instance_id {
+        Some(id) => stmt
+            .query_map(params![id], map_profile)?
+            .collect::<Vec<_>>(),
+        None => stmt.query_map([], map_profile)?.collect::<Vec<_>>(),
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn find_profile(conn: &Connection, name: &str) -> anyhow::Result<Vec<ProfileRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {PROFILE_COLS} FROM player_profiles WHERE name = ?1 ORDER BY total_secs DESC"
+    ))?;
+    let rows = stmt.query_map(params![name], map_profile)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn aggregate_leaderboard(
+    conn: &Connection,
+    limit: usize,
+) -> anyhow::Result<Vec<(String, Option<String>, i64, String, String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT name, MAX(uuid), SUM(total_secs), MIN(first_seen), MAX(last_seen), COUNT(instance_id)
+         FROM player_profiles
+         GROUP BY name
+         ORDER BY SUM(total_secs) DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit.clamp(1, 1000) as i64], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, i64>(5)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}

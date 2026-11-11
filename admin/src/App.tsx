@@ -49,6 +49,7 @@ import SpecYamlPanel from './SpecYamlPanel'
 import SetupPage from './SetupPage'
 import TutorialsPage from './TutorialsPage'
 import CommunityPage from './CommunityPage'
+import LeaderboardPage from './LeaderboardPage'
 import LoginPage from './LoginPage'
 import {
   INSTALLABLE_CORE_GROUPS,
@@ -122,6 +123,7 @@ const PLANE_LINKS: { tab: HomeTab; label: string; perm?: string }[] = [
   { tab: 'audit', label: '审计日志', perm: 'settings' },
   { tab: 'tutorials', label: '视频教程' },
   { tab: 'community', label: '封禁与工单', perm: 'players' },
+  { tab: 'leaderboard', label: '排行榜', perm: 'players' },
 ]
 
 function closeDetails(el: HTMLElement) {
@@ -1326,6 +1328,8 @@ export default function App() {
                   onOpenInstance={selectInstance}
                   onError={setError}
                 />
+              ) : homeTab === 'leaderboard' ? (
+                <LeaderboardPage onBack={() => goHome('overview')} onError={setError} />
               ) : homeTab === 'community' ? (
                 <CommunityPage onBack={() => goHome('overview')} onError={setError} />
               ) : homeTab === 'tutorials' ? (
