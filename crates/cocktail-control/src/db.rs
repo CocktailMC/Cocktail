@@ -253,6 +253,11 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ensure_column(conn, "admins", name, decl)?;
     }
     for (name, decl) in [
+        ("token_hash", "TEXT"),
+        ("hostname", "TEXT"),
+        ("os", "TEXT"),
+        ("arch", "TEXT"),
+        ("last_seen", "TEXT"),
         ("protocol_version", "INTEGER NOT NULL DEFAULT 1"),
         ("last_seq", "INTEGER NOT NULL DEFAULT 0"),
     ] {
