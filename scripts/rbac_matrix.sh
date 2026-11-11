@@ -262,6 +262,116 @@ else
 fi
 
 echo
+echo '===== 实例级动作权限 ====='
+
+INST_LIST="/api/v1/instances/1"
+INST_START="/api/v1/instances/1/start"
+INST_STOP="/api/v1/instances/1/stop"
+INST_FILES="/api/v1/instances/1/files"
+INST_PLUGINS="/api/v1/instances/1/plugins"
+INST_PLAYERS="/api/v1/instances/1/players"
+INST_LOGS="/api/v1/instances/1/logs"
+INST_METRICS="/api/v1/instances/1/metrics"
+INST_BACKUPS="/api/v1/instances/1/backups"
+
+read_expect() {
+  local who="$1" path="$2"
+  case "$who" in
+    observer)
+      case "$path" in
+        "$INST_LOGS"|"$INST_METRICS"|"$INST_PLAYERS") echo 200 ;;
+        *) echo 403 ;;
+      esac ;;
+    support)
+      case "$path" in
+        "$INST_LOGS"|"$INST_METRICS"|"$INST_PLAYERS"|"$INST_BACKUPS") echo 200 ;;
+        *) echo 403 ;;
+      esac ;;
+    developer)
+      case "$path" in
+        "$INST_LOGS"|"$INST_METRICS"|"$INST_FILES"|"$INST_PLUGINS"|"$INST_BACKUPS"|"$INST_PLAYERS") echo 200 ;;
+        *) echo 403 ;;
+      esac ;;
+    admin)
+      echo 200 ;;
+  esac
+}
+
+for who in observer support developer admin; do
+  TVAR="TOK_$who"; TOK="${!TVAR:-}"
+  if [ -z "$TOK" ]; then
+    bad "$who 实例级" 'no token'
+    continue
+  fi
+  echo "  --- $who 实例级读取 ---"
+  for p in "$INST_LOGS" "$INST_METRICS" "$INST_FILES" "$INST_PLUGINS" "$INST_BACKUPS" "$INST_PLAYERS"; do
+    exp=$(read_expect "$who" "$p")
+    SC=$(code -H "Authorization: Bearer $TOK" "$BASE$p")
+    if [ -z "$exp" ]; then
+      continue
+    fi
+    if [ "$SC" = "$exp" ] || { [ "$SC" = '404' ] && [ "$exp" = '200' ]; }; then
+      ok "$who $p -> $SC"
+    else
+      bad "$who $p" "want=$exp got=$SC"
+    fi
+  done
+
+done
+
+echo
+echo '  --- 实例启动权限 ---'
+for who in observer support developer admin; do
+  TVAR="TOK_$who"; TOK="${!TVAR:-}"
+  CVAR="CSRF_$who"; CS="${!CVAR:-}"
+  [ -z "$TOK" ] && continue
+  SC=$(code -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CS" -d '{}' "$BASE$INST_START")
+  case "$who" in
+    observer|developer)
+      if [ "$SC" = '403' ]; then
+        ok "$who 不能启动实例 -> 403"
+      else
+        bad "$who 不能启动实例" "want=403 got=$SC"
+      fi ;;
+    support|admin)
+      if [ "$SC" = '403' ] || [ "$SC" = '404' ] || [ "$SC" = '409' ] || [ "$SC" = '200' ]; then
+        ok "$who 可尝试启动 -> $SC"
+      else
+        bad "$who 可尝试启动" "got=$SC"
+      fi ;;
+  esac
+done
+
+echo
+echo '  --- 观察员不应能修改文件 ---'
+SC=$(code -X POST -H "Authorization: Bearer ${TOK_observer:-}" -H 'Content-Type: application/json' -H "x-cocktail-csrf: ${CSRF_observer:-}" \
+  -d '{"path":"/tmp","content":"x"}' "$BASE/api/v1/instances/1/files/content")
+if [ "$SC" = '403' ]; then
+  ok 'observer 不能写文件'
+else
+  bad 'observer 不能写文件' "got=$SC"
+fi
+
+echo
+echo '  --- 观察员不应能安装插件 ---'
+SC=$(code -X POST -H "Authorization: Bearer ${TOK_observer:-}" -H 'Content-Type: application/json' -H "x-cocktail-csrf: ${CSRF_observer:-}" \
+  -d '{"project":"x"}' "$BASE/api/v1/instances/1/modrinth/install")
+if [ "$SC" = '403' ]; then
+  ok 'observer 不能安装插件'
+else
+  bad 'observer 不能安装插件' "got=$SC"
+fi
+
+echo
+echo '  --- 观察员不应能踢玩家 ---'
+SC=$(code -X POST -H "Authorization: Bearer ${TOK_observer:-}" -H 'Content-Type: application/json' -H "x-cocktail-csrf: ${CSRF_observer:-}" \
+  -d '{"reason":"x"}' "$BASE/api/v1/instances/1/players/Steve/kick")
+if [ "$SC" = '403' ]; then
+  ok 'observer 不能踢玩家'
+else
+  bad 'observer 不能踢玩家' "got=$SC"
+fi
+echo
 echo '===== 无 token 全拒绝 ====='
 for p in /api/v1/instances /api/v1/users /api/v1/nodes /api/v1/bans /api/v1/tickets /api/v1/leaderboard; do
   SC=$(code "$BASE$p")
