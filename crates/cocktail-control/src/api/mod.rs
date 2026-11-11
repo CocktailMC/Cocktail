@@ -5,6 +5,8 @@ use axum::routing::{any, delete, get, post, put};
 
 use crate::state::SharedState;
 
+const UPLOAD_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/api/v1/health", get(handlers::health))
@@ -91,7 +93,8 @@ pub fn router() -> Router<SharedState> {
         )
         .route(
             "/api/v1/instances/{id}/files/upload",
-            post(handlers::upload_file),
+            post(handlers::upload_file)
+                .layer(axum::extract::DefaultBodyLimit::max(UPLOAD_BODY_BYTES)),
         )
         .route("/api/v1/instances/{id}/files/mkdir", post(handlers::mkdir))
         .route(

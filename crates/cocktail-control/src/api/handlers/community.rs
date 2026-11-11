@@ -33,6 +33,36 @@ pub struct CreateBanBody {
     pub instances: Option<Vec<String>>,
 }
 
+const MAX_TARGET_LEN: usize = 64;
+const MAX_REASON_LEN: usize = 512;
+const MAX_PLAYER_LEN: usize = 64;
+const MAX_SUBJECT_LEN: usize = 200;
+const MAX_BODY_LEN: usize = 8000;
+const MAX_NOTE_LEN: usize = 2000;
+
+fn check_len(field: &str, value: &str, max: usize) -> Result<(), (StatusCode, Json<ErrorBody>)> {
+    if value.chars().count() > max {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorBody {
+                error: format!("{field} 过长，最多 {max} 个字符"),
+            }),
+        ));
+    }
+    if value
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorBody {
+                error: format!("{field} 包含非法控制字符"),
+            }),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn list_bans(
     State(state): State<SharedState>,
     Query(q): Query<BanQuery>,
@@ -76,6 +106,8 @@ pub async fn create_ban(
             }),
         ));
     }
+    check_len("封禁目标", target, MAX_TARGET_LEN)?;
+    check_len("封禁原因", &body.reason, MAX_REASON_LEN)?;
     let kind = body.kind.unwrap_or_else(|| "player".into());
     if !matches!(kind.as_str(), "player" | "ip" | "uuid") {
         return Err((
@@ -267,6 +299,9 @@ pub async fn create_ticket(
             }),
         ));
     }
+    check_len("玩家名", player, MAX_PLAYER_LEN)?;
+    check_len("工单主题", body.subject.trim(), MAX_SUBJECT_LEN)?;
+    check_len("工单内容", body.body.trim(), MAX_BODY_LEN)?;
     let id = crate::crypto::random_token(12);
     let conn = db_conn(&state)?;
     db::insert_ticket(

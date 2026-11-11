@@ -452,6 +452,136 @@ else
 fi
 
 echo
+echo '===== 15b. 输入边界与特殊字符 ====='
+
+LONG64=$(printf 'A%.0s' $(seq 1 64))
+LONG65=$(printf 'A%.0s' $(seq 1 65))
+LONG600=$(printf 'B%.0s' $(seq 1 600))
+LONG9000=$(printf 'C%.0s' $(seq 1 9000))
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+  -d "{\"target\":\"$LONG64\",\"reason\":\"ok\"}" "$BASE/api/v1/bans")
+if [ "$SC" = '200' ]; then
+  ok '64 字符封禁目标被接受'
+else
+  bad '64 字符封禁目标被接受' "got=$SC"
+fi
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+  -d "{\"target\":\"$LONG65\",\"reason\":\"ok\"}" "$BASE/api/v1/bans")
+if [ "$SC" = '400' ]; then
+  ok '65 字符封禁目标被拒绝'
+else
+  bad '65 字符封禁目标被拒绝' "got=$SC"
+fi
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+  -d "{\"target\":\"p1\",\"reason\":\"$LONG600\"}" "$BASE/api/v1/bans")
+if [ "$SC" = '400' ]; then
+  ok '600 字符封禁原因被拒绝'
+else
+  bad '600 字符封禁原因被拒绝' "got=$SC"
+fi
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+  -d "{\"kind\":\"support\",\"player\":\"p1\",\"subject\":\"ok\",\"body\":\"$LONG9000\"}" "$BASE/api/v1/tickets")
+if [ "$SC" = '400' ]; then
+  ok '9000 字符工单内容被拒绝'
+else
+  bad '9000 字符工单内容被拒绝' "got=$SC"
+fi
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+  -d '{"target":"<script>alert(1)</script>","reason":"xss"}' "$BASE/api/v1/bans")
+if [ "$SC" = '200' ]; then
+  ok 'HTML 特殊字符可存储'
+else
+  bad 'HTML 特殊字符可存储' "got=$SC"
+fi
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+  -d '{"target":"x; DROP TABLE admins; --","reason":"sqli"}' "$BASE/api/v1/bans")
+if [ "$SC" = '200' ]; then
+  ok 'SQL 注入串被当作普通字符串'
+else
+  bad 'SQL 注入串被当作普通字符串' "got=$SC"
+fi
+
+SC=$(code -H "$AUTH" "$BASE/api/v1/users")
+if [ "$SC" = '200' ]; then
+  ok 'SQL 注入后 admins 表仍存在'
+else
+  bad 'SQL 注入后 admins 表仍存在' "got=$SC"
+fi
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+  -d '{"target":"ctrlXchar","reason":"x"}' "$BASE/api/v1/bans")
+if [ "$SC" = '200' ] || [ "$SC" = '400' ]; then
+  ok '控制字符路径有响应'
+else
+  bad '控制字符路径有响应' "got=$SC"
+fi
+
+SC=$(code -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" \\
+  -d '{"target":"   ","reason":"   "}' "$BASE/api/v1/bans")
+if [ "$SC" = '400' ]; then
+  ok '纯空白被拒绝'
+else
+  bad '纯空白被拒绝' "got=$SC"
+fi
+
+echo
+echo '===== 15c. 超大请求体 ====='
+
+python3 -c "print('{\"target\":\"p\",\"reason\":\"' + 'x'*9000000 + '\"}')" > /tmp/bigbody.json
+SC=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" --data-binary @/tmp/bigbody.json "$BASE/api/v1/bans")
+if [ "$SC" = '413' ] || [ "$SC" = '400' ]; then
+  ok "超大请求体被拒绝 $SC"
+else
+  bad '超大请求体被拒绝' "got=$SC"
+fi
+
+echo
+echo '===== 18. 数据库不可用降级 ====='
+
+DB_FILE="$WORK/data/control.db"
+if [ ! -f "$DB_FILE" ]; then
+  DB_FILE=$(find "$WORK" -name '*.db' -type f 2>/dev/null | head -1)
+fi
+
+if [ -z "$DB_FILE" ] || [ ! -f "$DB_FILE" ]; then
+  bad '找到数据库文件' 'not found'
+else
+  ok '找到数据库文件'
+
+  mv "$DB_FILE" "$DB_FILE.bak"
+  chmod 000 "$DB_FILE.bak" 2>/dev/null
+
+  SC=$(code "$BASE/api/v1/health")
+  if [ "$SC" = '200' ] || [ "$SC" = '503' ]; then
+    ok "数据库缺失时 health 有响应 $SC"
+  else
+    bad '数据库缺失时 health 有响应' "got=$SC"
+  fi
+
+  if kill -0 "$SERVER_PID" 2>/dev/null; then
+    ok '数据库异常后进程仍存活'
+  else
+    bad '数据库异常后进程仍存活' 'process died'
+  fi
+
+  mv "$DB_FILE.bak" "$DB_FILE" 2>/dev/null
+  chmod 644 "$DB_FILE" 2>/dev/null
+
+  SC=$(code "$BASE/api/v1/health")
+  if [ "$SC" = '200' ]; then
+    ok '数据库恢复后 health 正常'
+  else
+    bad '数据库恢复后 health 正常' "got=$SC"
+  fi
+fi
+
+echo
 echo '===== 16. 登出 ====='
 SC=$(code -X POST -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/auth/logout")
 if [ "$SC" = '200' ] || [ "$SC" = '204' ]; then

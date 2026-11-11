@@ -65,7 +65,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-const MAX_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
+const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 /// 通用本地服务管理器：托管 cocktail-init 等本地子进程。
 pub(crate) static SERVICE_SUPERVISOR: OnceLock<Arc<supervisor::ServiceSupervisor>> =
