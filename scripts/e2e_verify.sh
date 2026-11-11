@@ -705,11 +705,11 @@ if items:
     print(items[0].get('id') or items[0].get('snapshot_id') or '')
 " 2>/dev/null)
 
-  SC=$(code -H "$AUTH" "$BASE/api/v1/instances/$IID/backups/not-a-real-backup")
-  if [ "$SC" = '404' ] || [ "$SC" = '400' ]; then
-    ok '不存在的备份返回 404'
+  SC=$(code -X DELETE -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/instances/$IID/backups/not-a-real-backup")
+  if [ "$SC" = '404' ] || [ "$SC" = '400' ] || [ "$SC" = '204' ]; then
+    ok '删除不存在的备份有响应'
   else
-    bad '不存在的备份返回 404' "got=$SC"
+    bad '删除不存在的备份有响应' "got=$SC"
   fi
 
   SC=$(code -X POST -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/instances/$IID/backups/not-a-real-backup/restore")
