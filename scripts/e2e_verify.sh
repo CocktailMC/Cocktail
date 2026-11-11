@@ -598,6 +598,204 @@ else
 fi
 
 echo
+echo '===== 19. 数据库升级路径 ====='
+
+UPG="$ROOT/target/upgrade-run"
+rm -rf "$UPG"
+mkdir -p "$UPG/data"
+
+OLDDB="$UPG/data/control.db"
+python3 - "$OLDDB" <<'PYOLD'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.executescript('''
+CREATE TABLE panel_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    panel_name TEXT NOT NULL
+);
+INSERT INTO panel_settings (id, panel_name) VALUES (1, 'Old Panel');
+
+CREATE TABLE admins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE sessions (
+    token TEXT PRIMARY KEY,
+    admin_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE login_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    at TEXT NOT NULL
+);
+
+CREATE TABLE nodes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE instances (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    action TEXT NOT NULL
+);
+''')
+conn.commit()
+conn.close()
+print('old schema created')
+PYOLD
+
+if [ ! -f "$OLDDB" ]; then
+  bad '构造旧版数据库' 'failed'
+else
+  ok '构造旧版数据库（缺 expires_at / csrf_token / 多列）'
+
+  cd "$UPG"
+  export COCKTAIL_BIND=127.0.0.1:11013
+  export COCKTAIL_WEB_ROOT="$ROOT/admin/dist"
+  export RUST_LOG=warn
+
+  "$CP" > "$UPG/upgrade.log" 2>&1 &
+  UPID=$!
+
+  READY=0
+  for _ in $(seq 1 60); do
+    if curl -s -o /dev/null "http://127.0.0.1:11013/api/v1/health" 2>/dev/null; then
+      READY=1
+      break
+    fi
+    if ! kill -0 "$UPID" 2>/dev/null; then
+      break
+    fi
+    sleep 1
+  done
+
+  if [ "$READY" = '1' ]; then
+    ok '旧库启动成功（迁移未崩溃）'
+  else
+    bad '旧库启动成功' "failed: $(tail -5 "$UPG/upgrade.log")"
+  fi
+
+  if [ "$READY" = '1' ]; then
+    OK=$(python3 - "$OLDDB" <<'PYCHK'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+c = conn.cursor()
+required = {
+    'panel_settings': ['webhook_url'],
+    'sessions': ['expires_at', 'csrf_token'],
+    'nodes': ['hostname', 'os', 'arch', 'last_seen', 'token_hash', 'protocol_version', 'last_seq'],
+    'global_bans': [],
+    'tickets': [],
+    'player_actions': [],
+}
+missing = []
+for table, cols in required.items():
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+    if not c.fetchone():
+        missing.append('table:' + table)
+        continue
+    c.execute('PRAGMA table_info(' + table + ')')
+    have = {r[1] for r in c.fetchall()}
+    for col in cols:
+        if col not in have:
+            missing.append(table + '.' + col)
+print('OK' if not missing else 'MISSING:' + ','.join(missing))
+PYCHK
+)
+
+    if [ "$OK" = 'OK' ]; then
+      ok '迁移补齐所有缺失列与表'
+    else
+      bad '迁移补齐所有缺失列与表' "$OK"
+    fi
+
+    ROW=$(python3 - "$OLDDB" <<'PYROW'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+r = conn.execute('SELECT panel_name FROM panel_settings WHERE id=1').fetchone()
+print(r[0] if r else 'NONE')
+PYROW
+)
+    if [ "$ROW" = 'Old Panel' ]; then
+      ok '旧库原有数据保留'
+    else
+      bad '旧库原有数据保留' "got=$ROW"
+    fi
+
+    SC=$(code_with "$UPG/h.json" "http://127.0.0.1:11013/api/v1/health")
+    check_eq '迁移后 health 正常' '200' "$SC"
+
+    REQ=$(python3 -c "import json;print(json.load(open('$UPG/h.json'))['setup_required'])" 2>/dev/null)
+    check_eq '旧库无管理员时需 setup' 'True' "$REQ"
+
+    SC=$(code -X POST -H 'Content-Type: application/json' \
+      -d '{"username":"upgrade_admin","password":"Upgrade#2026!x","panel_name":"Upgraded"}' \
+      "http://127.0.0.1:11013/api/v1/setup")
+    check_eq '迁移后可以创建管理员' '200' "$SC"
+
+    SC=$(code_with "$UPG/s.json" -X POST -H 'Content-Type: application/json' \
+      -d '{"username":"upgrade_admin","password":"Upgrade#2026!x"}' \
+      "http://127.0.0.1:11013/api/v1/auth/login")
+    check_eq '迁移后可以登录' '200' "$SC"
+
+    TOKU=$(python3 -c "import json;print(json.load(open('$UPG/s.json'))['token'])" 2>/dev/null)
+    if [ -n "$TOKU" ]; then
+      SC=$(code -H "Authorization: Bearer $TOKU" "http://127.0.0.1:11013/api/v1/bans?all=true")
+      check_eq '迁移后新表可用（封禁）' '200' "$SC"
+      SC=$(code -H "Authorization: Bearer $TOKU" "http://127.0.0.1:11013/api/v1/tickets")
+      check_eq '迁移后新表可用（工单）' '200' "$SC"
+    else
+      bad '迁移后拿到 token' 'empty'
+    fi
+
+    kill $UPID 2>/dev/null
+    wait $UPID 2>/dev/null
+
+    cd "$UPG"
+    "$CP" > "$UPG/upgrade2.log" 2>&1 &
+    UPID2=$!
+    READY2=0
+    for _ in $(seq 1 40); do
+      if curl -s -o /dev/null "http://127.0.0.1:11013/api/v1/health" 2>/dev/null; then
+        READY2=1
+        break
+      fi
+      sleep 1
+    done
+
+    if [ "$READY2" = '1' ]; then
+      ok '迁移后重启仍正常（幂等）'
+    else
+      bad '迁移后重启仍正常（幂等）' 'failed'
+    fi
+
+    SC=$(code -X POST -H 'Content-Type: application/json' \
+      -d '{"username":"upgrade_admin","password":"Upgrade#2026!x"}' \
+      "http://127.0.0.1:11013/api/v1/auth/login")
+    check_eq '重启后管理员仍在' '200' "$SC"
+
+    kill $UPID2 2>/dev/null
+    wait $UPID2 2>/dev/null
+  fi
+fi
+
+echo
 echo '===== 17. 持久化验证 ====='
 kill $SERVER_PID 2>/dev/null
 wait $SERVER_PID 2>/dev/null
