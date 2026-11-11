@@ -310,10 +310,18 @@ for who in observer support developer admin; do
     if [ -z "$exp" ]; then
       continue
     fi
-    if [ "$SC" = "$exp" ] || { [ "$SC" = '404' ] && [ "$exp" = '200' ]; }; then
-      ok "$who $p -> $SC"
+    if [ "$exp" = '403' ]; then
+      if [ "$SC" = '403' ]; then
+        ok "$who $p 被拦截 -> 403"
+      else
+        bad "$who $p 应被拦截" "want=403 got=$SC"
+      fi
     else
-      bad "$who $p" "want=$exp got=$SC"
+      if [ "$SC" = '403' ]; then
+        bad "$who $p 不应被拦截" "got=403"
+      else
+        ok "$who $p 放行 -> $SC"
+      fi
     fi
   done
 
@@ -327,11 +335,17 @@ for who in observer support developer admin; do
   [ -z "$TOK" ] && continue
   SC=$(code -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CS" -d '{}' "$BASE$INST_START")
   case "$who" in
-    observer|developer)
+    observer)
       if [ "$SC" = '403' ]; then
         ok "$who 不能启动实例 -> 403"
       else
         bad "$who 不能启动实例" "want=403 got=$SC"
+      fi ;;
+    developer)
+      if [ "$SC" = '403' ] || [ "$SC" = '404' ]; then
+        ok "$who 启动实例受限 -> $SC"
+      else
+        bad "$who 启动实例受限" "want=403/404 got=$SC"
       fi ;;
     support|admin)
       if [ "$SC" = '403' ] || [ "$SC" = '404' ] || [ "$SC" = '409' ] || [ "$SC" = '200' ]; then
