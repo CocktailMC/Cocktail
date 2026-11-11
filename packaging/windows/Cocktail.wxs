@@ -12,7 +12,6 @@
       InstallerVersion="500"
       Compressed="yes"
       InstallScope="perMachine"
-      Win64="yes"
       Description="Cocktail Manager — Minecraft server control plane"
       Manufacturer="Cocktail" />
 
