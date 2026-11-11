@@ -32,6 +32,8 @@ pub struct CreateBanBody {
     #[serde(default)]
     pub hours: Option<i64>,
     #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
     pub instances: Option<Vec<String>>,
 }
 
