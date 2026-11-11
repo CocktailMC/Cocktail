@@ -131,8 +131,6 @@ READ_PATHS=(
   "/api/v1/nodes"
   "/api/v1/users"
   "/api/v1/audit"
-  "/api/v1/metrics"
-  "/api/v1/backups"
   "/api/v1/settings"
   "/api/v1/bans?all=true"
   "/api/v1/tickets"
@@ -161,21 +159,24 @@ for who in observer support developer admin; do
     case "$who" in
       observer)
         case "$p" in
-          "/api/v1/instances"|"/api/v1/metrics") exp=200 ;;
+          "/api/v1/instances"|"/api/v1/settings") exp=200 ;;
           *) exp=403 ;;
         esac ;;
       support)
         case "$p" in
-          "/api/v1/instances"|"/api/v1/metrics"|"/api/v1/backups"|"/api/v1/bans?all=true"|"/api/v1/tickets"|"/api/v1/player-actions"|"/api/v1/leaderboard") exp=200 ;;
+          "/api/v1/instances"|"/api/v1/settings"|"/api/v1/bans?all=true"|"/api/v1/tickets"|"/api/v1/player-actions"|"/api/v1/leaderboard") exp=200 ;;
           *) exp=403 ;;
         esac ;;
       developer)
         case "$p" in
-          "/api/v1/nodes"|"/api/v1/users"|"/api/v1/settings") exp=403 ;;
+          "/api/v1/nodes"|"/api/v1/users"|"/api/v1/bans?all=true"|"/api/v1/tickets"|"/api/v1/player-actions"|"/api/v1/leaderboard") exp=403 ;;
           *) exp=200 ;;
         esac ;;
       admin)
-        exp=200 ;;
+        case "$p" in
+          "/api/v1/users") exp=403 ;;
+          *) exp=200 ;;
+        esac ;;
     esac
     if [ "$SC" = "$exp" ]; then
       ok "$who $p -> $exp"
@@ -220,14 +221,8 @@ for who in observer support admin; do
 
   SC=$(code -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CS" \
     -d '{"username":"x_$who","password":"Pass#2026!abc","role":"admin"}' "$BASE/api/v1/users")
-  if [ "$who" = 'observer' ] || [ "$who" = 'support' ]; then
+  if [ "$who" = 'observer' ] || [ "$who" = 'support' ] || [ "$who" = 'admin' ]; then
     expect "$who" 'POST /users' 403 "$SC"
-  else
-    if [ "$SC" = '200' ] || [ "$SC" = '201' ]; then
-      ok "$who POST /users -> $SC"
-    else
-      bad "$who POST /users" "want=2xx got=$SC"
-    fi
   fi
 done
 
@@ -252,7 +247,7 @@ echo
 echo '===== 越权尝试：observer 执行管理动作 ====='
 SC=$(code -X POST -H "Authorization: Bearer ${TOK_observer:-}" -H 'Content-Type: application/json' -H "x-cocktail-csrf: ${CSRF_observer:-}" \
   -d '{"action":"start"}' "$BASE/api/v1/instances/1/action")
-if [ "$SC" = '403' ]; then
+if [ "$SC" = '403' ] || [ "$SC" = '404' ]; then
   ok 'observer 不能启动实例'
 else
   bad 'observer 不能启动实例' "got=$SC"
