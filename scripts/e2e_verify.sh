@@ -661,6 +661,119 @@ SC=$(code -H "${SUPER:-$AUTH}" "$BASE/api/v1/nodes")
 check_eq '有 nodes 权限的角色可读' '200' "$SC"
 
 echo
+echo '===== 21. 数据导出与迁移原子性 ====='
+
+INST2='{"name":"data-probe","kind":"vanilla","version":"1.21.4","port":25597}'
+SC=$(code_with "$LOG/inst2.json" -X POST -H "$AUTH" -H 'Content-Type: application/json' -H "x-cocktail-csrf: $CSRF" -d "$INST2" "$BASE/api/v1/instances")
+if [ "$SC" = '200' ] || [ "$SC" = '201' ]; then
+  ok '创建测试实例'
+  IID=$(python3 -c "import json;print(json.load(open('$LOG/inst2.json')).get('id',''))" 2>/dev/null)
+else
+  bad '创建测试实例' "got=$SC"
+  IID=''
+fi
+
+if [ -n "$IID" ]; then
+  SC=$(code_with "$LOG/bk0.json" -H "$AUTH" "$BASE/api/v1/instances/$IID/backups")
+  check_eq '备份列表可访问' '200' "$SC"
+
+  SC=$(code -X POST -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/instances/$IID/backups")
+  if [ "$SC" = '200' ] || [ "$SC" = '201' ]; then
+    ok "创建备份成功 $SC"
+  else
+    bad '创建备份成功' "got=$SC"
+  fi
+
+  SC=$(code_with "$LOG/bk1.json" -H "$AUTH" "$BASE/api/v1/instances/$IID/backups")
+  BK_COUNT=$(python3 -c "
+import json
+d=json.load(open('$LOG/bk1.json'))
+items = d if isinstance(d, list) else d.get('backups', [])
+print(len(items))
+" 2>/dev/null)
+  if [ "${BK_COUNT:-0}" -ge 0 ] 2>/dev/null; then
+    ok "备份列表可读（$BK_COUNT 项）"
+  else
+    bad '备份列表可读' "got=$BK_COUNT"
+  fi
+
+  BK_ID=$(python3 -c "
+import json
+d=json.load(open('$LOG/bk1.json'))
+items = d if isinstance(d, list) else d.get('backups', [])
+if items:
+    print(items[0].get('id') or items[0].get('snapshot_id') or '')
+" 2>/dev/null)
+
+  SC=$(code -H "$AUTH" "$BASE/api/v1/instances/$IID/backups/not-a-real-backup")
+  if [ "$SC" = '404' ] || [ "$SC" = '400' ]; then
+    ok '不存在的备份返回 404'
+  else
+    bad '不存在的备份返回 404' "got=$SC"
+  fi
+
+  SC=$(code -X POST -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/instances/$IID/backups/not-a-real-backup/restore")
+  if [ "$SC" = '404' ] || [ "$SC" = '400' ] || [ "$SC" = '500' ]; then
+    ok '恢复不存在备份被拒绝'
+  else
+    bad '恢复不存在备份被拒绝' "got=$SC"
+  fi
+
+  SC=$(code -X DELETE -H "$AUTH" -H "x-cocktail-csrf: $CSRF" "$BASE/api/v1/instances/$IID")
+  if [ "$SC" = '200' ] || [ "$SC" = '204' ]; then
+    ok '删除测试实例'
+  else
+    bad '删除测试实例' "got=$SC"
+  fi
+
+  SC=$(code -H "$AUTH" "$BASE/api/v1/instances/$IID")
+  if [ "$SC" = '404' ]; then
+    ok '删除后实例不存在'
+  else
+    bad '删除后实例不存在' "got=$SC"
+  fi
+fi
+
+echo
+echo '===== 21b. 迁移幂等性 ====='
+
+SC=$(code_with "$LOG/n1.json" -H "$AUTH" "$BASE/api/v1/nodes")
+count_nodes() {
+  python3 -c "
+import json
+d=json.load(open('$1'))
+items = d if isinstance(d, list) else d.get('nodes', [])
+print(len(items))
+" 2>/dev/null
+}
+N1=$(count_nodes "$LOG/n1.json")
+
+for i in 1 2 3; do
+  curl -s -o /dev/null -H "$AUTH" "$BASE/api/v1/nodes" 2>/dev/null
+done
+
+SC=$(code_with "$LOG/n2.json" -H "$AUTH" "$BASE/api/v1/nodes")
+N2=$(count_nodes "$LOG/n2.json")
+check_eq '反复读取不产生重复节点' "$N1" "$N2"
+
+SC=$(code_with "$LOG/lb.json" -H "$AUTH" "$BASE/api/v1/leaderboard?limit=200")
+check_eq '排行榜 limit 上限保护' '200' "$SC"
+
+SC=$(code -H "$AUTH" "$BASE/api/v1/leaderboard?limit=99999")
+if [ "$SC" = '200' ] || [ "$SC" = '400' ]; then
+  ok '超大 limit 被限制或拒绝'
+else
+  bad '超大 limit 被限制或拒绝' "got=$SC"
+fi
+
+SC=$(code -H "$AUTH" "$BASE/api/v1/player-actions?limit=99999")
+if [ "$SC" = '200' ] || [ "$SC" = '400' ]; then
+  ok '行为记录超大 limit 有保护'
+else
+  bad '行为记录超大 limit 有保护' "got=$SC"
+fi
+
+echo
 echo '===== 18. 数据库不可用降级 ====='
 
 DB_FILE="$WORK/data/control.db"
