@@ -11,6 +11,22 @@ pub fn router() -> Router<SharedState> {
         .route("/api/v1/update/status", get(handlers::update_status))
         .route("/api/v1/update/assets", get(handlers::update_assets))
         .route("/api/v1/tutorials", get(handlers::list_tutorials))
+        .route(
+            "/api/v1/bans",
+            get(handlers::list_bans).post(handlers::create_ban),
+        )
+        .route("/api/v1/bans/{id}", delete(handlers::lift_ban))
+        .route(
+            "/api/v1/tickets",
+            get(handlers::list_tickets).post(handlers::create_ticket),
+        )
+        .route("/api/v1/tickets/{id}/claim", post(handlers::claim_ticket))
+        .route(
+            "/api/v1/tickets/{id}/approve",
+            post(handlers::approve_ticket),
+        )
+        .route("/api/v1/tickets/{id}/reject", post(handlers::reject_ticket))
+        .route("/api/v1/player-actions", get(handlers::list_actions))
         .route("/api/v1/tutorials/mine", get(handlers::my_tutorials))
         .route(
             "/api/v1/tutorials/{id}/progress",

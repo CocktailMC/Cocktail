@@ -158,6 +158,53 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (instance_id, name)
         );
 
+        CREATE TABLE IF NOT EXISTS global_bans (
+            id TEXT PRIMARY KEY,
+            target TEXT NOT NULL COLLATE NOCASE,
+            target_kind TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            banned_by TEXT NOT NULL,
+            banned_at TEXT NOT NULL,
+            expires_at TEXT,
+            instances TEXT NOT NULL DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            source TEXT NOT NULL DEFAULT 'panel'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_bans_target ON global_bans(target);
+
+        CREATE TABLE IF NOT EXISTS tickets (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            state TEXT NOT NULL,
+            player TEXT NOT NULL COLLATE NOCASE,
+            instance_id TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            handler TEXT,
+            resolution TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '[]'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_tickets_state ON tickets(state);
+        CREATE INDEX IF NOT EXISTS idx_tickets_player ON tickets(player);
+
+        CREATE TABLE IF NOT EXISTS player_actions (
+            id TEXT PRIMARY KEY,
+            at TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            instance_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target TEXT NOT NULL COLLATE NOCASE,
+            detail TEXT NOT NULL DEFAULT '',
+            result TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_actions_target ON player_actions(target);
+        CREATE INDEX IF NOT EXISTS idx_actions_at ON player_actions(at DESC);
+
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             at TEXT NOT NULL,
@@ -1328,4 +1375,325 @@ pub fn node_protocol_version(conn: &Connection, id: &str) -> anyhow::Result<i64>
     .optional()
     .map(|v| v.unwrap_or(1))
     .map_err(Into::into)
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct BanRow {
+    pub id: String,
+    pub target: String,
+    pub target_kind: String,
+    pub reason: String,
+    pub banned_by: String,
+    pub banned_at: String,
+    pub expires_at: Option<String>,
+    pub instances: Vec<String>,
+    pub active: bool,
+    pub source: String,
+}
+
+fn split_instances(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn map_ban(r: &rusqlite::Row<'_>) -> rusqlite::Result<BanRow> {
+    let instances: String = r.get(7)?;
+    Ok(BanRow {
+        id: r.get(0)?,
+        target: r.get(1)?,
+        target_kind: r.get(2)?,
+        reason: r.get(3)?,
+        banned_by: r.get(4)?,
+        banned_at: r.get(5)?,
+        expires_at: r.get(6)?,
+        instances: split_instances(&instances),
+        active: r.get::<_, i64>(8)? != 0,
+        source: r.get(9)?,
+    })
+}
+
+const BAN_COLS: &str =
+    "id, target, target_kind, reason, banned_by, banned_at, expires_at, instances, active, source";
+
+pub fn list_bans(conn: &Connection, include_inactive: bool) -> anyhow::Result<Vec<BanRow>> {
+    let sql = if include_inactive {
+        format!("SELECT {BAN_COLS} FROM global_bans ORDER BY banned_at DESC")
+    } else {
+        format!("SELECT {BAN_COLS} FROM global_bans WHERE active = 1 ORDER BY banned_at DESC")
+    };
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], map_ban)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn insert_ban(
+    conn: &Connection,
+    id: &str,
+    target: &str,
+    kind: &str,
+    reason: &str,
+    by: &str,
+    expires_at: Option<&str>,
+    instances: &[String],
+    source: &str,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT INTO global_bans (id, target, target_kind, reason, banned_by, banned_at, expires_at, instances, active, source)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9)",
+        params![
+            id,
+            target,
+            kind,
+            reason,
+            by,
+            chrono::Utc::now().to_rfc3339(),
+            expires_at,
+            instances.join(","),
+            source
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn deactivate_ban(conn: &Connection, id: &str) -> anyhow::Result<bool> {
+    let n = conn.execute(
+        "UPDATE global_bans SET active = 0 WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(n > 0)
+}
+
+pub fn active_bans_for(conn: &Connection, instance: &str) -> anyhow::Result<Vec<BanRow>> {
+    let all = list_bans(conn, false)?;
+    let now = chrono::Utc::now();
+    Ok(all
+        .into_iter()
+        .filter(|b| {
+            let not_expired = b
+                .expires_at
+                .as_deref()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| t.with_timezone(&chrono::Utc) > now)
+                .unwrap_or(true);
+            let scoped = b.instances.is_empty() || b.instances.iter().any(|i| i == instance);
+            not_expired && scoped
+        })
+        .collect())
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct TicketRow {
+    pub id: String,
+    pub kind: String,
+    pub state: String,
+    pub player: String,
+    pub instance_id: String,
+    pub subject: String,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub handler: Option<String>,
+    pub resolution: String,
+    pub notes: serde_json::Value,
+}
+
+const TICKET_COLS: &str = "id, kind, state, player, instance_id, subject, body, created_at, updated_at, handler, resolution, notes";
+
+fn map_ticket(r: &rusqlite::Row<'_>) -> rusqlite::Result<TicketRow> {
+    let notes: String = r.get(11)?;
+    Ok(TicketRow {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        state: r.get(2)?,
+        player: r.get(3)?,
+        instance_id: r.get(4)?,
+        subject: r.get(5)?,
+        body: r.get(6)?,
+        created_at: r.get(7)?,
+        updated_at: r.get(8)?,
+        handler: r.get(9)?,
+        resolution: r.get(10)?,
+        notes: serde_json::from_str(&notes).unwrap_or(serde_json::Value::Array(Vec::new())),
+    })
+}
+
+pub fn list_tickets(
+    conn: &Connection,
+    open_only: bool,
+    player: Option<&str>,
+) -> anyhow::Result<Vec<TicketRow>> {
+    let mut sql = format!("SELECT {TICKET_COLS} FROM tickets WHERE 1 = 1");
+    if open_only {
+        sql.push_str(" AND state IN ('open', 'claimed')");
+    }
+    if player.is_some() {
+        sql.push_str(" AND player = ?1");
+    }
+    sql.push_str(" ORDER BY created_at DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = match player {
+        Some(p) => stmt.query_map(params![p], map_ticket)?.collect::<Vec<_>>(),
+        None => stmt.query_map([], map_ticket)?.collect::<Vec<_>>(),
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn get_ticket(conn: &Connection, id: &str) -> anyhow::Result<Option<TicketRow>> {
+    conn.query_row(
+        &format!("SELECT {TICKET_COLS} FROM tickets WHERE id = ?1"),
+        params![id],
+        map_ticket,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn insert_ticket(
+    conn: &Connection,
+    id: &str,
+    kind: &str,
+    player: &str,
+    instance_id: &str,
+    subject: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO tickets (id, kind, state, player, instance_id, subject, body, created_at, updated_at, handler, resolution, notes)
+         VALUES (?1, ?2, 'open', ?3, ?4, ?5, ?6, ?7, ?7, NULL, '', '[]')",
+        params![id, kind, player, instance_id, subject, body, now],
+    )?;
+    Ok(())
+}
+
+pub fn update_ticket_state(
+    conn: &Connection,
+    id: &str,
+    state: &str,
+    handler: Option<&str>,
+    resolution: &str,
+) -> anyhow::Result<bool> {
+    let n = conn.execute(
+        "UPDATE tickets SET state = ?2, handler = COALESCE(?3, handler), resolution = ?4, updated_at = ?5 WHERE id = ?1",
+        params![id, state, handler, resolution, chrono::Utc::now().to_rfc3339()],
+    )?;
+    Ok(n > 0)
+}
+
+pub fn append_ticket_note(
+    conn: &Connection,
+    id: &str,
+    who: &str,
+    text: &str,
+) -> anyhow::Result<bool> {
+    let Some(row) = get_ticket(conn, id)? else {
+        return Ok(false);
+    };
+    let mut notes = row.notes.as_array().cloned().unwrap_or_default();
+    notes.push(serde_json::json!({
+        "at": chrono::Utc::now().to_rfc3339(),
+        "by": who,
+        "text": text
+    }));
+    conn.execute(
+        "UPDATE tickets SET notes = ?2, updated_at = ?3 WHERE id = ?1",
+        params![
+            id,
+            serde_json::to_string(&notes)?,
+            chrono::Utc::now().to_rfc3339()
+        ],
+    )?;
+    Ok(true)
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ActionRow {
+    pub id: String,
+    pub at: String,
+    pub actor: String,
+    pub instance_id: String,
+    pub action: String,
+    pub target: String,
+    pub detail: String,
+    pub result: String,
+}
+
+fn map_action(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActionRow> {
+    Ok(ActionRow {
+        id: r.get(0)?,
+        at: r.get(1)?,
+        actor: r.get(2)?,
+        instance_id: r.get(3)?,
+        action: r.get(4)?,
+        target: r.get(5)?,
+        detail: r.get(6)?,
+        result: r.get(7)?,
+    })
+}
+
+pub fn record_action(
+    conn: &Connection,
+    actor: &str,
+    instance_id: &str,
+    action: &str,
+    target: &str,
+    detail: &str,
+    result: &str,
+) -> anyhow::Result<String> {
+    let id = crate::crypto::random_token(16);
+    conn.execute(
+        "INSERT INTO player_actions (id, at, actor, instance_id, action, target, detail, result)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            id,
+            chrono::Utc::now().to_rfc3339(),
+            actor,
+            instance_id,
+            action,
+            target,
+            detail,
+            result
+        ],
+    )?;
+    Ok(id)
+}
+
+pub fn list_actions(
+    conn: &Connection,
+    target: Option<&str>,
+    actor: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Vec<ActionRow>> {
+    let mut sql = String::from(
+        "SELECT id, at, actor, instance_id, action, target, detail, result FROM player_actions WHERE 1 = 1",
+    );
+    let mut args: Vec<String> = Vec::new();
+    if let Some(t) = target {
+        args.push(t.to_string());
+        sql.push_str(&format!(" AND target = ?{}", args.len()));
+    }
+    if let Some(a) = actor {
+        args.push(a.to_string());
+        sql.push_str(&format!(" AND actor = ?{}", args.len()));
+    }
+    sql.push_str(&format!(" ORDER BY at DESC LIMIT {}", limit.clamp(1, 2000)));
+    let mut stmt = conn.prepare(&sql)?;
+    let params_ref: Vec<&dyn rusqlite::ToSql> =
+        args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+    let rows = stmt.query_map(params_ref.as_slice(), map_action)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }

@@ -605,6 +605,24 @@ fn resolve_web_root() -> Option<PathBuf> {
 
 fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
     let read = matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD);
+    if path.starts_with("/api/v1/bans") {
+        if read {
+            return "players";
+        }
+        return if path.ends_with("/players") {
+            "players.ban"
+        } else if *method == axum::http::Method::DELETE {
+            "players.pardon"
+        } else {
+            "players.ban"
+        };
+    }
+    if path.starts_with("/api/v1/tickets") {
+        return if read { "players" } else { "players" };
+    }
+    if path.starts_with("/api/v1/player-actions") {
+        return "players";
+    }
     if path.starts_with("/api/v1/users") {
         return "users";
     }
