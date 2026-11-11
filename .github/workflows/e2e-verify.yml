@@ -1,0 +1,45 @@
+name: E2E verify
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 'feat/**'
+
+jobs:
+  e2e:
+    name: End to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build control and init
+        run: cargo build --release -p cocktail-control -p cocktail-init --bins
+
+      - name: Build admin
+        run: |
+          cd admin
+          npm ci
+          npm run build
+
+      - name: Run e2e
+        run: bash scripts/e2e_verify.sh
+
+      - name: Collect logs
+        if: always()
+        run: |
+          for f in /tmp/e2e/*.log; do
+            [ -f "$f" ] && echo "===== $f =====" && tail -80 "$f"
+          done
