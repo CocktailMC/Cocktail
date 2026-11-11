@@ -172,6 +172,7 @@ pub fn permissions(role: &str) -> Vec<&'static str> {
             "plugins",
             "plugins.read",
             "plugins.install",
+            "backups.read",
             "start",
             "stop",
             "rcon",
