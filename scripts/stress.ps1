@@ -178,12 +178,15 @@ $hax = @(
 foreach ($h in $hax) { $null = Req "GET" "/api/v1/instances" $null 10 $h }
 Record "header-abuse" (Alive) "4 variants"
 
-Log "=== phase 13 zero and negative ===
-$num = @(@{ target = "p"; reason = "r"; hours = -999999 }, @{ target = "p"; reason = "r"; hours = 0 }, @{ target = "p"; reason = "r"; hours = 9223372036854775807 }, @{ target = "p"; reason = "r"; expires_at = "" }, @{ target = "p"; reason = "r"; expires_at = "0000-00-00T00:00:00Z" })
-foreach ($n in $num) { $null = Req "POST" "/api/v1/bans" ($n | ConvertTo-Json) 10 }
-Record "numeric-extremes" (Alive) "5 variants"
-
-Log "=== phase 14 missing fields ===
+Log "=== phase 13 numeric extremes ==="
+try { $null = Req "POST" "/api/v1/bans" '{"target":"p","reason":"r","hours":-999999}' 10 } catch { }
+try { $null = Req "POST" "/api/v1/bans" '{"target":"p","reason":"r","hours":0}' 10 } catch { }
+try { $null = Req "POST" "/api/v1/bans" '{"target":"p","reason":"r","hours":9223372036854775807}' 10 } catch { }
+try { $null = Req "POST" "/api/v1/bans" '{"target":"p","reason":"r","expires_at":""}' 10 } catch { }
+try { $null = Req "POST" "/api/v1/bans" '{"target":"p","reason":"r","expires_at":"0000-00-00T00:00:00Z"}' 10 } catch { }
+try { $null = Req "POST" "/api/v1/bans" '{"target":"p","reason":"r","hours":1e309}' 10 } catch { }
+Record "numeric-extremes" (Alive) "6 variants"
+Log "=== phase 14 missing fields ==="
 $miss = @('{}', '{"target":null,"reason":null}', '{"target":[],"reason":{}}', '{"target":1,"reason":true}')
 foreach ($m in $miss) { $null = Req "POST" "/api/v1/bans" $m 10; $null = Req "POST" "/api/v1/tickets" $m 10 }
 Record "missing-fields" (Alive) "4 x 2 endpoints"

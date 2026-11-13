@@ -8,6 +8,7 @@ on:
     paths:
       - "crates/cocktail-control/**"
       - "scripts/stress.ps1"
+      - "scripts/stress2.ps1"
       - ".github/workflows/stress-windows.yml"
 concurrency:
   group: stress-${{ github.ref }}
@@ -18,7 +19,7 @@ jobs:
   stress:
     name: Hammer control plane
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -75,8 +76,40 @@ jobs:
               Write-Host "service did not come up"
               $script:fatal = $true
             } else {
+              $script:peak = 0
+              $mon = Start-Job -ScriptBlock {
+                param($pid2)
+                $peak = 0
+                for ($i = 0; $i -lt 900; $i++) {
+                  Start-Sleep -Seconds 1
+                  $p = Get-Process -Id $pid2 -ErrorAction SilentlyContinue
+                  if (-not $p) { break }
+                  if ($p.WorkingSet64 -gt $peak) { $peak = $p.WorkingSet64 }
+                }
+                [int]($peak / 1MB)
+              } -ArgumentList $proc.Id
               & ./scripts/stress.ps1
-              if ($LASTEXITCODE -ne 0) { $script:fatal = $true }
+              $r1 = $LASTEXITCODE
+              Write-Host "suite1 exit=$r1"
+              if ($r1 -ne 0) { $script:fatal = $true }
+              if (-not $proc.HasExited) {
+                & ./scripts/stress2.ps1
+                $r2 = $LASTEXITCODE
+                Write-Host "suite2 exit=$r2"
+                if ($r2 -ne 0) { $script:fatal = $true }
+              } else {
+                Write-Host "service died before suite2"
+                $script:fatal = $true
+              }
+              Stop-Job -Job $mon -ErrorAction SilentlyContinue
+              $mem = 0
+              try { $mem = [int](Receive-Job -Job $mon -ErrorAction SilentlyContinue) } catch { }
+              Remove-Job -Job $mon -Force -ErrorAction SilentlyContinue
+              Write-Host "peak memory MB=$mem"
+              if ($mem -gt 1200) {
+                Write-Host "memory blowup detected"
+                $script:fatal = $true
+              }
             }
             if ($proc.HasExited) {
               Write-Host "process exited with code $($proc.ExitCode)"
