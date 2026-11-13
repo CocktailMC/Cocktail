@@ -54,10 +54,12 @@ jobs:
           set -eu
           deb=$(ls dist/cocktail_*.deb | head -1)
           echo "package: $deb"
-          dpkg-deb -c "$deb" | grep -E 'usr/bin/cocktail-(control|init)' || {
-            echo "cocktail-init missing from package payload" >&2
-            exit 1
-          }
+          for b in cocktail-control cocktail-init; do
+            dpkg-deb -c "$deb" | grep -q "usr/bin/$b" || {
+              echo "$b missing from package payload" >&2
+              exit 1
+            }
+          done
           dpkg-deb -c "$deb" | grep -q 'usr/share/cocktail/web/index.html' || {
             echo "web UI missing from package payload" >&2
             exit 1

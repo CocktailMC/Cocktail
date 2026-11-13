@@ -16,6 +16,10 @@ contents:
     dst: /usr/bin/cocktail-control
     file_info:
       mode: 0755
+  - src: dist/stage/usr/bin/cocktail-init
+    dst: /usr/bin/cocktail-init
+    file_info:
+      mode: 0755
   - src: dist/stage/usr/share/cocktail/web
     dst: /usr/share/cocktail/web
     type: tree

@@ -95,6 +95,21 @@ try {
   Record "header-injection" (Alive) "5 non-ascii names"
 } catch { Record "header-injection" (Alive) "setup error: $_" }
 
+Log "=== phase 5b non-ascii download with real file ==="
+try {
+  $fn = "temp" + [char]0x6D4B + [char]0x8BD5 + ".txt"
+  $wb = @{ path = $fn; content = "probe" } | ConvertTo-Json
+  $st = Req "PUT" "/api/v1/instances/$iid/files/content" $wb 15
+  Log "  write status=$st name=$fn"
+  $enc2 = [uri]::EscapeDataString($fn)
+  $dl = Req "GET" "/api/v1/instances/$iid/files/download?path=$fn" $null 15
+  Log "  raw path status=$dl"
+  $dl2 = Req "GET" "/api/v1/instances/$iid/files/download?path=$enc2" $null 15
+  Log "  encoded path status=$dl2"
+  if ($dl -ne 200 -and $dl2 -ne 200) { Log "  download did not return 200" }
+  Record "non-ascii-download" (Alive) "raw=$dl enc=$dl2"
+} catch { Record "non-ascii-download" (Alive) "error: $_" }
+
 Log "=== phase 6 login brute force ==="
 for ($i = 0; $i -lt 120; $i++) {
   $bb = @{ username = $User; password = "wrong$i" } | ConvertTo-Json
@@ -134,7 +149,7 @@ $paths | ForEach-Object -Parallel {
   1..25 | ForEach-Object {
     try { $null = Invoke-WebRequest -Uri "$base$p" -Headers @{ Authorization = "Bearer $tkn" } -UseBasicParsing -TimeoutSec 10 } catch { }
   }
-} -ThrottleLimit 16 -ErrorAction SilentlyContinue
+} -ThrottleLimit 16
 Record "concurrent-storm" (Alive) "8 x 25 parallel"
 
 Log "=== phase 10 rapid auth churn ==="
