@@ -37,6 +37,7 @@ pub struct CreateBanBody {
     pub instances: Option<Vec<String>>,
 }
 
+const MAX_BAN_HOURS: i64 = 87_600;
 const MAX_TARGET_LEN: usize = 64;
 const MAX_REASON_LEN: usize = 512;
 const MAX_PLAYER_LEN: usize = 64;
@@ -142,10 +143,30 @@ pub async fn create_ban(
             }
             Some(utc.to_rfc3339())
         }
-        _ => body
-            .hours
-            .filter(|h| *h > 0)
-            .map(|h| (chrono::Utc::now() + chrono::Duration::hours(h)).to_rfc3339()),
+        _ => match body.hours.filter(|h| *h > 0) {
+            Some(h) => {
+                let capped = h.min(MAX_BAN_HOURS);
+                let span = chrono::Duration::try_hours(capped).ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorBody {
+                            error: "时长超出允许范围".into(),
+                        }),
+                    )
+                })?;
+                let base = chrono::Utc::now();
+                let at = base.checked_add_signed(span).ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorBody {
+                            error: "到期时间超出允许范围".into(),
+                        }),
+                    )
+                })?;
+                Some(at.to_rfc3339())
+            }
+            None => None,
+        },
     };
     let instances = body.instances.unwrap_or_default();
     let id = crate::crypto::random_token(16);
