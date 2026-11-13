@@ -138,19 +138,40 @@ if ($iid) {
       param($b, $pth, $tk)
       $deadline = (Get-Date).AddSeconds(45)
       $n = 0
+      $err = 0
+      $lastErr = ""
       while ((Get-Date) -lt $deadline) {
-        try { $null = Invoke-WebRequest -Uri "$b$pth" -Headers @{ Authorization = "Bearer $tk" } -UseBasicParsing -TimeoutSec 10; $n++ } catch { }
+        try {
+          $null = Invoke-WebRequest -Uri "$b$pth" -Headers @{ Authorization = "Bearer $tk" } -UseBasicParsing -TimeoutSec 10
+          $n++
+        } catch {
+          $err++
+          if ($lastErr.Length -lt 80) { $lastErr = $_.Exception.Message }
+          Start-Sleep -Milliseconds 200
+        }
       }
-      $n
+      "$n|$err|$lastErr"
     } -ArgumentList $base, $p, $tok
   }
-  $null = $jobs | Wait-Job -Timeout 90
+  $null = $jobs | Wait-Job -Timeout 120
   $total = 0
+  $errtotal = 0
+  $sample = ""
   foreach ($j in $jobs) {
-    try { $total += [int](Receive-Job -Job $j -ErrorAction SilentlyContinue) } catch { }
+    try {
+      $line = (Receive-Job -Job $j -ErrorAction SilentlyContinue) -join ""
+      if ($line) {
+        $parts = $line.Split("|")
+        $total += [int]$parts[0]
+        $errtotal += [int]$parts[1]
+        if (-not $sample -and $parts.Count -ge 3) { $sample = $parts[2] }
+      }
+    } catch { }
     Remove-Job -Job $j -Force -ErrorAction SilentlyContinue
   }
-  Record "sustained-load" (Alive) "requests=$total in 45s"
+  Start-Sleep -Seconds 3
+  Log "  ok=$total err=$errtotal sample=$sample"
+  Record "sustained-load" (Alive) "ok=$total err=$errtotal"
 
   Log "=== p7 duplicate create race ==="
   $dup = @{ name = "dup-race"; kind = "paper"; version = "1.21.4"; port = 25613 } | ConvertTo-Json
