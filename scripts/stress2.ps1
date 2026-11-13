@@ -30,17 +30,29 @@ function Hdr {
   return $h
 }
 
-Log "=== login ==="
-try {
-  $lb = @{ username = $User; password = $Pass } | ConvertTo-Json
-  $r = Invoke-WebRequest -Uri "$Base/api/v1/auth/login" -Method POST -Body $lb -ContentType "application/json" -UseBasicParsing -TimeoutSec 20
-  $j = $r.Content | ConvertFrom-Json
-  $script:token = $j.token
-  $script:csrf = $j.csrf_token
-  Log "  ok len=$($script:token.Length)"
-} catch { Log "  login failed" }
-
+Log "=== token pickup ==="
+$tf = "$PWD/../run/token.txt"
+if (Test-Path $tf) {
+  $script:token = (Get-Content -Path $tf -Raw).Trim()
+  Log "  reused token len=$($script:token.Length)"
+}
+if (-not $script:token) {
+  try {
+    $lb = @{ username = $User; password = $Pass } | ConvertTo-Json
+    $r = Invoke-WebRequest -Uri "$Base/api/v1/auth/login" -Method POST -Body $lb -ContentType "application/json" -UseBasicParsing -TimeoutSec 20
+    $j = $r.Content | ConvertFrom-Json
+    $script:token = $j.token
+    Log "  fresh login len=$($script:token.Length)"
+  } catch { Log "  login failed" }
+}
 if (-not $script:token) { Log "abort"; exit 2 }
+
+try {
+  $mr = Invoke-WebRequest -Uri "$Base/api/v1/auth/me" -Headers @{ Authorization = "Bearer $($script:token)" } -UseBasicParsing -TimeoutSec 10
+  $mj2 = $mr.Content | ConvertFrom-Json
+  if ($mj2.csrf_token) { $script:csrf = $mj2.csrf_token }
+  Log "  me ok role=$($mj2.role)"
+} catch { Log "  me failed, csrf unavailable" }
 
 Log "=== p1 probe instance ==="
 $iid = ""

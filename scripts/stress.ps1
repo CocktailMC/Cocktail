@@ -200,5 +200,8 @@ if ($crashed.Count -gt 0) {
   $crashed | ForEach-Object { Log "  - $($_.Phase)" }
   exit 1
 }
+try {
+  $script:token | Set-Content -Path "$PWD/../run/token.txt" -NoNewline -ErrorAction SilentlyContinue
+} catch { }
 Log "SURVIVED_ALL"
 exit 0
