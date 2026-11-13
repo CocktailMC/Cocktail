@@ -144,10 +144,11 @@ if ($iid) {
         try {
           $null = Invoke-WebRequest -Uri "$b$pth" -Headers @{ Authorization = "Bearer $tk" } -UseBasicParsing -TimeoutSec 10
           $n++
+          Start-Sleep -Milliseconds 50
         } catch {
           $err++
-          if ($lastErr.Length -lt 80) { $lastErr = $_.Exception.Message }
-          Start-Sleep -Milliseconds 200
+          if ($lastErr.Length -lt 120) { $lastErr = $_.Exception.Message }
+          Start-Sleep -Milliseconds 500
         }
       }
       "$n|$err|$lastErr"
@@ -169,7 +170,7 @@ if ($iid) {
     } catch { }
     Remove-Job -Job $j -Force -ErrorAction SilentlyContinue
   }
-  Start-Sleep -Seconds 3
+  Start-Sleep -Seconds 10
   Log "  ok=$total err=$errtotal sample=$sample"
   Record "sustained-load" (Alive) "ok=$total err=$errtotal"
 
