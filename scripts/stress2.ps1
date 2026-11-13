@@ -56,11 +56,20 @@ try {
 
 Log "=== p1 probe instance ==="
 $iid = ""
-try {
-  $ib = @{ name = "deep-probe"; kind = "paper"; version = "1.21.4"; port = 25612 } | ConvertTo-Json
-  $r = Invoke-WebRequest -Uri "$Base/api/v1/instances" -Method POST -Body $ib -Headers (Hdr) -ContentType "application/json" -UseBasicParsing -TimeoutSec 20
-  $iid = ($r.Content | ConvertFrom-Json).id
-} catch { }
+foreach ($pt in @(26100, 26101, 26102, 26103)) {
+  try {
+    $ib = @{ name = "deep-probe-$pt"; kind = "paper"; version = "1.21.4"; port = $pt } | ConvertTo-Json
+    $r = Invoke-WebRequest -Uri "$Base/api/v1/instances" -Method POST -Body $ib -Headers (Hdr) -ContentType "application/json" -UseBasicParsing -TimeoutSec 20
+    $iid = ($r.Content | ConvertFrom-Json).id
+    if ($iid) { Log "  created on port $pt"; break }
+  } catch {
+    $msg = ""
+    if ($_.Exception.Response) {
+      try { $sr = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream()); $msg = $sr.ReadToEnd() } catch { }
+    }
+    Log "  port $pt failed: $($_.Exception.Message) $msg"
+  }
+}
 Log "  iid=$iid"
 Record "probe-instance" (Alive) "iid=$iid"
 
@@ -186,14 +195,15 @@ Record "repeat-setup" (Alive) "10 post-init"
 
 Log "=== p12 metrics under load ==="
 $tok = $script:token
+$murl = if ($iid) { "$Base/api/v1/instances/$iid/metrics" } else { "$Base/api/v1/instances" }
 $mj = Start-Job -ScriptBlock {
-  param($b, $tk)
+  param($u, $tk)
   $n = 0
   for ($i = 0; $i -lt 80; $i++) {
-    try { $null = Invoke-WebRequest -Uri "$b/metrics" -Headers @{ Authorization = "Bearer $tk" } -UseBasicParsing -TimeoutSec 8; $n++ } catch { }
+    try { $null = Invoke-WebRequest -Uri $u -Headers @{ Authorization = "Bearer $tk" } -UseBasicParsing -TimeoutSec 8; $n++ } catch { }
   }
   $n
-} -ArgumentList $Base, $tok
+} -ArgumentList $murl, $tok
 $null = $mj | Wait-Job -Timeout 120
 $mc = 0
 try { $mc = [int](Receive-Job -Job $mj -ErrorAction SilentlyContinue) } catch { }
