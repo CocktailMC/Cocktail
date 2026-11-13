@@ -33,8 +33,10 @@ function Hdr {
 Log "=== token pickup ==="
 $tf = "$PWD/run/token.txt"
 if (Test-Path $tf) {
-  $script:token = (Get-Content -Path $tf -Raw).Trim()
-  Log "  reused token len=$($script:token.Length)"
+  $lines2 = @(Get-Content -Path $tf)
+  if ($lines2.Count -ge 1) { $script:token = $lines2[0].Trim() }
+  if ($lines2.Count -ge 2) { $script:csrf = $lines2[1].Trim() }
+  Log "  reused token len=$($script:token.Length) csrf len=$($script:csrf.Length)"
 }
 if (-not $script:token) {
   try {
@@ -50,9 +52,10 @@ if (-not $script:token) { Log "abort"; exit 2 }
 try {
   $mr = Invoke-WebRequest -Uri "$Base/api/v1/auth/me" -Headers @{ Authorization = "Bearer $($script:token)" } -UseBasicParsing -TimeoutSec 10
   $mj2 = $mr.Content | ConvertFrom-Json
-  if ($mj2.csrf_token) { $script:csrf = $mj2.csrf_token }
-  Log "  me ok role=$($mj2.role)"
-} catch { Log "  me failed, csrf unavailable" }
+  if (-not $script:csrf -and $mj2.csrf_token) { $script:csrf = $mj2.csrf_token }
+  Log "  me ok role=$($mj2.role) csrf=$($script:csrf.Length)"
+} catch { Log "  me failed" }
+if (-not $script:csrf) { Log "  no csrf, write ops will 403" }
 
 Log "=== p1 probe instance ==="
 $iid = ""
