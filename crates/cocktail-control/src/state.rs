@@ -114,6 +114,9 @@ impl AppState {
             env_api_token,
             env_webhook_url,
             bind,
+            login_limiter: std::sync::Arc::new(crate::hardening::RateLimiter::new(
+                crate::hardening::RateRule::new(5.0, 0.2),
+            )),
         };
         if setup_pending {
             tracing::warn!("super-admin not initialized — first-run setup required");
