@@ -31,7 +31,7 @@ function Hdr {
 }
 
 Log "=== token pickup ==="
-$tf = "$PWD/../run/token.txt"
+$tf = "$PWD/run/token.txt"
 if (Test-Path $tf) {
   $script:token = (Get-Content -Path $tf -Raw).Trim()
   Log "  reused token len=$($script:token.Length)"

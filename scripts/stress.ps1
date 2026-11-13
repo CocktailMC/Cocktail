@@ -201,7 +201,7 @@ if ($crashed.Count -gt 0) {
   exit 1
 }
 try {
-  $script:token | Set-Content -Path "$PWD/../run/token.txt" -NoNewline -ErrorAction SilentlyContinue
+  $script:token | Set-Content -Path "$PWD/run/token.txt" -NoNewline -ErrorAction SilentlyContinue
 } catch { }
 Log "SURVIVED_ALL"
 exit 0
