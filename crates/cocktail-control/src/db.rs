@@ -760,7 +760,7 @@ pub fn session_lookup(conn: &Connection, token: &str) -> anyhow::Result<Option<S
         "SELECT a.id, a.username, a.password_hash, a.role, a.created_at,
                 COALESCE(s.csrf_token, ''), COALESCE(s.expires_at, '')
          FROM sessions s JOIN admins a ON a.id = s.admin_id
-         WHERE s.token = ?1 AND (s.expires_at IS NULL OR s.expires_at > ?2)",
+         WHERE s.token = ?1 AND s.expires_at IS NOT NULL AND s.expires_at > ?2",
         params![token, now],
         |r| {
             Ok(SessionRow {

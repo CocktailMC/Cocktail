@@ -15,8 +15,28 @@ use std::path::{Component, Path, PathBuf};
 pub use cocktail_shared::model::{BackupInfo, BackupScan, FileContent, FileEntry};
 
 /// 默认实例根：`data/instances/<id>`（路径分隔符统一成正斜杠）。
+pub fn instances_root() -> PathBuf {
+    let base = std::env::var("COCKTAIL_DATA_DIR")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "data".to_string());
+    comparable_workdir(&PathBuf::from(base).join("instances").to_string_lossy())
+}
+
+pub fn workdir_within_root(workdir: &str) -> bool {
+    let root = instances_root();
+    let target = comparable_workdir(workdir);
+    target != root && target.starts_with(&root)
+}
+
 pub fn default_instance_root(id: &str) -> String {
-    PathBuf::from("data")
+    let base = std::env::var("COCKTAIL_DATA_DIR")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "data".to_string());
+    PathBuf::from(base)
         .join("instances")
         .join(id)
         .to_string_lossy()

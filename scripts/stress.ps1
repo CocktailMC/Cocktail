@@ -186,6 +186,38 @@ try { $null = Req "POST" "/api/v1/bans" '{"target":"p","reason":"r","expires_at"
 try { $null = Req "POST" "/api/v1/bans" '{"target":"p","reason":"r","expires_at":"0000-00-00T00:00:00Z"}' 10 } catch { }
 try { $null = Req "POST" "/api/v1/bans" '{"target":"p","reason":"r","hours":1e309}' 10 } catch { }
 Record "numeric-extremes" (Alive) "6 variants"
+Log "=== phase 15 escape workdir ==="
+$esc = @("/etc", "/root", "/", "data/instances/../../..", "C:/Windows", "..")
+$blocked = 0
+foreach ($w in $esc) {
+  try {
+    $b = @{ name = "esc-" + [guid]::NewGuid().ToString().Substring(0,6); kind = "paper"; version = "1.21.4"; port = 26300; workdir = $w } | ConvertTo-Json
+    $r = Invoke-WebRequest -Uri "$Base/api/v1/instances" -Method POST -Body $b -Headers (Hdr) -ContentType "application/json" -UseBasicParsing -TimeoutSec 15
+    Log "  ACCEPTED workdir=$w status=$($r.StatusCode)"
+  } catch {
+    $code = -1
+    if ($_.Exception.Response) { $code = [int]$_.Exception.Response.StatusCode }
+    if ($code -eq 400 -or $code -eq 403) { $blocked++ }
+    Log "  rejected workdir=$w status=$code"
+  }
+}
+Record "workdir-escape" (Alive) "blocked=$blocked/$($esc.Count)"
+
+Log "=== phase 16 login rate limit ==="
+$codes = @()
+for ($i = 0; $i -lt 30; $i++) {
+  try {
+    $bb = @{ username = $User; password = "bad$i" } | ConvertTo-Json
+    $null = Invoke-WebRequest -Uri "$Base/api/v1/auth/login" -Method POST -Body $bb -ContentType "application/json" -UseBasicParsing -TimeoutSec 8
+    $codes += 200
+  } catch {
+    if ($_.Exception.Response) { $codes += [int]$_.Exception.Response.StatusCode } else { $codes += -1 }
+  }
+}
+$limited = ($codes | Where-Object { $_ -eq 429 }).Count
+Log "  statuses: $($codes -join ',')"
+Record "login-ratelimit" (Alive) "429 count=$limited"
+
 Log "=== phase 14 missing fields ==="
 $miss = @('{}', '{"target":null,"reason":null}', '{"target":[],"reason":{}}', '{"target":1,"reason":true}')
 foreach ($m in $miss) { $null = Req "POST" "/api/v1/bans" $m 10; $null = Req "POST" "/api/v1/tickets" $m 10 }

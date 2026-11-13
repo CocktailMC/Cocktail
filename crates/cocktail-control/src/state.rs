@@ -53,6 +53,7 @@ pub struct AppState {
     pub env_api_token: Option<String>,
     pub env_webhook_url: Option<String>,
     pub bind: String,
+    pub login_limiter: std::sync::Arc<crate::hardening::RateLimiter>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -313,6 +314,9 @@ pub(crate) async fn test_state(db_path: &std::path::Path) -> SharedState {
         env_api_token: None,
         env_webhook_url: None,
         bind: "127.0.0.1:0".into(),
+        login_limiter: std::sync::Arc::new(crate::hardening::RateLimiter::new(
+            crate::hardening::RateRule::new(5.0, 0.2),
+        )),
     })
 }
 

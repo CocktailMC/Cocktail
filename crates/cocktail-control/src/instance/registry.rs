@@ -1855,6 +1855,12 @@ async fn ensure_exclusive_workdir(
     workdir: &str,
     except_id: Option<&str>,
 ) -> anyhow::Result<()> {
+    if !files::workdir_within_root(workdir) {
+        anyhow::bail!(
+            "文件根必须位于实例目录下：{}",
+            files::instances_root().to_string_lossy()
+        );
+    }
     let guard = state.instances.read().await;
     for inst in guard.values() {
         if except_id.is_some_and(|id| inst.id == id) {

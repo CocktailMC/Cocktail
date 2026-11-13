@@ -855,13 +855,13 @@ async fn auth_middleware(
         }
     };
 
-    if is_mutation(&method) && !is_machine && !csrf.is_empty() {
+    if is_mutation(&method) && !is_machine {
         let provided = req
             .headers()
             .get("x-cocktail-csrf")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        if provided != csrf {
+        if csrf.is_empty() || provided != csrf {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "CSRF 校验失败，请刷新页面后重试" })),
@@ -933,7 +933,7 @@ fn query_token_allowed(method: &axum::http::Method, path: &str) -> bool {
     matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD)
         && (path.ends_with("/files/download")
             || path.ends_with("/worlds/download")
-            || path.contains("/worlds/")
+            || path.ends_with("/backups/download")
             || path.ends_with("/logs/ws")
             || path.ends_with("/events/ws"))
 }
