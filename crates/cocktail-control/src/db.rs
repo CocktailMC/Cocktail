@@ -37,8 +37,34 @@ impl TryConn for DbPool {
 pub fn open() -> anyhow::Result<Connection> {
     fs::create_dir_all("data")?;
     let conn = Connection::open(DB_PATH)?;
+    restrict_db_files(Path::new(DB_PATH));
     init_connection(&conn)?;
     Ok(conn)
+}
+
+fn restrict_db_files(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut targets = vec![path.to_path_buf()];
+        let mut wal = path.as_os_str().to_owned();
+        wal.push("-wal");
+        targets.push(std::path::PathBuf::from(wal));
+        let mut shm = path.as_os_str().to_owned();
+        shm.push("-shm");
+        targets.push(std::path::PathBuf::from(shm));
+        for target in targets {
+            if let Ok(meta) = fs::metadata(&target) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o600);
+                let _ = fs::set_permissions(&target, perms);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 /// Opens a pooled SQLite connection set. `journal_mode=WAL`, `foreign_keys`,
@@ -61,6 +87,7 @@ pub fn pool_at(path: &Path) -> anyhow::Result<DbPool> {
         .connection_timeout(Duration::from_secs(10))
         .build(manager)?;
     pool.get()?;
+    restrict_db_files(path);
     Ok(pool)
 }
 

@@ -107,13 +107,31 @@ pub fn resolve_token() -> String {
     if let Ok(existing) = std::fs::read_to_string(&path) {
         let trimmed = existing.trim();
         if !trimmed.is_empty() {
+            restrict_file(&path);
             return trimmed.to_string();
         }
     }
     let token = format!("pt_{}", uuid::Uuid::new_v4());
     let _ = std::fs::create_dir_all("data");
     let _ = std::fs::write(&path, &token);
+    restrict_file(&path);
     token
+}
+
+fn restrict_file(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 pub fn spawn_event_forwarder(state: &Arc<AppState>) {

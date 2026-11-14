@@ -200,6 +200,25 @@ if ($iid) {
   Record "array-flood" (Alive) "40k elements"
 }
 
+Log "=== p9b file permission check ==="
+if ($IsLinux -or $IsMacOS) {
+  $sec = @("data/cocktail.db", "data/state.json", "data/.plugin-token")
+  $bad = 0
+  foreach ($f in $sec) {
+    if (Test-Path $f) {
+      $mode = (Get-Item $f).UnixMode
+      Log "  $f mode=$mode"
+      if ($mode -match "group|other") { $bad++ }
+    } else {
+      Log "  $f missing"
+    }
+  }
+  Record "file-perms" (Alive) "world-readable=$bad"
+} else {
+  Log "  skipped on this platform"
+  Record "file-perms" (Alive) "skipped"
+}
+
 Log "=== p10 session flood ==="
 for ($i = 0; $i -lt 60; $i++) {
   try {

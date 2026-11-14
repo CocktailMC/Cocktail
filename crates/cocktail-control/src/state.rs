@@ -265,7 +265,8 @@ impl AppState {
             instances,
             schedules,
         })?;
-        fs::write(path, raw)?;
+        fs::write(&path, raw)?;
+        restrict_state_file(&path);
         Ok(())
     }
 
@@ -321,6 +322,22 @@ pub(crate) async fn test_state(db_path: &std::path::Path) -> SharedState {
             crate::hardening::RateRule::new(5.0, 0.2),
         )),
     })
+}
+
+fn restrict_state_file(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = fs::set_permissions(path, perms);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 fn hydrate_state(db: &rusqlite::Connection) -> (HashMap<String, Instance>, Vec<Schedule>) {
