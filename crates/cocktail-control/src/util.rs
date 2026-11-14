@@ -420,7 +420,7 @@ pub fn audit(action: &str, instance_id: Option<&str>, detail: serde_json::Value,
 }
 
 pub async fn notify_webhook(url: &str, instance_id: &str, status: &str, name: &str) {
-    if !crate::hardening::external_url_allowed(url) {
+    if !crate::hardening::external_url_allowed_resolved(url).await {
         tracing::warn!(%url, "webhook url rejected by egress guard");
         return;
     }

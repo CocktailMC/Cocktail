@@ -182,7 +182,7 @@ pub async fn fetch_icon(resource_id: i64) -> anyhow::Result<(String, Vec<u8>)> {
         .filter(|s| !s.is_empty())
     {
         let url = if path.starts_with("http") {
-            if !crate::hardening::external_url_allowed(path) {
+            if !crate::hardening::external_url_allowed_resolved(path).await {
                 anyhow::bail!("icon 地址不可信：{path}");
             }
             path.to_string()

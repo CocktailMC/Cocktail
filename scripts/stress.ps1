@@ -218,6 +218,26 @@ $limited = ($codes | Where-Object { $_ -eq 429 }).Count
 Log "  statuses: $($codes -join ',')"
 Record "login-ratelimit" (Alive) "429 count=$limited"
 
+Log "=== phase 17 egress guard on webhook ==="
+$badHooks = @(
+  "http://127.0.0.1:11011/api/v1/health",
+  "https://127.0.0.1/x",
+  "https://169.254.169.254/latest/meta-data",
+  "https://10.0.0.5/x",
+  "https://localhost/x",
+  "https://[::1]/x",
+  "file:///etc/passwd",
+  "http://example.com/hook"
+)
+$rejected = 0
+foreach ($h in $badHooks) {
+  $b = @{ webhook_url = $h } | ConvertTo-Json
+  $st = Req "PUT" "/api/v1/settings" $b 10
+  Log "  webhook=$h status=$st"
+  if ($st -eq 400) { $rejected++ }
+}
+Record "webhook-egress" (Alive) "rejected=$rejected/$($badHooks.Count)"
+
 Log "=== phase 14 missing fields ==="
 $miss = @('{}', '{"target":null,"reason":null}', '{"target":[],"reason":{}}', '{"target":1,"reason":true}')
 foreach ($m in $miss) { $null = Req "POST" "/api/v1/bans" $m 10; $null = Req "POST" "/api/v1/tickets" $m 10 }
