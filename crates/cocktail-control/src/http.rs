@@ -15,6 +15,26 @@ pub fn attach_events(tx: broadcast::Sender<InstanceEvent>) {
     let _ = EVENTS.set(tx);
 }
 
+fn egress_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 8 {
+            return attempt.stop();
+        }
+        match attempt.url().host_str() {
+            Some(host) => {
+                let probe = format!("https://{host}/");
+                if crate::hardening::external_url_allowed(&probe) {
+                    attempt.follow()
+                } else {
+                    tracing::warn!(host, "redirect target rejected by egress guard");
+                    attempt.stop()
+                }
+            }
+            None => attempt.stop(),
+        }
+    })
+}
+
 pub fn builder() -> reqwest::ClientBuilder {
     let mut b = reqwest::Client::builder()
         .user_agent(DEFAULT_UA)
@@ -22,7 +42,7 @@ pub fn builder() -> reqwest::ClientBuilder {
         .timeout(Duration::from_secs(180))
         .pool_idle_timeout(Duration::from_secs(30))
         .tcp_nodelay(true)
-        .redirect(reqwest::redirect::Policy::limited(16));
+        .redirect(egress_redirect_policy());
 
     #[cfg(windows)]
     {

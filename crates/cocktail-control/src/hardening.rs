@@ -199,6 +199,50 @@ pub fn external_url_allowed(raw: &str) -> bool {
     host_only.contains('.')
 }
 
+pub async fn resolve_host_external(host: &str, port: u16) -> bool {
+    if host.parse::<IpAddr>().is_ok() {
+        return true;
+    }
+    let target = format!("{host}:{port}");
+    match tokio::net::lookup_host(target).await {
+        Ok(addrs) => {
+            let mut saw_one = false;
+            for addr in addrs {
+                saw_one = true;
+                if is_private_ip(addr.ip()) {
+                    return false;
+                }
+            }
+            saw_one
+        }
+        Err(_) => false,
+    }
+}
+
+pub async fn external_url_allowed_resolved(raw: &str) -> bool {
+    if !external_url_allowed(raw) {
+        return false;
+    }
+    let trimmed = raw.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let rest = match lower.strip_prefix("https://") {
+        Some(r) => r,
+        None => return false,
+    };
+    let host_part = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = match host_part.rsplit_once('@') {
+        Some((_, h)) => h,
+        None => host_part,
+    };
+    let (host_only, port) = match host.rsplit_once(':') {
+        Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) => {
+            (h, p.parse::<u16>().unwrap_or(443))
+        }
+        _ => (host, 443),
+    };
+    resolve_host_external(host_only.trim_matches(['[', ']']), port).await
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RateDecision {
     pub allowed: bool,
@@ -481,6 +525,21 @@ mod tests {
         assert!(!external_url_allowed("https://user@127.0.0.1/x"));
         assert!(!external_url_allowed(""));
         assert!(!external_url_allowed("https:///x"));
+    }
+
+    #[tokio::test]
+    async fn resolved_guard_rejects_private_literals() {
+        assert!(!external_url_allowed_resolved("https://127.0.0.1/x").await);
+        assert!(!external_url_allowed_resolved("https://10.1.2.3/x").await);
+        assert!(!external_url_allowed_resolved("https://192.168.0.1/x").await);
+        assert!(!external_url_allowed_resolved("https://169.254.169.254/x").await);
+        assert!(!external_url_allowed_resolved("http://example.com/x").await);
+        assert!(!external_url_allowed_resolved("").await);
+    }
+
+    #[tokio::test]
+    async fn resolved_guard_rejects_unresolvable_host() {
+        assert!(!external_url_allowed_resolved("https://no-such-host.invalid/x").await);
     }
 
     #[test]

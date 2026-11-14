@@ -303,7 +303,7 @@ pub async fn pick_version(req: &InstallRequest) -> anyhow::Result<VersionInfo> {
 }
 
 pub async fn download_bytes(url: &str, label: &str) -> anyhow::Result<Vec<u8>> {
-    if !crate::hardening::external_url_allowed(url) {
+    if !crate::hardening::external_url_allowed_resolved(url).await {
         anyhow::bail!("下载地址不是可信的 https 外部地址：{url}");
     }
     let job = crate::http::Transfer::new(label);
