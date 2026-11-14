@@ -115,6 +115,18 @@ jobs:
             -d '{"username":"smoke","password":"Sm0ke-Test-Pass"}'
           echo "--- web ui served ---"
           curl -s -o /dev/null -w 'index=%{http_code}\n' http://127.0.0.1:11011/
+          echo "--- secret file perms ---"
+          for f in data/cocktail.db data/.plugin-token data/state.json data/master.key data/master.salt; do
+            if [ -e "$f" ]; then
+              mode=$(stat -c '%a' "$f")
+              echo "$f mode=$mode"
+              case "$mode" in
+                600) ;;
+                *) echo "$f is group/world accessible (mode=$mode)" >&2; exit 1 ;;
+              esac
+            fi
+          done
+          echo "secret perms ok"
           pkill -f cocktail-control || true
       - name: Dump log
         if: always()
