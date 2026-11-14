@@ -182,6 +182,9 @@ pub async fn fetch_icon(resource_id: i64) -> anyhow::Result<(String, Vec<u8>)> {
         .filter(|s| !s.is_empty())
     {
         let url = if path.starts_with("http") {
+            if !crate::hardening::external_url_allowed(path) {
+                anyhow::bail!("icon 地址不可信：{path}");
+            }
             path.to_string()
         } else {
             format!("https://www.spigotmc.org/{}", path.trim_start_matches('/'))

@@ -343,6 +343,9 @@ pub async fn pick_version(req: &InstallModrinthRequest) -> anyhow::Result<Versio
 }
 
 pub async fn download_bytes(url: &str, label: &str) -> anyhow::Result<Vec<u8>> {
+    if !crate::hardening::external_url_allowed(url) {
+        anyhow::bail!("下载地址不是可信的 https 外部地址：{url}");
+    }
     let job = crate::http::Transfer::new(label);
     crate::http::download_vec(&client(), url, &job, 512 * 1024 * 1024).await
 }

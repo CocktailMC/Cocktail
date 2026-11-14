@@ -420,6 +420,10 @@ pub fn audit(action: &str, instance_id: Option<&str>, detail: serde_json::Value,
 }
 
 pub async fn notify_webhook(url: &str, instance_id: &str, status: &str, name: &str) {
+    if !crate::hardening::external_url_allowed(url) {
+        tracing::warn!(%url, "webhook url rejected by egress guard");
+        return;
+    }
     let body = json!({
         "source": "cocktail-manager",
         "instance_id": instance_id,
