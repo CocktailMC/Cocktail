@@ -2,7 +2,7 @@ use axum::Json;
 use axum::body::Body;
 use axum::extract::multipart::Multipart;
 use axum::extract::{Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use crate::api::handlers::{ErrorBody, bad_request, map_result, not_found};
@@ -70,15 +70,7 @@ pub async fn world_download(
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| bad_request(e.to_string()))?;
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/zip")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{filename}\""),
-        )
-        .body(Body::from(bytes))
-        .unwrap())
+    super::binary_attachment(&filename, bytes)
 }
 
 pub async fn world_upload(

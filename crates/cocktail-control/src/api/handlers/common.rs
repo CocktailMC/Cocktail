@@ -87,6 +87,68 @@ pub fn map_result<T: Serialize>(
     }
 }
 
+fn is_ascii_safe(name: &str) -> bool {
+    name.bytes()
+        .all(|b| (0x20..=0x7e).contains(&b) && b != b'"' && b != b'\\')
+}
+
+fn percent_encode(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for b in name.as_bytes() {
+        let keep = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b' ');
+        if keep {
+            if *b == b' ' {
+                out.push_str("%20");
+            } else {
+                out.push(*b as char);
+            }
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+pub fn attachment_disposition(name: &str) -> String {
+    let fallback: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if is_ascii_safe(name) {
+        format!(
+            "attachment; filename=\"{name}\"; filename*=UTF-8''{}",
+            percent_encode(name)
+        )
+    } else {
+        format!(
+            "attachment; filename=\"{fallback}\"; filename*=UTF-8''{}",
+            percent_encode(name)
+        )
+    }
+}
+
+pub fn binary_attachment(name: &str, bytes: Vec<u8>) -> Result<axum::response::Response, ApiError> {
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_DISPOSITION, attachment_disposition(name))
+        .body(axum::body::Body::from(bytes))
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorBody {
+                    error: e.to_string(),
+                }),
+            )
+        })
+}
+
 pub fn not_found(msg: impl Into<String>) -> (StatusCode, Json<ErrorBody>) {
     (StatusCode::NOT_FOUND, Json(ErrorBody { error: msg.into() }))
 }

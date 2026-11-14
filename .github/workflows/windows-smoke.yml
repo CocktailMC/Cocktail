@@ -1,0 +1,180 @@
+name: Windows smoke
+
+on:
+  pull_request:
+    paths:
+      - "packaging/windows/**"
+      - "scripts/package-windows.ps1"
+      - "crates/cocktail-init/**"
+      - "crates/cocktail-control/**"
+      - "admin/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/windows-smoke.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: windows-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build Windows zip
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - name: Build binaries
+        shell: pwsh
+        run: |
+          cargo build --release -p cocktail-control -p cocktail-init `
+            --bin cocktail-control --bin cocktail-init
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem target/release/*.exe | Select-Object Name, Length | Format-Table
+      - name: Assert init exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path target/release/cocktail-init.exe)) {
+            Write-Error "cocktail-init.exe was not produced"
+            exit 1
+          }
+          Write-Host "cocktail-init.exe present"
+      - name: Build web UI
+        shell: pwsh
+        working-directory: admin
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package
+        shell: pwsh
+        run: |
+          ./scripts/package-windows.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Report msi
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem dist/*.msi -ErrorAction SilentlyContinue
+          if ($msi) { Write-Host "msi: $($msi.Name)" }
+          else { Write-Host "msi skipped (WiX not installed on runner)" }
+      - name: Assert zip payload
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist/*windows-x64.zip | Select-Object -First 1
+          if (-not $zip) { Write-Error "zip not produced"; exit 1 }
+          Write-Host "zip: $($zip.Name)"
+          Expand-Archive -Path $zip.FullName -DestinationPath dist/verify -Force
+          $need = @(
+            "cocktail-control.exe",
+            "cocktail-init.exe",
+            "Start-Cocktail.cmd",
+            "web/index.html"
+          )
+          foreach ($f in $need) {
+            if (-not (Test-Path "dist/verify/$f")) {
+              Write-Error "missing from zip: $f"
+              exit 1
+            }
+          }
+          Write-Host "zip payload complete"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: dist/*windows-x64.zip
+          retention-days: 3
+
+  run:
+    name: Run and probe
+    runs-on: windows-latest
+    needs: [package]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-zip
+          path: pkgs
+      - name: Extract
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem pkgs/*.zip | Select-Object -First 1
+          Expand-Archive -Path $zip.FullName -DestinationPath app -Force
+          Get-ChildItem app | Select-Object Name | Format-Table
+      - name: Start and probe
+        shell: pwsh
+        run: |
+          $env:COCKTAIL_WEB_ROOT = "$PWD/app/web"
+          $env:COCKTAIL_DATA_DIR = "$PWD/app/data"
+          New-Item -ItemType Directory -Force -Path "$PWD/app/data" | Out-Null
+          $proc = Start-Process -FilePath "$PWD/app/cocktail-control.exe" `
+            -WorkingDirectory "$PWD/app" `
+            -RedirectStandardOutput "$PWD/app/stdout.log" `
+            -RedirectStandardError "$PWD/app/stderr.log" `
+            -PassThru -NoNewWindow
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 40; $i++) {
+              Start-Sleep -Seconds 1
+              if ($proc.HasExited) { break }
+              try {
+                $r = Invoke-WebRequest -Uri "http://127.0.0.1:11011/api/v1/health" -UseBasicParsing -TimeoutSec 3
+                if ($r.StatusCode -eq 200) { $ok = $true; break }
+              } catch { }
+            }
+            if (-not $ok) {
+              Write-Host "--- stdout ---"
+              Get-Content "$PWD/app/stdout.log" -ErrorAction SilentlyContinue
+              Write-Host "--- stderr ---"
+              Get-Content "$PWD/app/stderr.log" -ErrorAction SilentlyContinue
+              throw "health probe failed"
+            }
+            $base = "http://127.0.0.1:11011"
+            $h = Invoke-WebRequest -Uri "$base/api/v1/health" -UseBasicParsing
+            $json = $h.Content | ConvertFrom-Json
+            Write-Host ("status=" + $json.status + " version=" + $json.version)
+            if ($json.status -ne "ok") { throw "degraded status" }
+            $idx = Invoke-WebRequest -Uri "$base/" -UseBasicParsing
+            Write-Host ("index=" + $idx.StatusCode)
+            if ($idx.StatusCode -ne 200) { throw "web ui not served" }
+            $mani = Invoke-WebRequest -Uri "$base/manifest.webmanifest" -UseBasicParsing
+            Write-Host ("manifest=" + $mani.StatusCode)
+            $sw = Invoke-WebRequest -Uri "$base/sw.js" -UseBasicParsing
+            Write-Host ("sw=" + $sw.StatusCode)
+            $tut = Invoke-WebRequest -Uri "$base/api/v1/tutorials" -UseBasicParsing
+            Write-Host ("tutorials=" + $tut.StatusCode)
+            if ($tut.StatusCode -ne 200) { throw "tutorials endpoint failed" }
+            $tutJson = $tut.Content | ConvertFrom-Json
+            Write-Host ("tutorial count=" + $tutJson.tutorials.Count)
+            $upd = Invoke-WebRequest -Uri "$base/api/v1/update/status" -UseBasicParsing
+            Write-Host ("update=" + $upd.StatusCode)
+            $p = Get-Process -Name "cocktail-init" -ErrorAction SilentlyContinue
+            if ($p) { Write-Host ("cocktail-init running, count=" + $p.Count) }
+            else { Write-Host "cocktail-init not resident (may be short lived)" }
+            Write-Host "ALL_PROBES_OK"
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+          }
+      - name: Dump logs
+        if: always()
+        shell: pwsh
+        run: |
+          Get-Content app/stdout.log -ErrorAction SilentlyContinue | Select-Object -Last 60
+          Get-Content app/stderr.log -ErrorAction SilentlyContinue | Select-Object -Last 60
+      - name: Stop
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path app/pid.txt) {
+            $id = Get-Content app/pid.txt
+            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+          }
+          Get-Process -Name "cocktail-control" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name "cocktail-init" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue

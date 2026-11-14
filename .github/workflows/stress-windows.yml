@@ -1,0 +1,147 @@
+name: Stress Windows
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "stress/**"
+      - "feat/**"
+    paths:
+      - "crates/cocktail-control/**"
+      - "scripts/stress.ps1"
+      - "scripts/stress2.ps1"
+      - ".github/workflows/stress-windows.yml"
+concurrency:
+  group: stress-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  stress:
+    name: Hammer control plane
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - name: Build
+        shell: pwsh
+        run: |
+          cargo build --release -p cocktail-control -p cocktail-init --bin cocktail-control --bin cocktail-init
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build UI
+        shell: pwsh
+        working-directory: admin
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Stage
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path run/web, run/data | Out-Null
+          Copy-Item target/release/cocktail-control.exe run/
+          Copy-Item target/release/cocktail-init.exe run/
+          Copy-Item -Recurse admin/dist/* run/web/
+          Get-ChildItem run | Select-Object Name, Length | Format-Table
+      - name: Stress
+        shell: pwsh
+        run: |
+          $env:COCKTAIL_WEB_ROOT = "$PWD/run/web"
+          $env:COCKTAIL_DATA_DIR = "$PWD/run/data"
+          $env:RUST_LOG = "warn"
+          $proc = Start-Process -FilePath "$PWD/run/cocktail-control.exe" `
+            -WorkingDirectory "$PWD/run" `
+            -RedirectStandardOutput "$PWD/run/out.log" `
+            -RedirectStandardError "$PWD/run/err.log" `
+            -PassThru -NoNewWindow
+          $script:fatal = $false
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 1
+              if ($proc.HasExited) { break }
+              try {
+                $r = Invoke-WebRequest -Uri "http://127.0.0.1:11011/api/v1/health" -UseBasicParsing -TimeoutSec 3
+                if ($r.StatusCode -eq 200) { $ready = $true; break }
+              } catch { }
+            }
+            if (-not $ready) {
+              Write-Host "service did not come up"
+              $script:fatal = $true
+            } else {
+              $peakFile = "$PWD/run/peak.txt"
+              "0" | Set-Content -Path $peakFile
+              $mon = Start-Job -ScriptBlock {
+                param($pid2, $pf)
+                $peak = 0
+                for ($i = 0; $i -lt 1800; $i++) {
+                  Start-Sleep -Seconds 1
+                  $p = Get-Process -Id $pid2 -ErrorAction SilentlyContinue
+                  if (-not $p) { break }
+                  if ($p.WorkingSet64 -gt $peak) {
+                    $peak = $p.WorkingSet64
+                    ([int]($peak / 1MB)) | Set-Content -Path $pf
+                  }
+                }
+              } -ArgumentList $proc.Id, $peakFile
+              & ./scripts/stress.ps1
+              $r1 = $LASTEXITCODE
+              Write-Host "suite1 exit=$r1"
+              if ($r1 -ne 0) { $script:fatal = $true }
+              if (-not $proc.HasExited) {
+                & ./scripts/stress2.ps1
+                $r2 = $LASTEXITCODE
+                Write-Host "suite2 exit=$r2"
+                if ($r2 -ne 0) { $script:fatal = $true }
+              } else {
+                Write-Host "service died before suite2"
+                $script:fatal = $true
+              }
+              Stop-Job -Job $mon -ErrorAction SilentlyContinue
+              Remove-Job -Job $mon -Force -ErrorAction SilentlyContinue
+              $mem = 0
+              if (Test-Path $peakFile) { $mem = [int](Get-Content -Path $peakFile -Raw) }
+              Write-Host "peak memory MB=$mem"
+              if ($mem -gt 1200) {
+                Write-Host "memory blowup detected"
+                $script:fatal = $true
+              }
+            }
+            if ($proc.HasExited) {
+              Write-Host "process exited with code $($proc.ExitCode)"
+              $script:fatal = $true
+            }
+          } finally {
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+          }
+          Write-Host "===== stdout tail ====="
+          Get-Content run/out.log -ErrorAction SilentlyContinue | Select-Object -Last 80
+          Write-Host "===== stderr tail ====="
+          Get-Content run/err.log -ErrorAction SilentlyContinue | Select-Object -Last 80
+          Write-Host "===== panic scan ====="
+          $panics = Select-String -Path run/out.log, run/err.log -Pattern "panicked|thread '.*' panicked|RUST_BACKTRACE" -ErrorAction SilentlyContinue
+          if ($panics) {
+            Write-Host "PANIC DETECTED"
+            $panics | Select-Object -First 20 | ForEach-Object { Write-Host $_.Line }
+            $script:fatal = $true
+          } else {
+            Write-Host "no panic markers"
+          }
+          if ($script:fatal) { exit 1 }
+          Write-Host "STRESS_OK"
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-logs
+          path: |
+            run/out.log
+            run/err.log
+          if-no-files-found: ignore

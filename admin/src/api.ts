@@ -710,6 +710,141 @@ export type CreatedNode = {
   token: string
 }
 
+export type BoardEntry = {
+  rank: number
+  name: string
+  uuid?: string | null
+  total_secs: number
+  hours: number
+  first_seen: string
+  last_seen: string
+  instances: number
+  avatar: string
+}
+
+export type GeoHint = {
+  ip: string
+  country: string
+  city: string
+  asn: string
+}
+
+export type ProfileView = {
+  name: string
+  uuid?: string | null
+  avatar: string
+  total_secs: number
+  hours: number
+  sessions: number
+  instances: string[]
+  first_seen?: string | null
+  last_seen?: string | null
+  ips: string[]
+  risk_score: number
+  ban_count: number
+  action_count: number
+  geo: GeoHint[]
+}
+
+export type BanRow = {
+  id: string
+  target: string
+  target_kind: string
+  reason: string
+  banned_by: string
+  banned_at: string
+  expires_at?: string | null
+  instances: string[]
+  active: boolean
+  source: string
+}
+
+export type TicketRow = {
+  id: string
+  kind: string
+  state: string
+  player: string
+  instance_id: string
+  subject: string
+  body: string
+  created_at: string
+  updated_at: string
+  handler?: string | null
+  resolution: string
+  notes: { at: string; by: string; text: string }[]
+}
+
+export type ActionRow = {
+  id: string
+  at: string
+  actor: string
+  instance_id: string
+  action: string
+  target: string
+  detail: string
+  result: string
+}
+
+export type TutorialProgress = {
+  watched_secs: number
+  completed: boolean
+  updated_at: string
+}
+
+export type TutorialView = {
+  id: string
+  title: string
+  summary: string
+  chapter: string
+  order: number
+  duration_secs: number
+  url?: string | null
+  embedded: boolean
+  local: boolean
+  tags: string[]
+  progress: TutorialProgress
+  percent: number
+  completed: boolean
+}
+
+export type WatchSummary = {
+  total: number
+  completed: number
+  percent: number
+  next?: string | null
+}
+
+export type TutorialListResponse = {
+  tutorials: TutorialView[]
+  summary: WatchSummary
+}
+
+export type UpdateStatus = {
+  current: string
+  latest?: string | null
+  update_available: boolean
+  latest_is_stable: boolean
+  checked_at: string
+  source: string
+  notes_url: string
+  error?: string | null
+}
+
+export type ReleaseRow = {
+  tag: string
+  name: string
+  published_at: string
+  prerelease: boolean
+  html_url: string
+  notes: string
+}
+
+export type UpdateResponse = {
+  status: UpdateStatus
+  channels: Record<string, number>
+  releases: ReleaseRow[]
+}
+
 export type HealthInfo = {
   name: string
   version: string
@@ -789,6 +924,113 @@ export type ExtensionsList = {
 }
 
 export const api = {
+  leaderboard: (opts?: { instance?: string; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (opts?.instance) params.set('instance', opts.instance)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    const q = params.toString()
+    return request<{ entries: BoardEntry[]; total: number }>(
+      `/api/v1/leaderboard${q ? `?${q}` : ''}`,
+    )
+  },
+  playerProfile: (name: string) =>
+    request<ProfileView>(`/api/v1/profiles/${encodeURIComponent(name)}`),
+
+  listBans: (opts?: { instance?: string; all?: boolean; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (opts?.instance) params.set('instance', opts.instance)
+    if (opts?.all) params.set('all', 'true')
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    const q = params.toString()
+    return request<{ bans: BanRow[]; active: number }>(
+      `/api/v1/bans${q ? `?${q}` : ''}`,
+    )
+  },
+  createBan: (body: {
+    target: string
+    reason: string
+    kind?: string
+    hours?: number
+    expires_at?: string
+    instances?: string[]
+  }) =>
+    request<BanRow>('/api/v1/bans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  liftBan: (id: string) =>
+    request<void>(`/api/v1/bans/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  listTickets: (opts?: { open?: boolean; player?: string; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (opts?.open) params.set('open', 'true')
+    if (opts?.player) params.set('player', opts.player)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    const q = params.toString()
+    return request<{ tickets: TicketRow[]; open: number; total: number }>(
+      `/api/v1/tickets${q ? `?${q}` : ''}`,
+    )
+  },
+  createTicket: (body: {
+    kind: string
+    player: string
+    instance_id?: string
+    subject: string
+    body: string
+  }) =>
+    request<TicketRow>('/api/v1/tickets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  claimTicket: (id: string) =>
+    request<void>(`/api/v1/tickets/${encodeURIComponent(id)}/claim`, {
+      method: 'POST',
+    }),
+  approveTicket: (id: string, note?: string) =>
+    request<void>(`/api/v1/tickets/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note }),
+    }),
+  rejectTicket: (id: string, note?: string) =>
+    request<void>(`/api/v1/tickets/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note }),
+    }),
+  listPlayerActions: (opts?: { target?: string; actor?: string; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (opts?.target) params.set('target', opts.target)
+    if (opts?.actor) params.set('actor', opts.actor)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    const q = params.toString()
+    return request<ActionRow[]>(`/api/v1/player-actions${q ? `?${q}` : ''}`)
+  },
+
+  listTutorials: (q?: string) =>
+    request<TutorialListResponse>(
+      `/api/v1/tutorials${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+    ),
+  myTutorials: () => request<TutorialListResponse>('/api/v1/tutorials/mine'),
+  reportTutorialProgress: (id: string, position_secs: number, duration_secs: number) =>
+    request<{ id: string; percent: number; completed: boolean }>(
+      `/api/v1/tutorials/${encodeURIComponent(id)}/progress`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ position_secs, duration_secs }),
+      },
+    ),
+
+  updateStatus: (opts?: { channel?: string; force?: boolean }) => {
+    const params = new URLSearchParams()
+    if (opts?.channel) params.set('channel', opts.channel)
+    if (opts?.force) params.set('force', 'true')
+    const q = params.toString()
+    return request<UpdateResponse>(`/api/v1/update/status${q ? `?${q}` : ''}`)
+  },
+
   health: () => request<HealthInfo>('/api/v1/health'),
   setup: (body: { username: string; password: string; panel_name?: string }) =>
     request<AuthSession>('/api/v1/setup', {

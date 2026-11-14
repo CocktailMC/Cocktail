@@ -4,6 +4,7 @@ import { api, setSession, type AuthSession, type HealthInfo, type PanelSettings 
 import { BrandImg, BRAND } from './brandIcons'
 import EnvBrandBar from './EnvBrandBar'
 import JavaRuntimePanel from './JavaRuntimePanel'
+import UpdatePanel from './UpdatePanel'
 import TwoFactorPanel from './TwoFactorPanel'
 
 type Props = {
@@ -442,6 +443,7 @@ export default function HomeSettings({
       <div className="mt-6">
         <JavaRuntimePanel busy={busy} onBusy={onBusy} onError={onError} />
         <TwoFactorPanel onError={onError} />
+        <UpdatePanel onError={onError} />
       </div>
     </div>
   )

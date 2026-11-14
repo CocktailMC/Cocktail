@@ -28,6 +28,7 @@ mod proto;
 mod qqbot;
 mod rbac;
 mod rcon;
+mod release_check;
 pub mod secrets;
 mod sevenz;
 mod state;
@@ -35,6 +36,7 @@ mod stdin_bridge;
 mod storage;
 mod supervisor;
 mod totp;
+mod tutorials;
 mod util;
 mod wincompat;
 mod winnet;
@@ -63,7 +65,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-const MAX_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
+const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 /// 通用本地服务管理器：托管 cocktail-init 等本地子进程。
 pub(crate) static SERVICE_SUPERVISOR: OnceLock<Arc<supervisor::ServiceSupervisor>> =
@@ -536,6 +538,7 @@ pub async fn run_plane() -> anyhow::Result<()> {
                 ])
                 .allow_credentials(true),
         )
+        .layer(axum::middleware::from_fn(apply_security_headers))
         .layer(TraceLayer::new_for_http());
 
     if let Some(web_root) = resolve_web_root() {
@@ -603,6 +606,27 @@ fn resolve_web_root() -> Option<PathBuf> {
 
 fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
     let read = matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD);
+    if path.starts_with("/api/v1/bans") {
+        if read {
+            return "players";
+        }
+        return if path.ends_with("/players") {
+            "players.ban"
+        } else if *method == axum::http::Method::DELETE {
+            "players.pardon"
+        } else {
+            "players.ban"
+        };
+    }
+    if path.starts_with("/api/v1/tickets") {
+        return if read { "players" } else { "players" };
+    }
+    if path.starts_with("/api/v1/player-actions") {
+        return "players";
+    }
+    if path.starts_with("/api/v1/leaderboard") || path.starts_with("/api/v1/profiles") {
+        return "players";
+    }
     if path.starts_with("/api/v1/users") {
         return "users";
     }
@@ -645,7 +669,7 @@ fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
             return if read { "files.read" } else { "files.write" };
         }
         if path.contains("/plugins") {
-            return if read { "view" } else { "plugins" };
+            return if read { "plugins.read" } else { "plugins" };
         }
         if path.contains("/modrinth")
             || path.contains("/hangar")
@@ -693,7 +717,7 @@ fn required_perm(method: &axum::http::Method, path: &str) -> &'static str {
             return "rcon";
         }
         if path.contains("/backups") || path.contains("/worlds") {
-            return if read { "view" } else { "backups" };
+            return if read { "backups.read" } else { "backups" };
         }
         if path.contains("/command") || path.contains("/logs") {
             return if read { "view" } else { "console" };
@@ -718,7 +742,13 @@ async fn auth_middleware(
     let path = req.uri().path().to_string();
     if matches!(
         path.as_str(),
-        "/api/v1/health" | "/api/v1/setup" | "/api/v1/auth/login" | "/api/v1/agent/ws"
+        "/api/v1/health"
+            | "/api/v1/setup"
+            | "/api/v1/auth/login"
+            | "/api/v1/agent/ws"
+            | "/api/v1/update/status"
+            | "/api/v1/update/assets"
+            | "/api/v1/tutorials"
     ) {
         return next.run(req).await;
     }
@@ -825,13 +855,13 @@ async fn auth_middleware(
         }
     };
 
-    if is_mutation(&method) && !is_machine && !csrf.is_empty() {
+    if is_mutation(&method) && !is_machine {
         let provided = req
             .headers()
             .get("x-cocktail-csrf")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        if provided != csrf {
+        if csrf.is_empty() || provided != csrf {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "CSRF 校验失败，请刷新页面后重试" })),
@@ -854,6 +884,23 @@ async fn auth_middleware(
     }
 
     crate::util::with_actor(actor, next.run(req)).await
+}
+
+async fn apply_security_headers(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut res = next.run(req).await;
+    let headers = res.headers_mut();
+    for (name, value) in crate::hardening::security_headers() {
+        if let (Ok(n), Ok(v)) = (
+            axum::http::HeaderName::from_bytes(name.as_bytes()),
+            axum::http::HeaderValue::from_str(&value),
+        ) {
+            headers.insert(n, v);
+        }
+    }
+    res
 }
 
 fn cors_origins() -> tower_http::cors::AllowOrigin {
@@ -886,7 +933,7 @@ fn query_token_allowed(method: &axum::http::Method, path: &str) -> bool {
     matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD)
         && (path.ends_with("/files/download")
             || path.ends_with("/worlds/download")
-            || path.contains("/worlds/")
+            || path.ends_with("/backups/download")
             || path.ends_with("/logs/ws")
             || path.ends_with("/events/ws"))
 }

@@ -147,6 +147,17 @@ pub async fn login(
     // 如需在反代后保留真实客户端 IP，请在反代层做 SNAT 而非依赖应用层头。
     let peer = connect_info.0.ip().to_string();
     let rate_key = format!("{peer}|{}", username.to_ascii_lowercase());
+    let decision = state.login_limiter.check(&rate_key);
+    if !decision.allowed {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [("retry-after", decision.retry_after_secs.to_string())],
+            Json(ErrorBody {
+                error: "登录尝试过于频繁，请稍后再试".into(),
+            }),
+        )
+            .into_response();
+    }
 
     let conn = match db_conn(&state) {
         Ok(c) => c,
@@ -202,6 +213,7 @@ pub async fn login(
             .into_response();
     }
     let admin = found.expect("checked");
+    state.login_limiter.reset(&rate_key);
     let totp_enabled = crate::db::admin_2fa_enabled(&conn, admin.id).unwrap_or(false);
     let totp_secret = crate::db::admin_totp_secret(&conn, admin.id)
         .ok()

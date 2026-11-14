@@ -37,8 +37,34 @@ impl TryConn for DbPool {
 pub fn open() -> anyhow::Result<Connection> {
     fs::create_dir_all("data")?;
     let conn = Connection::open(DB_PATH)?;
+    restrict_db_files(Path::new(DB_PATH));
     init_connection(&conn)?;
     Ok(conn)
+}
+
+fn restrict_db_files(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut targets = vec![path.to_path_buf()];
+        let mut wal = path.as_os_str().to_owned();
+        wal.push("-wal");
+        targets.push(std::path::PathBuf::from(wal));
+        let mut shm = path.as_os_str().to_owned();
+        shm.push("-shm");
+        targets.push(std::path::PathBuf::from(shm));
+        for target in targets {
+            if let Ok(meta) = fs::metadata(&target) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o600);
+                let _ = fs::set_permissions(&target, perms);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 /// Opens a pooled SQLite connection set. `journal_mode=WAL`, `foreign_keys`,
@@ -61,6 +87,7 @@ pub fn pool_at(path: &Path) -> anyhow::Result<DbPool> {
         .connection_timeout(Duration::from_secs(10))
         .build(manager)?;
     pool.get()?;
+    restrict_db_files(path);
     Ok(pool)
 }
 
@@ -80,8 +107,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             panel_name TEXT NOT NULL,
             webhook_url TEXT
         );
-        INSERT OR IGNORE INTO panel_settings (id, panel_name, webhook_url)
-            VALUES (1, 'Cocktail Manager', NULL);
+        INSERT OR IGNORE INTO panel_settings (id, panel_name)
+            VALUES (1, 'Cocktail Manager');
 
         CREATE TABLE IF NOT EXISTS admins (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,6 +185,53 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (instance_id, name)
         );
 
+        CREATE TABLE IF NOT EXISTS global_bans (
+            id TEXT PRIMARY KEY,
+            target TEXT NOT NULL COLLATE NOCASE,
+            target_kind TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            banned_by TEXT NOT NULL,
+            banned_at TEXT NOT NULL,
+            expires_at TEXT,
+            instances TEXT NOT NULL DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            source TEXT NOT NULL DEFAULT 'panel'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_bans_target ON global_bans(target);
+
+        CREATE TABLE IF NOT EXISTS tickets (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            state TEXT NOT NULL,
+            player TEXT NOT NULL COLLATE NOCASE,
+            instance_id TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            handler TEXT,
+            resolution TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '[]'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_tickets_state ON tickets(state);
+        CREATE INDEX IF NOT EXISTS idx_tickets_player ON tickets(player);
+
+        CREATE TABLE IF NOT EXISTS player_actions (
+            id TEXT PRIMARY KEY,
+            at TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            instance_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target TEXT NOT NULL COLLATE NOCASE,
+            detail TEXT NOT NULL DEFAULT '',
+            result TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_actions_target ON player_actions(target);
+        CREATE INDEX IF NOT EXISTS idx_actions_at ON player_actions(at DESC);
+
         CREATE TABLE IF NOT EXISTS audit_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             at TEXT NOT NULL,
@@ -195,6 +269,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     ] {
         ensure_column(conn, "panel_settings", name, decl)?;
     }
+    ensure_column(conn, "panel_settings", "webhook_url", "TEXT")?;
     for (name, decl) in [("expires_at", "TEXT"), ("csrf_token", "TEXT")] {
         ensure_column(conn, "sessions", name, decl)?;
     }
@@ -205,6 +280,11 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         ensure_column(conn, "admins", name, decl)?;
     }
     for (name, decl) in [
+        ("token_hash", "TEXT"),
+        ("hostname", "TEXT"),
+        ("os", "TEXT"),
+        ("arch", "TEXT"),
+        ("last_seen", "TEXT"),
         ("protocol_version", "INTEGER NOT NULL DEFAULT 1"),
         ("last_seq", "INTEGER NOT NULL DEFAULT 0"),
     ] {
@@ -707,7 +787,7 @@ pub fn session_lookup(conn: &Connection, token: &str) -> anyhow::Result<Option<S
         "SELECT a.id, a.username, a.password_hash, a.role, a.created_at,
                 COALESCE(s.csrf_token, ''), COALESCE(s.expires_at, '')
          FROM sessions s JOIN admins a ON a.id = s.admin_id
-         WHERE s.token = ?1 AND (s.expires_at IS NULL OR s.expires_at > ?2)",
+         WHERE s.token = ?1 AND s.expires_at IS NOT NULL AND s.expires_at > ?2",
         params![token, now],
         |r| {
             Ok(SessionRow {
@@ -1328,4 +1408,444 @@ pub fn node_protocol_version(conn: &Connection, id: &str) -> anyhow::Result<i64>
     .optional()
     .map(|v| v.unwrap_or(1))
     .map_err(Into::into)
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct BanRow {
+    pub id: String,
+    pub target: String,
+    pub target_kind: String,
+    pub reason: String,
+    pub banned_by: String,
+    pub banned_at: String,
+    pub expires_at: Option<String>,
+    pub instances: Vec<String>,
+    pub active: bool,
+    pub source: String,
+}
+
+fn split_instances(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn map_ban(r: &rusqlite::Row<'_>) -> rusqlite::Result<BanRow> {
+    let instances: String = r.get(7)?;
+    Ok(BanRow {
+        id: r.get(0)?,
+        target: r.get(1)?,
+        target_kind: r.get(2)?,
+        reason: r.get(3)?,
+        banned_by: r.get(4)?,
+        banned_at: r.get(5)?,
+        expires_at: r.get(6)?,
+        instances: split_instances(&instances),
+        active: r.get::<_, i64>(8)? != 0,
+        source: r.get(9)?,
+    })
+}
+
+const BAN_COLS: &str =
+    "id, target, target_kind, reason, banned_by, banned_at, expires_at, instances, active, source";
+
+pub fn list_bans(conn: &Connection, include_inactive: bool) -> anyhow::Result<Vec<BanRow>> {
+    list_bans_limited(conn, include_inactive, 2000)
+}
+
+pub fn list_bans_limited(
+    conn: &Connection,
+    include_inactive: bool,
+    limit: usize,
+) -> anyhow::Result<Vec<BanRow>> {
+    let cap = limit.clamp(1, 5000);
+    let sql = if include_inactive {
+        format!("SELECT {BAN_COLS} FROM global_bans ORDER BY banned_at DESC LIMIT {cap}")
+    } else {
+        format!(
+            "SELECT {BAN_COLS} FROM global_bans WHERE active = 1 ORDER BY banned_at DESC LIMIT {cap}"
+        )
+    };
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], map_ban)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn insert_ban(
+    conn: &Connection,
+    id: &str,
+    target: &str,
+    kind: &str,
+    reason: &str,
+    by: &str,
+    expires_at: Option<&str>,
+    instances: &[String],
+    source: &str,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT INTO global_bans (id, target, target_kind, reason, banned_by, banned_at, expires_at, instances, active, source)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9)",
+        params![
+            id,
+            target,
+            kind,
+            reason,
+            by,
+            chrono::Utc::now().to_rfc3339(),
+            expires_at,
+            instances.join(","),
+            source
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn deactivate_ban(conn: &Connection, id: &str) -> anyhow::Result<bool> {
+    let n = conn.execute(
+        "UPDATE global_bans SET active = 0 WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(n > 0)
+}
+
+pub fn active_bans_for(conn: &Connection, instance: &str) -> anyhow::Result<Vec<BanRow>> {
+    let all = list_bans(conn, false)?;
+    let now = chrono::Utc::now();
+    Ok(all
+        .into_iter()
+        .filter(|b| {
+            let not_expired = b
+                .expires_at
+                .as_deref()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| t.with_timezone(&chrono::Utc) > now)
+                .unwrap_or(true);
+            let scoped = b.instances.is_empty() || b.instances.iter().any(|i| i == instance);
+            not_expired && scoped
+        })
+        .collect())
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct TicketRow {
+    pub id: String,
+    pub kind: String,
+    pub state: String,
+    pub player: String,
+    pub instance_id: String,
+    pub subject: String,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub handler: Option<String>,
+    pub resolution: String,
+    pub notes: serde_json::Value,
+}
+
+const TICKET_COLS: &str = "id, kind, state, player, instance_id, subject, body, created_at, updated_at, handler, resolution, notes";
+
+fn map_ticket(r: &rusqlite::Row<'_>) -> rusqlite::Result<TicketRow> {
+    let notes: String = r.get(11)?;
+    Ok(TicketRow {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        state: r.get(2)?,
+        player: r.get(3)?,
+        instance_id: r.get(4)?,
+        subject: r.get(5)?,
+        body: r.get(6)?,
+        created_at: r.get(7)?,
+        updated_at: r.get(8)?,
+        handler: r.get(9)?,
+        resolution: r.get(10)?,
+        notes: serde_json::from_str(&notes).unwrap_or(serde_json::Value::Array(Vec::new())),
+    })
+}
+
+pub fn list_tickets(
+    conn: &Connection,
+    open_only: bool,
+    player: Option<&str>,
+) -> anyhow::Result<Vec<TicketRow>> {
+    list_tickets_limited(conn, open_only, player, 500)
+}
+
+pub fn list_tickets_limited(
+    conn: &Connection,
+    open_only: bool,
+    player: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Vec<TicketRow>> {
+    let cap = limit.clamp(1, 2000);
+    let mut sql = format!("SELECT {TICKET_COLS} FROM tickets WHERE 1 = 1");
+    if open_only {
+        sql.push_str(" AND state IN ('open', 'claimed')");
+    }
+    if player.is_some() {
+        sql.push_str(" AND player = ?1");
+    }
+    sql.push_str(&format!(" ORDER BY created_at DESC LIMIT {cap}"));
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = match player {
+        Some(p) => stmt.query_map(params![p], map_ticket)?.collect::<Vec<_>>(),
+        None => stmt.query_map([], map_ticket)?.collect::<Vec<_>>(),
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn get_ticket(conn: &Connection, id: &str) -> anyhow::Result<Option<TicketRow>> {
+    conn.query_row(
+        &format!("SELECT {TICKET_COLS} FROM tickets WHERE id = ?1"),
+        params![id],
+        map_ticket,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn insert_ticket(
+    conn: &Connection,
+    id: &str,
+    kind: &str,
+    player: &str,
+    instance_id: &str,
+    subject: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO tickets (id, kind, state, player, instance_id, subject, body, created_at, updated_at, handler, resolution, notes)
+         VALUES (?1, ?2, 'open', ?3, ?4, ?5, ?6, ?7, ?7, NULL, '', '[]')",
+        params![id, kind, player, instance_id, subject, body, now],
+    )?;
+    Ok(())
+}
+
+pub fn update_ticket_state(
+    conn: &Connection,
+    id: &str,
+    state: &str,
+    handler: Option<&str>,
+    resolution: &str,
+) -> anyhow::Result<bool> {
+    let n = conn.execute(
+        "UPDATE tickets SET state = ?2, handler = COALESCE(?3, handler), resolution = ?4, updated_at = ?5 WHERE id = ?1",
+        params![id, state, handler, resolution, chrono::Utc::now().to_rfc3339()],
+    )?;
+    Ok(n > 0)
+}
+
+pub fn append_ticket_note(
+    conn: &Connection,
+    id: &str,
+    who: &str,
+    text: &str,
+) -> anyhow::Result<bool> {
+    let Some(row) = get_ticket(conn, id)? else {
+        return Ok(false);
+    };
+    let mut notes = row.notes.as_array().cloned().unwrap_or_default();
+    notes.push(serde_json::json!({
+        "at": chrono::Utc::now().to_rfc3339(),
+        "by": who,
+        "text": text
+    }));
+    conn.execute(
+        "UPDATE tickets SET notes = ?2, updated_at = ?3 WHERE id = ?1",
+        params![
+            id,
+            serde_json::to_string(&notes)?,
+            chrono::Utc::now().to_rfc3339()
+        ],
+    )?;
+    Ok(true)
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ActionRow {
+    pub id: String,
+    pub at: String,
+    pub actor: String,
+    pub instance_id: String,
+    pub action: String,
+    pub target: String,
+    pub detail: String,
+    pub result: String,
+}
+
+fn map_action(r: &rusqlite::Row<'_>) -> rusqlite::Result<ActionRow> {
+    Ok(ActionRow {
+        id: r.get(0)?,
+        at: r.get(1)?,
+        actor: r.get(2)?,
+        instance_id: r.get(3)?,
+        action: r.get(4)?,
+        target: r.get(5)?,
+        detail: r.get(6)?,
+        result: r.get(7)?,
+    })
+}
+
+pub fn record_action(
+    conn: &Connection,
+    actor: &str,
+    instance_id: &str,
+    action: &str,
+    target: &str,
+    detail: &str,
+    result: &str,
+) -> anyhow::Result<String> {
+    let id = crate::crypto::random_token(16);
+    conn.execute(
+        "INSERT INTO player_actions (id, at, actor, instance_id, action, target, detail, result)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            id,
+            chrono::Utc::now().to_rfc3339(),
+            actor,
+            instance_id,
+            action,
+            target,
+            detail,
+            result
+        ],
+    )?;
+    Ok(id)
+}
+
+pub fn list_actions(
+    conn: &Connection,
+    target: Option<&str>,
+    actor: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Vec<ActionRow>> {
+    let mut sql = String::from(
+        "SELECT id, at, actor, instance_id, action, target, detail, result FROM player_actions WHERE 1 = 1",
+    );
+    let mut args: Vec<String> = Vec::new();
+    if let Some(t) = target {
+        args.push(t.to_string());
+        sql.push_str(&format!(" AND target = ?{}", args.len()));
+    }
+    if let Some(a) = actor {
+        args.push(a.to_string());
+        sql.push_str(&format!(" AND actor = ?{}", args.len()));
+    }
+    sql.push_str(&format!(" ORDER BY at DESC LIMIT {}", limit.clamp(1, 2000)));
+    let mut stmt = conn.prepare(&sql)?;
+    let params_ref: Vec<&dyn rusqlite::ToSql> =
+        args.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+    let rows = stmt.query_map(params_ref.as_slice(), map_action)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ProfileRow {
+    pub instance_id: String,
+    pub name: String,
+    pub uuid: Option<String>,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub last_left: Option<String>,
+    pub total_secs: i64,
+    pub last_world: Option<String>,
+    pub last_ping_ms: Option<f64>,
+    pub last_ip: Option<String>,
+}
+
+fn map_profile(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProfileRow> {
+    Ok(ProfileRow {
+        instance_id: r.get(0)?,
+        name: r.get(1)?,
+        uuid: r.get(2)?,
+        first_seen: r.get(3)?,
+        last_seen: r.get(4)?,
+        last_left: r.get(5)?,
+        total_secs: r.get(6)?,
+        last_world: r.get(7)?,
+        last_ping_ms: r.get(8)?,
+        last_ip: r.get(9)?,
+    })
+}
+
+const PROFILE_COLS: &str = "instance_id, name, uuid, first_seen, last_seen, last_left, total_secs, last_world, last_ping_ms, last_ip";
+
+pub fn list_profiles(
+    conn: &Connection,
+    instance_id: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Vec<ProfileRow>> {
+    let mut sql = format!("SELECT {PROFILE_COLS} FROM player_profiles");
+    if instance_id.is_some() {
+        sql.push_str(" WHERE instance_id = ?1");
+    }
+    sql.push_str(&format!(
+        " ORDER BY total_secs DESC LIMIT {}",
+        limit.clamp(1, 5000)
+    ));
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = match instance_id {
+        Some(id) => stmt
+            .query_map(params![id], map_profile)?
+            .collect::<Vec<_>>(),
+        None => stmt.query_map([], map_profile)?.collect::<Vec<_>>(),
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn find_profile(conn: &Connection, name: &str) -> anyhow::Result<Vec<ProfileRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {PROFILE_COLS} FROM player_profiles WHERE name = ?1 ORDER BY total_secs DESC"
+    ))?;
+    let rows = stmt.query_map(params![name], map_profile)?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+pub fn aggregate_leaderboard(
+    conn: &Connection,
+    limit: usize,
+) -> anyhow::Result<Vec<(String, Option<String>, i64, String, String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT name, MAX(uuid), SUM(total_secs), MIN(first_seen), MAX(last_seen), COUNT(instance_id)
+         FROM player_profiles
+         GROUP BY name
+         ORDER BY SUM(total_secs) DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit.clamp(1, 1000) as i64], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, i64>(5)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }

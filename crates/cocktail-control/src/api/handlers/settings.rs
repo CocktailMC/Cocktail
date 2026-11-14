@@ -97,6 +97,13 @@ pub async fn update_settings(
         Ok(c) => c,
         Err(resp) => return resp.into_response(),
     };
+    if let Some(raw) = body.webhook_url.as_deref() {
+        let t = raw.trim();
+        if !t.is_empty() && !crate::hardening::external_url_allowed(t) {
+            return crate::api::handlers::bad_request("webhook 必须是可信的 https 外部地址")
+                .into_response();
+        }
+    }
     let patch = crate::db::PanelPatch {
         panel_name: body.panel_name.clone(),
         webhook_url: body.webhook_url.as_ref().map(|s| Some(s.clone())),

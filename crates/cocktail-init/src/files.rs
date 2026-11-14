@@ -610,6 +610,9 @@ fn unzip_to_inner(
             Some(p) => dest.join(p),
             None => continue,
         };
+        if file.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000) {
+            continue;
+        }
         if file.name().ends_with('/') {
             fs::create_dir_all(&outpath)?;
         } else {
@@ -636,6 +639,9 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
     for ent in fs::read_dir(src)? {
         let ent = ent?;
         let from = ent.path();
+        if from.is_symlink() {
+            continue;
+        }
         let to = dst.join(ent.file_name());
         if from.is_dir() {
             copy_dir_recursive(&from, &to)?;

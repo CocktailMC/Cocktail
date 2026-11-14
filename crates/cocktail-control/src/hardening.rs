@@ -136,6 +136,69 @@ pub fn ip_allowed(allow: &[Cidr], ip: &str) -> bool {
     }
 }
 
+fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v) => {
+            v.is_private()
+                || v.is_loopback()
+                || v.is_link_local()
+                || v.is_broadcast()
+                || v.is_unspecified()
+                || v.octets()[0] == 0
+                || (v.octets()[0] == 100 && (64..128).contains(&v.octets()[1]))
+        }
+        IpAddr::V6(v) => {
+            v.is_loopback()
+                || v.is_unspecified()
+                || (v.segments()[0] & 0xfe00) == 0xfc00
+                || (v.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+pub fn external_url_allowed(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let rest = match lower.strip_prefix("https://") {
+        Some(r) => r,
+        None => return false,
+    };
+    let host_part = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if host_part.is_empty() {
+        return false;
+    }
+    let host = match host_part.rsplit_once('@') {
+        Some((_, h)) => h,
+        None => host_part,
+    };
+    let host_only = match host.rsplit_once(':') {
+        Some((h, port)) if port.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => host,
+    };
+    if host_only.is_empty() {
+        return false;
+    }
+    if matches!(
+        host_only,
+        "localhost" | "metadata" | "metadata.google.internal"
+    ) {
+        return false;
+    }
+    if host_only.ends_with(".local") || host_only.ends_with(".internal") {
+        return false;
+    }
+    if let Ok(ip) = host_only.trim_matches(['[', ']']).parse::<IpAddr>() {
+        return !is_private_ip(ip);
+    }
+    if host_only.starts_with("0x") || host_only.parse::<u64>().is_ok() {
+        return false;
+    }
+    host_only.contains('.')
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RateDecision {
     pub allowed: bool,
@@ -389,6 +452,35 @@ mod tests {
         assert_eq!(client_ip(Some("1.1.1.1"), Some("9.9.9.9"), None), "9.9.9.9");
         assert_eq!(client_ip(None, None, None), "local");
         assert_eq!(client_ip(None, None, Some("4.4.4.4")), "4.4.4.4");
+    }
+
+    #[test]
+    fn egress_guard_blocks_internal_targets() {
+        assert!(external_url_allowed(
+            "https://api.modrinth.com/v2/project/x"
+        ));
+        assert!(external_url_allowed("https://hangar.papermc.io/a/b"));
+        assert!(!external_url_allowed(
+            "http://169.254.169.254/latest/meta-data"
+        ));
+        assert!(!external_url_allowed("https://169.254.169.254/x"));
+        assert!(!external_url_allowed(
+            "https://127.0.0.1:11011/api/v1/health"
+        ));
+        assert!(!external_url_allowed("https://localhost/x"));
+        assert!(!external_url_allowed("https://10.0.0.5/x"));
+        assert!(!external_url_allowed("https://192.168.1.1/x"));
+        assert!(!external_url_allowed("https://172.16.0.1/x"));
+        assert!(!external_url_allowed("https://[::1]/x"));
+        assert!(!external_url_allowed("https://[fd00::1]/x"));
+        assert!(!external_url_allowed("https://metadata.google.internal/x"));
+        assert!(!external_url_allowed("https://svc.cluster.local/x"));
+        assert!(!external_url_allowed("file:///etc/passwd"));
+        assert!(!external_url_allowed("gopher://x/y"));
+        assert!(!external_url_allowed("http://example.com/x"));
+        assert!(!external_url_allowed("https://user@127.0.0.1/x"));
+        assert!(!external_url_allowed(""));
+        assert!(!external_url_allowed("https:///x"));
     }
 
     #[test]

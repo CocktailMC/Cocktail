@@ -5,9 +5,37 @@ use axum::routing::{any, delete, get, post, put};
 
 use crate::state::SharedState;
 
+const UPLOAD_BODY_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/api/v1/health", get(handlers::health))
+        .route("/api/v1/update/status", get(handlers::update_status))
+        .route("/api/v1/update/assets", get(handlers::update_assets))
+        .route("/api/v1/tutorials", get(handlers::list_tutorials))
+        .route(
+            "/api/v1/bans",
+            get(handlers::list_bans).post(handlers::create_ban),
+        )
+        .route("/api/v1/bans/{id}", delete(handlers::lift_ban))
+        .route(
+            "/api/v1/tickets",
+            get(handlers::list_tickets).post(handlers::create_ticket),
+        )
+        .route("/api/v1/tickets/{id}/claim", post(handlers::claim_ticket))
+        .route(
+            "/api/v1/tickets/{id}/approve",
+            post(handlers::approve_ticket),
+        )
+        .route("/api/v1/tickets/{id}/reject", post(handlers::reject_ticket))
+        .route("/api/v1/player-actions", get(handlers::list_actions))
+        .route("/api/v1/leaderboard", get(handlers::leaderboard))
+        .route("/api/v1/profiles/{name}", get(handlers::profile))
+        .route("/api/v1/tutorials/mine", get(handlers::my_tutorials))
+        .route(
+            "/api/v1/tutorials/{id}/progress",
+            post(handlers::report_progress),
+        )
         .route("/api/v1/setup", post(handlers::setup))
         .route("/api/v1/auth/login", post(handlers::login))
         .route("/api/v1/auth/logout", post(handlers::logout))
@@ -65,7 +93,8 @@ pub fn router() -> Router<SharedState> {
         )
         .route(
             "/api/v1/instances/{id}/files/upload",
-            post(handlers::upload_file),
+            post(handlers::upload_file)
+                .layer(axum::extract::DefaultBodyLimit::max(UPLOAD_BODY_BYTES)),
         )
         .route("/api/v1/instances/{id}/files/mkdir", post(handlers::mkdir))
         .route(

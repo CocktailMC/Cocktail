@@ -2,7 +2,7 @@ use axum::Json;
 use axum::body::Body;
 use axum::extract::multipart::Multipart;
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
@@ -71,15 +71,7 @@ pub async fn download_file(
             }
         })?;
     let filename = path.rsplit('/').next().unwrap_or("download");
-    Ok(Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/octet-stream")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{filename}\""),
-        )
-        .body(Body::from(bytes))
-        .unwrap())
+    super::binary_attachment(filename, bytes)
 }
 
 pub async fn upload_file(

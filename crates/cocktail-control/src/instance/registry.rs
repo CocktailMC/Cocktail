@@ -18,7 +18,9 @@ use super::model::{
     RuntimeCount, RuntimeKind, Schedule, ScheduleKind, UpdateInstanceRequest, VersionCompare,
     is_local_node,
 };
+
 use super::process::{self, StopMode};
+const MAX_SCHEDULE_SECS: u64 = 366 * 24 * 3600;
 
 pub async fn list_instances(state: &AppState) -> Vec<InstanceView> {
     let guard = state.instances.read().await;
@@ -1502,6 +1504,9 @@ pub async fn create_schedule(
     if req.every_secs < 30 {
         anyhow::bail!("every_secs must be >= 30");
     }
+    if req.every_secs > MAX_SCHEDULE_SECS {
+        anyhow::bail!("every_secs must be <= {MAX_SCHEDULE_SECS}");
+    }
     let schedule = Schedule {
         id: Uuid::new_v4().to_string(),
         instance_id: req.instance_id,
@@ -1509,7 +1514,9 @@ pub async fn create_schedule(
         every_secs: req.every_secs,
         command: req.command,
         enabled: req.enabled,
-        next_run_at: Utc::now() + Duration::seconds(req.every_secs as i64),
+        next_run_at: Utc::now()
+            .checked_add_signed(Duration::seconds(req.every_secs as i64))
+            .ok_or_else(|| anyhow::anyhow!("schedule time out of range"))?,
     };
     state.schedules.write().await.push(schedule.clone());
     let _ = state.persist().await;
@@ -1848,6 +1855,12 @@ async fn ensure_exclusive_workdir(
     workdir: &str,
     except_id: Option<&str>,
 ) -> anyhow::Result<()> {
+    if !files::workdir_within_root(workdir) {
+        anyhow::bail!(
+            "文件根必须位于实例目录下：{}",
+            files::instances_root().to_string_lossy()
+        );
+    }
     let guard = state.instances.read().await;
     for inst in guard.values() {
         if except_id.is_some_and(|id| inst.id == id) {

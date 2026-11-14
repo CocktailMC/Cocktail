@@ -53,6 +53,7 @@ pub struct AppState {
     pub env_api_token: Option<String>,
     pub env_webhook_url: Option<String>,
     pub bind: String,
+    pub login_limiter: std::sync::Arc<crate::hardening::RateLimiter>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -113,6 +114,9 @@ impl AppState {
             env_api_token,
             env_webhook_url,
             bind,
+            login_limiter: std::sync::Arc::new(crate::hardening::RateLimiter::new(
+                crate::hardening::RateRule::new(5.0, 0.2),
+            )),
         };
         if setup_pending {
             tracing::warn!("super-admin not initialized — first-run setup required");
@@ -261,7 +265,8 @@ impl AppState {
             instances,
             schedules,
         })?;
-        fs::write(path, raw)?;
+        fs::write(&path, raw)?;
+        restrict_state_file(&path);
         Ok(())
     }
 
@@ -313,7 +318,26 @@ pub(crate) async fn test_state(db_path: &std::path::Path) -> SharedState {
         env_api_token: None,
         env_webhook_url: None,
         bind: "127.0.0.1:0".into(),
+        login_limiter: std::sync::Arc::new(crate::hardening::RateLimiter::new(
+            crate::hardening::RateRule::new(5.0, 0.2),
+        )),
     })
+}
+
+fn restrict_state_file(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = fs::set_permissions(path, perms);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 fn hydrate_state(db: &rusqlite::Connection) -> (HashMap<String, Instance>, Vec<Schedule>) {

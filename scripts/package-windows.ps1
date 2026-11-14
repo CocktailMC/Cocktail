@@ -16,7 +16,7 @@ if (-not $Version) {
 Write-Host "==> version=$Version"
 
 Write-Host "==> cargo build --release"
-cargo build -p cocktail-control --release --bins
+cargo build -p cocktail-control -p cocktail-init --release --bins
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "==> admin npm build"
@@ -43,6 +43,12 @@ New-Item -ItemType Directory -Force -Path (Join-Path $Stage "web") | Out-Null
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 Copy-Item "target\release\cocktail-control.exe" (Join-Path $Stage "cocktail-control.exe")
+if (Test-Path "target\release\cocktail-init.exe") {
+  Copy-Item "target\release\cocktail-init.exe" (Join-Path $Stage "cocktail-init.exe")
+} else {
+  Write-Error "cocktail-init.exe missing from release build"
+  exit 1
+}
 if (Test-Path "target\release\cocktail-agent.exe") {
   Copy-Item "target\release\cocktail-agent.exe" (Join-Path $Stage "cocktail-agent.exe")
 }
@@ -84,17 +90,23 @@ if (-not $candle -or -not $light -or -not $heat) {
   exit 0
 }
 
+$MsiVersion = ($Version -replace '[^0-9.]', '').TrimEnd('.')
+$MsiParts = @($MsiVersion.Split('.') | Where-Object { $_ -ne '' })
+while ($MsiParts.Count -lt 3) { $MsiParts += '0' }
+if ($MsiParts.Count -lt 4) { $MsiParts += '0' }
+$MsiVersion = ($MsiParts[0..3] -join '.')
+Write-Host "==> msi version=$MsiVersion (from $Version)"
 $WixOut = Join-Path $Out "wix"
 New-Item -ItemType Directory -Force -Path $WixOut | Out-Null
 $WebHarvest = Join-Path $WixOut "WebComponents.wxs"
 $WebWixobj = Join-Path $WixOut "WebComponents.wixobj"
 $MainWixobj = Join-Path $WixOut "Cocktail.wixobj"
 
-& heat.exe dir (Join-Path $Stage "web") -cg WebComponents -gg -sfrag -srd -dr WebFolder -var var.WebDir -out $WebHarvest
+& heat.exe dir (Join-Path $Stage "web") -cg WebComponents -gg -sfrag -srd -dr WebFolder -var var.WebDir -platform x64 -out $WebHarvest
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & candle.exe -nologo `
-  "-dProductVersion=$Version" `
+  "-dProductVersion=$MsiVersion" `
   "-dStageDir=$Stage" `
   "-dWebDir=$(Join-Path $Stage 'web')" `
   "packaging\windows\Cocktail.wxs" `
@@ -103,7 +115,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $Msi = Join-Path $Out "cocktail-$Version-windows-x64.msi"
-& light.exe -nologo -ext WixUIExtension `
+& light.exe -nologo -ext WixUIExtension -sice:ICE80 `
   (Join-Path $WixOut "Cocktail.wixobj") `
   $WebWixobj `
   -o $Msi

@@ -125,17 +125,26 @@ def clean_stage_and_packages() -> None:
             artifact.unlink()
 
 
-def stage_files(skip_web: bool) -> None:
-    binary = ROOT / "target" / "release" / "cocktail-control"
-    if not binary.is_file():
-        raise RuntimeError(f"release binary is missing: {binary}")
 
+
+
+
+
+
+BINARIES = ("cocktail-control", "cocktail-init")
+
+
+def stage_files(skip_web: bool) -> None:
     bin_dir = STAGE / "usr" / "bin"
     web_dir = STAGE / "usr" / "share" / "cocktail" / "web"
     bin_dir.mkdir(parents=True)
-    shutil.copy2(binary, bin_dir / binary.name)
-    (bin_dir / binary.name).chmod(0o755)
-
+    for name in BINARIES:
+        binary = ROOT / "target" / "release" / name
+        if not binary.is_file():
+            raise RuntimeError(f"release binary is missing: {binary}")
+        target = bin_dir / binary.name
+        shutil.copy2(binary, target)
+        target.chmod(0o755)
     source_web = ROOT / "admin" / "dist"
     if skip_web and not source_web.is_dir():
         raise RuntimeError("admin/dist is missing; omit --skip-web to build it.")
@@ -162,7 +171,21 @@ def main() -> int:
     print(f"==> version={version} deb_arch={deb_arch} rpm_arch={rpm_arch}")
 
     if not args.skip_build:
-        run(["cargo", "build", "-p", "cocktail-control", "--release", "--bin", "cocktail-control"])
+        run(
+            [
+                "cargo",
+                "build",
+                "--release",
+                "-p",
+                "cocktail-control",
+                "-p",
+                "cocktail-init",
+                "--bin",
+                "cocktail-control",
+                "--bin",
+                "cocktail-init",
+            ]
+        )
     if not args.skip_web:
         run(["npm", "ci"], cwd=ROOT / "admin")
         run(["npm", "run", "build"], cwd=ROOT / "admin")
